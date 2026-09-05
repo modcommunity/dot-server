@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://dotserver0contentswitch"]
+
+[ext_resource type="Script" path="res://examples/content_switch.gd" id="1_cs"]
+
+[node name="ContentSwitch" type="Node"]
+script = ExtResource("1_cs")
