@@ -459,8 +459,23 @@ func _swap_to(descriptor: DotGameDescriptor) -> DotResult:
 
 	_current = descriptor
 
-	# Per-game config, so an operator can set different rules per map without a
-	# module. The usual per-map cfg convention.
+	# The game's own cvars, then the per-game config, so an operator can set
+	# different rules per map without a module. The usual per-map cfg convention.
+	#
+	# [b]`descriptor.cvars` was declared and applied by nothing.[/b] The identifier
+	# occurred exactly once in this repository — the export on DotGameDescriptor,
+	# documented as "cvars applied when this game loads" — which is this family's own
+	# mechanical detector for a setting nothing reads. A `cvars:` block in a game
+	# descriptor was documented behaviour that did not exist, and it failed the way
+	# those always do: silently, with the server running the previous game's rules
+	# under the new game's name.
+	#
+	# Through `set_cvar` rather than by writing anything directly, because the console
+	# is the validator, the range clamp and the change notification — a game that set
+	# `sv_gravity` behind the console's back would move nobody, since what reaches the
+	# simulation is the `changed` signal.
+	_apply_descriptor_cvars(descriptor, false)
+
 	if server.console != null:
 		server.console.exec_config(
 			server.config.game_config_prefix + descriptor.game_id, null, false
@@ -510,6 +525,76 @@ func _swap_to(descriptor: DotGameDescriptor) -> DotResult:
 		)
 
 	return DotResult.success(descriptor)
+
+
+## Applies a descriptor's [member DotGameDescriptor.cvars].
+##
+## [b]A name that is not registered yet is not an error on the first pass.[/b] A game's
+## cvars are usually its MODULE's — `sv_airaccelerate` belongs to g2gfast's module, not
+## to dot-server — and dot-server does not load a module for a game. A host that ties
+## one to one (TmcHost does) does it from [signal game_loaded], which is after this, so
+## on the first pass every cvar the module owns is genuinely unknown and warning about
+## each of them is six lines an operator learns to scroll past. It is reported once, as
+## a count, and [method reapply_descriptor_cvars] is where an unknown name is wrong.
+##
+## A name that IS registered and refuses its value is always a warning: that is a bad
+## value in a descriptor and no later pass will make it good.
+func _apply_descriptor_cvars(descriptor: DotGameDescriptor, unknown_is_wrong: bool) -> int:
+	if server.console == null or descriptor.cvars.is_empty():
+		return 0
+
+	var applied := 0
+	var unknown := PackedStringArray()
+
+	for name: Variant in descriptor.cvars:
+		var cvar_name := str(name)
+		var value := str(descriptor.cvars[name])
+
+		if server.console.find_cvar(cvar_name) == null:
+			unknown.append(cvar_name)
+
+			if unknown_is_wrong:
+				DotLog.warn(CHANNEL, "a game names a cvar nothing registers", {
+					"game": descriptor.game_id, "cvar": cvar_name, "value": value,
+					"hint": "a typo, or a module that did not load",
+				})
+
+			continue
+
+		var result := server.console.set_cvar(cvar_name, value)
+
+		if result.ok:
+			applied += 1
+			continue
+
+		DotLog.warn(CHANNEL, "a game's cvar was refused its value", {
+			"game": descriptor.game_id, "cvar": cvar_name, "value": value,
+			"why": result.error.message,
+		})
+
+	DotLog.info(CHANNEL, "the game's cvars were applied", {
+		"game": descriptor.game_id,
+		"applied": applied,
+		"of": descriptor.cvars.size(),
+		"not_registered_yet": Array(unknown),
+	})
+
+	return applied
+
+
+## Applies the running game's cvars again. For a host that has just loaded its module.
+##
+## The game's cvars run while the scene is up and the module is not, because dot-server
+## does not load a module for a game — it changes the scene and tells whatever modules
+## are already loaded. A host that ties one module to one game (TmcHost does) registers
+## that module's cvars after [signal game_loaded], which is after the first pass, so
+## every cvar the module owns was refused as unknown. Calling this from that handler is
+## how a game's own cvars reach its own module.
+func reapply_descriptor_cvars() -> int:
+	if _current == null:
+		return 0
+
+	return _apply_descriptor_cvars(_current, true)
 
 
 func _instantiate(scene_path: String) -> DotResult:

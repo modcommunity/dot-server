@@ -378,6 +378,24 @@ switches between them three times. It found six, all parse-clean:
 And one setting that decided nothing: **`swap_when_all_ready` was tested one line below
 an unconditional `return` on the same condition.** The family's most repeated bug.
 
+**`DotGameDescriptor.cvars` was the same bug one field along.** Documented as "cvars
+applied when this game loads", exported, read from a descriptor by every host that
+builds one — and the identifier occurred exactly once in this repository. A `cvars:`
+block in a game descriptor set nothing, silently, leaving the previous game's rules
+running under the new game's name.
+
+Applying it needs two passes, and that is not an implementation detail. **dot-server
+does not load a module for a game** — it changes the scene and tells whatever modules
+are already loaded, deliberately, because a game with no server-side behaviour is
+legitimate. So a host that ties one module to one game (`TmcHost` does) registers that
+module's cvars in response to `game_loaded`, which is *after* the descriptor's cvars
+would run: `sv_airaccelerate` belongs to g2gfast's module and does not exist yet on the
+first pass. `_apply_descriptor_cvars` therefore treats an unregistered name as deferred
+rather than wrong, reports it once as a count, and `reapply_descriptor_cvars()` is the
+second pass a host makes once its module is up — where an unknown name IS wrong and is
+warned about. A value that is registered and refuses its value is a warning on both
+passes: no later pass makes a bad value good.
+
 `client_state_changed` is now emitted when a change moves a session, too — the join path
 emitted it at every step and the game change, which moves everybody at once, emitted
 nothing, so anything reacting to the signal never saw a game change happen.

@@ -16,13 +16,13 @@ A dedicated server framework for Godot 4. Console variables and
 commands, RCON, server queries, admin permissions with immunity, bans and mutes,
 votes, hot-loadable modules, and switching games while players stay connected.
 
-Part of the `dot-*` family alongside [dot-core](../dot-core),
-[dot-auth](../dot-auth) and [dot-cloud](../dot-cloud).
+Part of the `dot-*` family alongside [dot-core](https://github.com/modcommunity/dot-core),
+[dot-auth](https://github.com/modcommunity/dot-auth) and [dot-cloud](https://github.com/modcommunity/dot-cloud).
 
 ## Install
 
 Copy `addons/dot_core/` and `addons/dot_server/` into your project and enable both in
-*Project → Project Settings → Plugins*. Requires Godot 4.4+.
+*Project → Project Settings → Plugins*. Requires Godot 4.7+.
 
 ## Run a server
 
@@ -115,11 +115,11 @@ pre-hooks, so a plugin can actually stop a map change or filter a message.
 
 Neither is imported; dot-server works without both.
 
-- **[dot-auth](../dot-auth)** → real player identity, so bans mean something and site
+- **[dot-auth](https://github.com/modcommunity/dot-auth)** → real player identity, so bans mean something and site
   groups can grant server permissions. Without it, everyone is a guest.
-- **[dot-cloud](../dot-cloud)** → downloadable game content. Without it, games ship
+- **[dot-cloud](https://github.com/modcommunity/dot-cloud)** → downloadable game content. Without it, games ship
   inside the build.
-- **[dot-moderation](../dot-moderation)** → bans, mutes and gags as durable records in
+- **[dot-moderation](https://github.com/modcommunity/dot-moderation)** → bans, mutes and gags as durable records in
   a store shared between your servers. Registered as `dot_ban_source`, its bans are
   enforced here at connect. Without it, `DotBanManager`'s own list is the ban list.
 

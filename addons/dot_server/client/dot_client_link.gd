@@ -376,7 +376,11 @@ func submit_credentials(_payload: Dictionary) -> void:
 
 
 static func _device_id() -> String:
-	var unique := OS.get_unique_id()
+	# Asked of DotPlatform rather than of the OS. `OS.get_unique_id()` does not fail
+	# quietly on web and iOS -- it pushes an engine error and THEN returns "" -- so the
+	# emptiness check below, which is correct, still printed a red line on the page of
+	# every browser client before taking the branch it was written for.
+	var unique := DotPlatform.unique_id()
 	if unique != "":
 		return unique
 	# Web and some sandboxes have no unique id. A stored random value is stable
