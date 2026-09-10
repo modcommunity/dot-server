@@ -2,10 +2,17 @@
 .godot/
 /android/
 
-# dot-core is a separate repository. For local development, symlink it:
+# Every other dot-* addon is a separate repository. For local development they are
+# symlinked; a consumer copies the ones it wants instead:
 #   ln -s ../../dot-core/addons/dot_core addons/dot_core
-# Consumers copy both addons into their own project.
+#
+# These links must stay ignored. A committed symlink is checked out as a text
+# FILE by Git on Windows without Developer Mode, so Godot finds a 30-byte file
+# where an addon should be and every class_name in it fails to resolve.
 /addons/dot_core
+/addons/dot_auth
+/addons/dot_cloud
+/addons/dot_moderation
 
 # Exports
 build/
