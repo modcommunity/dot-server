@@ -190,24 +190,51 @@ func resolve(session: DotClientSession) -> DotResult:
 	return DotResult.success(session.permissions)
 
 
-## Whether a player holds a flag, by uid, without a session.
+## What a uid holds, without a session: `{flags: PackedStringArray, immunity: int}`.
 ##
-## For deciding whether to hold a reserved slot for somebody who has not connected
-## yet.
-func uid_has_permission(uid: String, flag: String) -> bool:
+## [b]The file entry only.[/b] A connected player's permissions are the union of this and
+## every source ([method resolve]), because a source such as dot-auth's needs an identity
+## to look anything up with and an identity is something only a connection carries. So
+## this answers for the local file, which is the half that CAN be answered about somebody
+## who is not here — a reserved slot, an offline promotion, or a command relayed from the
+## website by somebody who is not in the game at all.
+##
+## An unknown uid gets no flags and no immunity rather than an error: "this person has no
+## permissions" is the correct answer about somebody with no entry, and a caller asking
+## about a stranger is the normal case rather than a mistake.
+func uid_permissions(uid: String) -> Dictionary:
 	if not _admins.has(uid):
-		return false
+		return {"flags": PackedStringArray(), "immunity": 0}
 
 	var entry: Dictionary = _admins[uid]
 	var flags := _flags_of(entry)
+	var immunity := int(entry.get("immunity", 0))
 
 	for group in entry.get("groups", []):
 		if _groups.has(str(group)):
-			flags = DotAdminFlags.merge(
-				flags, _flags_of(_groups[str(group)])
-			)
+			var g: Dictionary = _groups[str(group)]
+			flags = DotAdminFlags.merge(flags, _flags_of(g))
 
-	return DotAdminFlags.granted(flags, flag)
+			# The HIGHER of the two, matching how `resolve` merges sources. A group is
+			# a floor a member cannot be demoted below by having their own entry, and
+			# an entry is a promotion a group cannot cap.
+			immunity = maxi(immunity, int(g.get("immunity", 0)))
+
+	return {"flags": flags, "immunity": immunity}
+
+
+## Whether a player holds a flag, by uid, without a session.
+##
+## For deciding whether to hold a reserved slot for somebody who has not connected
+## yet, and for a command relayed from somewhere that is not a game connection.
+##
+## [b]One implementation, not two.[/b] This reads [method uid_permissions] rather than
+## walking the entry again: the group merge is the fiddly half, and two copies of it is
+## the shape that has cost this family a stale list four times.
+func uid_has_permission(uid: String, flag: String) -> bool:
+	var held: Dictionary = uid_permissions(uid)
+	return DotAdminFlags.granted(held["flags"] as PackedStringArray, flag)
+
 
 
 # --- Persistence -----------------------------------------------------------

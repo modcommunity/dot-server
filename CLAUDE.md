@@ -516,6 +516,52 @@ directly.
 hooked directly, and `reload_module` calls `GDScript.reload()` because the engine
 caches scripts by path.
 
+## Permissions for somebody who is not connected
+
+Two questions that look like one, and the server answers both about a **uid** rather than
+a session — because the thing asking may have no session to offer.
+
+`DotAdminManager.uid_permissions(uid)` returns `{flags, immunity}` from the admin file,
+merging the entry's own flags with every group it names and taking the **higher** of the
+two immunities — a group is a floor an entry cannot demote below, an entry is a promotion
+a group cannot cap. `uid_has_permission` now reads it rather than walking the entry a
+second time; the group merge is the fiddly half and two copies of it is the shape that has
+cost this tree a stale list four times.
+
+It answers for the **local file only**, deliberately. A connected player's permissions are
+the union of the file and every source, and a source such as dot-auth's needs an identity
+to look anything up with — which is something only a connection carries. The file half is
+the half that *can* be answered about somebody who is not here.
+
+`DotServer.run_command_as_uid(uid, command, args, source)` is the other half: it runs a
+console command as that person and hands back the reply lines. RCON has the same problem
+and solves it by building a `DotCmdContext` by hand; this is that, with the difference
+that matters — **the permissions on the context are the uid's own, not RCON's `ROOT`.** A
+command relayed from a website, a Discord bridge or a scheduled job can therefore do
+exactly what that person could do standing in the server and nothing more, and an operator
+who has not made somebody an admin has not accidentally made them one by turning a relay
+on. It defaults to `Source.CHAT`, which this console already documents as the least
+trusted path.
+
+## `admin_add` took a flag list where an operator types a group
+
+The admin file has had groups since it was written — the template ships `moderator`,
+`admin` and `owner` — and `set_admin` has always taken a group array. `admin_add` passed
+an **empty one**, so the one word somebody would actually type was parsed as a flag.
+
+Nothing errored, which is the whole problem. `DotAdminFlags.parse` accepts any token and
+`_warn_about_unknown_flags` only warns — deliberately, because a game defines its own
+flags — so `admin_add <uid> moderator` created an admin holding a flag called
+"moderator" that grants nothing at all, and the only trace was a log line that reads like
+a typo nobody made. Worse, `admin` is *both* a real flag and a group name in the shipped
+template, so that spelling silently meant something quite different from what the file
+would have meant by it.
+
+It resolves a group first and falls back to flags, and refuses a single token matching
+neither — listing the groups it does know. The refusal cannot be "unknown flag", because
+an unknown flag is legal here; it is "this is not a group and not any flag I ship", which
+is a misspelled group far more often than it is a new one.
+
 ## Validating changes
 
 ```bash

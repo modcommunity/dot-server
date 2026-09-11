@@ -919,28 +919,77 @@ static func _register_admin(server: DotServer, console: DotConsole) -> void:
 	console.command(
 		"admin_add",
 		func(ctx: DotCmdContext) -> void:
-			var flags := DotAdminFlags.parse(ctx.arg(1))
+			# **A group name and a flag list are both legal here, and telling them apart
+			# is the whole of this block.** The admin FILE has had groups since it was
+			# written — the template ships `moderator`, `admin` and `owner` — and this
+			# command passed an empty group array, so the one word an operator would
+			# actually type was parsed as a flag instead.
+			#
+			# Nothing errored. `DotAdminFlags.parse` accepts any token and
+			# `_warn_about_unknown_flags` only warns, deliberately, because a game
+			# defines its own flags. So `admin_add <uid> moderator` created an admin
+			# holding a flag called "moderator" that grants nothing, and the only trace
+			# was a log line that reads like a typo nobody made.
+			var token := ctx.arg(1)
+			var groups := PackedStringArray()
+			var flags := PackedStringArray()
+
+			if server.admins.has_group(token):
+				groups.append(token)
+			else:
+				flags = DotAdminFlags.parse(token)
+
+				# Refuse a token that is neither a known group nor any known flag. A
+				# game's own flags are legal and unknown, so this cannot refuse on
+				# "unknown flag" alone — but a single word matching NOTHING is a
+				# misspelled group far more often than it is a new flag, and silently
+				# granting nothing is the outcome worth preventing.
+				var recognised := false
+
+				for flag in flags:
+					if DotAdminFlags.ALL.has(str(flag)):
+						recognised = true
+						break
+
+				if not recognised:
+					var known := ", ".join(server.admins.group_names())
+					ctx.reply(
+						"'%s' is neither a group nor a known flag." % token
+					)
+					ctx.reply("Groups: %s" % (known if known != "" else "(none)"))
+					ctx.reply("Flags:  use `admin_flags` for the list.")
+					return
+
 			var immunity := ctx.arg_int(2, 0)
 
 			var res := server.admins.set_admin(
-				ctx.arg(0), flags, immunity, PackedStringArray(), ctx.arg(3)
+				ctx.arg(0), flags, immunity, groups, ctx.arg(3)
 			)
 			if not res.ok:
 				ctx.reply_error(res)
 				return
 
+			var granted := (
+				"group %s" % token if not groups.is_empty()
+				else DotAdminFlags.format(flags)
+			)
+
 			ctx.reply("Admin set: %s -> %s (immunity %d)" % [
-				ctx.arg(0), DotAdminFlags.format(flags), immunity
+				ctx.arg(0), granted, immunity
 			])
 
 			if server.audit != null:
 				server.audit.record(
 					"admin_add", ctx.caller_label(), ctx.arg(0),
-					{"flags": Array(flags), "immunity": immunity}
+					{
+						"flags": Array(flags),
+						"groups": Array(groups),
+						"immunity": immunity,
+					}
 				),
-		"Grant permissions to an account id.",
+		"Grant permissions to an account id, by group or by flags.",
 		DotAdminFlags.ADMIN
-	).with_usage("<uid> <flags> [immunity] [name]").with_args(2)
+	).with_usage("<uid> <group|flags> [immunity] [name]").with_args(2)
 
 	console.command(
 		"admin_remove",

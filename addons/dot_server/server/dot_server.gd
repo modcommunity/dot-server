@@ -871,6 +871,60 @@ func release_session(peer_id: int) -> DotResult:
 	return DotResult.success(session)
 
 
+
+## Runs a console command as the person a uid names, and returns what it replied.
+##
+## [b]For a command that arrives from somewhere that is not a game connection.[/b] A line
+## relayed from the website, a Discord bridge, a scheduled job — anything with a person
+## behind it who is not holding a socket. RCON has the same problem and solves it by
+## building a context by hand; this is that, with two differences that matter.
+##
+## The permissions are the UID'S OWN, out of the admin file, rather than RCON's ROOT. So
+## a relayed command can do exactly what that person could do standing in the server and
+## nothing more, and an operator who has not made somebody an admin has not accidentally
+## made them one by turning a relay on.
+##
+## [param source] defaults to [code]CHAT[/code], which this console documents as the
+## least trusted path — the right classification for a line typed on a web page.
+##
+## Returns the reply lines, so a caller can send them back where the command came from.
+func run_command_as_uid(
+	uid: String,
+	command: String,
+	args: PackedStringArray,
+	source: DotCmdContext.Source = DotCmdContext.Source.CHAT
+) -> PackedStringArray:
+	var lines := PackedStringArray()
+
+	if console == null or admins == null:
+		return lines
+
+	var held: Dictionary = admins.uid_permissions(uid)
+
+	var ctx := DotCmdContext.new()
+	ctx.source = source
+	ctx.command_name = command
+	ctx.arguments = args
+	ctx.permissions = held["flags"] as PackedStringArray
+	ctx.immunity = int(held["immunity"])
+	ctx.reply_sink = func(line: String) -> void: lines.append(line)
+
+	var line := command
+
+	for arg in args:
+		line += " " + arg
+
+	console.execute(line, ctx)
+
+	if audit != null:
+		audit.record("command_as_uid", uid, command, {
+			"args": Array(args),
+			"flags": Array(held["flags"]),
+		})
+
+	return lines
+
+
 ## Finds sessions by userid, name, username, account id or address.
 ##
 ## The lookup every admin command needs. Returns every match so a command can
