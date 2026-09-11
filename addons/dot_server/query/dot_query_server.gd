@@ -105,7 +105,7 @@ func open() -> DotResult:
 	var port := config.effective_query_port()
 
 	_udp = PacketPeerUDP.new()
-	var err := _udp.bind(port, config.bind_address)
+	var err := _udp.bind(port, config.effective_query_bind_address())
 
 	if err != OK:
 		_udp = null
@@ -129,7 +129,7 @@ func _open_websocket() -> void:
 	var port := server.config.effective_query_websocket_port()
 
 	_tcp = TCPServer.new()
-	var err := _tcp.listen(port, server.config.bind_address)
+	var err := _tcp.listen(port, server.config.effective_query_bind_address())
 
 	if err != OK:
 		_tcp = null

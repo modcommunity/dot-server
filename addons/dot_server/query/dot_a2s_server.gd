@@ -137,7 +137,7 @@ func open() -> DotResult:
 	var port := server.config.effective_a2s_port()
 
 	_udp = PacketPeerUDP.new()
-	var err := _udp.bind(port, server.config.bind_address)
+	var err := _udp.bind(port, server.config.effective_query_bind_address())
 
 	if err != OK:
 		_udp = null

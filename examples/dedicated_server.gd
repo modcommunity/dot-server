@@ -930,6 +930,22 @@ func _test_query() -> void:
 		return
 
 	_check("query listener bound", server.query != null and server.query.is_listening())
+
+	# The query listeners bind their own interface when told to, because a server
+	# behind a reverse proxy binds the GAME transport to loopback and a reverse
+	# proxy cannot forward UDP — so sharing one setting put the query port where
+	# no tracker could reach it. Empty means "wherever the game is", which is what
+	# every other deployment wants and what this one is running.
+	var bind_cfg := DotServerConfig.new()
+	bind_cfg.bind_address = "127.0.0.1"
+	_check("query binds the game interface by default",
+		bind_cfg.effective_query_bind_address() == "127.0.0.1")
+	bind_cfg.query_bind_address = "*"
+	_check("query binds its own interface when set",
+		bind_cfg.effective_query_bind_address() == "*")
+	bind_cfg.query_bind_address = "   "
+	_check("a blank query interface is not an interface",
+		bind_cfg.effective_query_bind_address() == "127.0.0.1")
 	# A2S shares that socket rather than binding its own, because both default to
 	# the same port and two listeners cannot have one.
 	_check("a2s attached to the query socket",

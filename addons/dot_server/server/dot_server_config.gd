@@ -136,6 +136,23 @@ extends DotConfig
 ## A server nobody can query is a server nobody can find.
 @export var query_enabled: bool = true
 
+## Interface the query listeners bind, when it is not [member bind_address].
+##
+## Empty — the default — means "the same interface the game does", which is right
+## for every server that is reachable at its own address.
+##
+## It exists for the one that is not: a server behind a reverse proxy binds the
+## game transport to loopback and lets nginx terminate TLS in front of it, and a
+## reverse proxy can forward a WebSocket and [b]cannot forward UDP[/b]. Sharing
+## one setting therefore made the query port unreachable from anywhere but the
+## box itself — the server was listening, correctly, where nothing could ask it,
+## and a tracker's silence is indistinguishable from a server that is down.
+##
+## Applies to the dot query socket, the query WebSocket and A2S. Deliberately
+## NOT to RCON, which shares [member bind_address] and should never become
+## easier to reach than the game it administers.
+@export var query_bind_address: String = ""
+
 ## UDP port for queries. 0 uses [member a2s_port]'s effective value — which is
 ## [member port] — so both protocols share one socket and both answer where a
 ## tracker looks.
@@ -477,6 +494,16 @@ func effective_query_port() -> int:
 	if query_port > 0:
 		return query_port
 	return effective_a2s_port()
+
+
+## The interface every query listener binds. See [member query_bind_address].
+func effective_query_bind_address() -> String:
+	var chosen := query_bind_address.strip_edges()
+
+	if chosen != "":
+		return chosen
+
+	return bind_address
 
 
 ## TCP port the WebSocket query listener answers on. 0 when there is none to derive.
