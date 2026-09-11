@@ -189,7 +189,7 @@ func _publish_content() -> bool:
 	# A minimal scene with no script. A scene inside a pack may not use a
 	# `class_name` — a mounted pack's globals are NOT registered in the host, so
 	# every cross-file type reference in it fails to compile. That is measured, and
-	# it is why the games in dot-server-setup-test are builtin.
+	# it is why the games in dot-server-deploy are builtin.
 	var scene := (
 		"[gd_scene format=3]\n\n"
 		+ "[node name=\"DeliveredWorld\" type=\"Node\"]\n"
