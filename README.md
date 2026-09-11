@@ -52,21 +52,21 @@ link.spawned.connect(func(): ui.show_game())
 await link.connect_to_server("wss://play.example.com/game")
 ```
 
-The client downloads whatever content the current game needs (via dot-cloud), loads the scene the server names, and reports ready — the join flow is handled for you.
+The client downloads whatever content the current game needs (via dot-cloud), loads the scene the server names, and reports ready. The join flow is handled for you.
 
 ## What it gives you
 
-**A real console.** `DotConVar`s with the flag semantics operators know — `FLAG_CHEAT` gated behind `sv_cheats`, `FLAG_PROTECTED` never printed anywhere including the log, `FLAG_STARTUP_ONLY` locked once listening, `FLAG_ARCHIVE` persisted by `writeconfig`. Config file execution with search paths, a command buffer supporting `wait`, aliases, tab completion, and "did you mean" on typos.
+**A real console.** `DotConVar`s with the flag semantics operators know: `FLAG_CHEAT` gated behind `sv_cheats`, `FLAG_PROTECTED` never printed anywhere including the log, `FLAG_STARTUP_ONLY` locked once listening, and `FLAG_ARCHIVE` persisted by `writeconfig`. Config file execution with search paths, a command buffer supporting `wait`, aliases, tab completion, and "did you mean" on typos.
 
 **RCON that existing tools work with.** The classic RCON wire protocol, so operators keep their clients and panels. Constant-time password comparison, per-address lockout, an optional allow-list, and a WebSocket variant so a browser admin panel can talk to it.
 
-**Server queries, both kinds.** A2S, so the twenty years of trackers, chat bots and uptime monitors that speak nothing else can list your server — off by default, and on the game port when you turn it on. And the dot query protocol: JSON sections you ask for by name, a revision that makes polling nearly free, a place for your game to publish its own state, and a WebSocket variant so a browser-based server list can reach it, which A2S can never do. Both are challenged against the source address, so neither can be used to attack somebody else. See [the wire spec](addons/dot_server/query/PROTOCOL.md).
+**Server queries, both kinds.** A2S, so the twenty years of trackers, chat bots and uptime monitors that speak nothing else can list your server. It is off by default, and on the game port when you turn it on. And the dot query protocol: JSON sections you ask for by name, a revision that makes polling nearly free, a place for your game to publish its own state, and a WebSocket variant so a browser-based server list can reach it, which A2S can never do. Both are challenged against the source address, so neither can be used to attack somebody else. See [the wire spec](addons/dot_server/query/PROTOCOL.md).
 
-**Permissions that fit real communities.** String flags rather than fixed roles, because nobody agrees what a "moderator" is. Numeric immunity so admins cannot kick each other in a loop. Admins from a JSON file, from dot-auth's site groups, or from your own source — all merged.
+**Permissions that fit real communities.** String flags rather than fixed roles, because nobody agrees what a "moderator" is. Numeric immunity so admins cannot kick each other in a loop. Admins from a JSON file, from dot-auth's site groups, or from your own source, all merged.
 
 **Moderation with a paper trail.** Bans by account and by address, with durations (`30m`, `2h`, `7d`), mutes and gags, and an append-only JSONL audit log flushed per entry so a crash cannot lose the action somebody is asking about.
 
-**Moderation from inside the game.** `/ban`, `/kick`, `/banip`, `/unban`, `/mute`, `/gag`, `/banlist` and `/whois` all run from chat with the speaker's own permissions — same commands, same flags, same audit trail as the console and RCON, because a moderator who has to alt-tab to a terminal moderates less. Name a player however you have them: `#12`, their name, part of their name, their username, their account id, `ip:203.0.113.9` for everybody at an address, or `@me`.
+**Moderation from inside the game.** `/ban`, `/kick`, `/banip`, `/unban`, `/mute`, `/gag`, `/banlist` and `/whois` all run from chat with the speaker's own permissions, with the same commands, the same flags and the same audit trail as the console and RCON, because a moderator who has to alt-tab to a terminal moderates less. Name a player however you have them: `#12`, their name, part of their name, their username, their account id, `ip:203.0.113.9` for everybody at an address, or `@me`.
 
 **A limit on how many clients one address may hold.** `sv_max_connections_per_ip`, off by default. Neither a ban nor a connect rate limiter covers this: connections that arrive slowly, from nobody banned, still let one machine take every slot on a small server. Loopback is never limited, so it cannot lock you out of your own server.
 
@@ -88,8 +88,8 @@ Neither is imported; dot-server works without both.
 godot --headless --path . res://examples/dedicated_server.tscn
 ```
 
-303 checks covering console parsing, every cvar flag, permission and immunity enforcement, config execution, the command buffer, ban durations and expiry, event cancellation, module load/unload, the guest path used when dot-auth is absent, and both query protocols end to end — challenges, fragmentation, compression, conditional polling and every A2S response read back field by field — plus the per-address connection limit, every way of naming a player, and a real dot-moderation ban list refusing a connection through the registry seam. Add `-- --serve` to run it as an actual server instead.
+303 checks covering console parsing, every cvar flag, permission and immunity enforcement, config execution, the command buffer, ban durations and expiry, event cancellation, module load/unload, the guest path used when dot-auth is absent, and both query protocols end to end, covering challenges, fragmentation, compression, conditional polling and every A2S response read back field by field, plus the per-address connection limit, every way of naming a player, and a real dot-moderation ban list refusing a connection through the registry seam. Add `-- --serve` to run it as an actual server instead.
 
 ## Licence
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).

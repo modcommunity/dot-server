@@ -720,18 +720,33 @@ static func _register_games(server: DotServer, console: DotConsole) -> void:
 			return server.games.game_ids()
 	)
 
-	# Other servers call it `map`; operators type both.
-	console.command(
-		"map",
-		func(ctx: DotCmdContext) -> void:
-			var res := await server.games.change_game(
-				ctx.arg(0), ctx.caller_label()
-			)
-			if not res.ok:
-				ctx.reply_error(res),
-		"Alias for changelevel.",
-		DotAdminFlags.CHANGEMAP
-	).with_usage("<game_id>").with_args(1, 1)
+	# `game` and `gamechange`, and deliberately NOT `map`.
+	#
+	# `map` was an alias here for as long as dot-server had no notion of a map -- other
+	# servers call the thing that swaps what is running `map`, so operators typed both.
+	# dot-map exists now, a map and a game are two completely different operations, and the
+	# one an operator almost always means by `map` is the other one: changing a GAME
+	# replaces the module, the netcode and the client's scene and puts everybody through
+	# signon, while changing a MAP replaces the world and nothing else and happens every few
+	# minutes. `DotMapCommands` owns the plain name; these are the aliases for this one.
+	for alias in ["game", "gamechange"]:
+		console.command(
+			alias,
+			func(ctx: DotCmdContext) -> void:
+				ctx.reply("Changing to %s…" % ctx.arg(0))
+				var res := await server.games.change_game(
+					ctx.arg(0), ctx.caller_label()
+				)
+				if not res.ok:
+					ctx.reply_error(res)
+					return
+				ctx.reply("Now running %s." % ctx.arg(0)),
+			"Switch to another game. Alias for changelevel.",
+			DotAdminFlags.CHANGEMAP
+		).with_usage("<game_id>").with_args(1, 1).with_chat().with_completer(
+			func(_partial: String, _index: int) -> PackedStringArray:
+				return server.games.game_ids()
+		)
 
 	console.command(
 		"nextgame",

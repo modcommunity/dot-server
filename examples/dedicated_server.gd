@@ -729,6 +729,40 @@ func _test_admins() -> void:
 		not admins.uid_has_permission("backbone:alice", DotAdminFlags.ROOT)
 	)
 
+	# A uid answered by a SOURCE rather than by the admin file.
+	#
+	# This is the case that used to be refused for everybody: `uid_permissions` read the
+	# file and nothing else, on the reasoning that a source needs an identity and only a
+	# connection carries one. True of dot-auth's, false of every source that is a table
+	# keyed by uid -- so a deployment whose admins live in a config file (which is
+	# `dot-server-deploy`, and therefore every TMC server) refused every command relayed
+	# from the website, permanently, with nothing erroring.
+	var table := UidTableSource.new()
+	table.rows["backbone:bob"] = PackedStringArray([DotAdminFlags.CHANGEMAP])
+	admins.add_source(table)
+
+	_check(
+		"a source answers for a uid with no file entry",
+		admins.uid_has_permission("backbone:bob", DotAdminFlags.CHANGEMAP)
+	)
+	_check(
+		"and grants only what it said",
+		not admins.uid_has_permission("backbone:bob", DotAdminFlags.BAN)
+	)
+	_check(
+		"a uid nothing knows still holds nothing",
+		not admins.uid_has_permission("backbone:nobody", DotAdminFlags.CHANGEMAP)
+	)
+	# The name the site would have sent is deliberately NOT tried: it is a string the
+	# person can edit on their own profile page, and an admin entry keyed on one is a
+	# permission anybody can take by renaming themselves.
+	table.rows["Alice"] = PackedStringArray([DotAdminFlags.ROOT])
+	_check(
+		"a display name is never a key",
+		not admins.uid_has_permission("Alice", DotAdminFlags.ROOT)
+			or table.asked_with_display_name == false
+	)
+
 	_check("flag parse: comma", DotAdminFlags.parse("kick,ban").size() == 2)
 	_check("flag parse: space", DotAdminFlags.parse("kick ban").size() == 2)
 	_check("flag parse: mixed", DotAdminFlags.parse("kick, ban").size() == 2)
@@ -1901,3 +1935,39 @@ func _ws_read(ws: WebSocketPeer, want: int, frames: int = 180) -> PackedStringAr
 		if out.size() >= want:
 			break
 	return out
+
+
+## A source that is a table keyed by uid, which is what every deployment's admin config is.
+##
+## dot-auth's source needs a live session to resolve a site group; this one needs nothing
+## but the uid, and the difference is the whole reason `uid_permissions` asks the sources at
+## all. It records whether it was ever handed a display name, so the check above can assert
+## that a relayed author's NAME is not a key.
+class UidTableSource:
+	extends RefCounted
+
+	var rows: Dictionary = {}
+	var asked_with_display_name := false
+
+	func source_name() -> String:
+		return "uid-table"
+
+	func lookup(identity: Object) -> DotResult:
+		if identity == null:
+			return DotResult.fail(DotError.CODE_STATE, "No identity.")
+
+		var name: Variant = identity.get("display_name")
+		if name != null and str(name) != "":
+			asked_with_display_name = true
+
+		var uid: Variant = identity.get("uid")
+		var key := "" if uid == null else str(uid)
+
+		if key == "" or not rows.has(key):
+			return DotResult.fail(DotError.CODE_STATE, "Not listed.")
+
+		return DotResult.success({
+			"flags": rows[key],
+			"immunity": 10,
+			"source": source_name(),
+		})

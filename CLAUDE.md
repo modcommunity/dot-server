@@ -42,7 +42,7 @@ them and said so only in a log line.
 
 It now runs twice: `execute_command_line(true)` before the listener, which lets
 through only statements naming a registered cvar, and the full pass afterwards for
-everything else — because a `+map` or a `+say` genuinely does need the server up
+everything else — because a `+changelevel` or a `+say` genuinely does need the server up
 first.
 
 `DotConfig`'s own layers (`--sv-tickrate=128`, `DOT_SERVER_TICKRATE=128`) are a
@@ -324,6 +324,16 @@ or point two servers at one console. Nothing here hardcodes a scene path.
 Note that created nodes have already run `_ready()` by the time `DotServer` sets their
 `config`, so loads are triggered explicitly (`admins.load_admins()`) rather than
 relying on `_ready` ordering.
+
+## `map` was given back to dot-map
+
+`changelevel`, `game` and `gamechange` switch the **game**. There is no `map` command here any more.
+
+It was an alias for `changelevel` for as long as this addon had no notion of a map — every other server calls the thing that swaps what is running `map`, so operators typed both and got the right answer. dot-map exists now, and the two are not the same operation at all: **changing a game replaces the module, the netcode and the client's scene and puts everybody through signon; changing a map replaces the world and nothing else**, and happens every few minutes. An operator typing `map de_dust2` on a server running one game and a hundred maps meant the second one every time, and got a refusal naming games.
+
+`DotMapCommands` (dot-map, `integrations/`) registers `map`, `maps` and `mapinfo` on any host with `add_command` or `command`. A deployment with no dot-map installed simply has no `map`, which is honest: there is nothing for it to change.
+
+**This is a breaking change for an operator's muscle memory and for any script that typed `map <game_id>`.** `game` is the alias that means what `map` used to mean here, and it is marked `with_chat()` and completed from the game list exactly as `changelevel` is.
 
 ## Game switching
 

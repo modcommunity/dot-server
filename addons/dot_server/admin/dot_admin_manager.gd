@@ -190,35 +190,94 @@ func resolve(session: DotClientSession) -> DotResult:
 	return DotResult.success(session.permissions)
 
 
+## An identity carrying a uid and nothing else.
+##
+## What [method uid_permissions] hands to a source. A source's contract is `lookup(identity)`
+## and every source in this family reads `uid`, `username` and `display_name` off it — so a
+## uid-only identity lets the ones that can answer from a uid answer, and the ones that
+## cannot return their ordinary "nothing for this player".
+##
+## [b]The two empty strings are the point, not a placeholder.[/b] A relayed command's author
+## has a name on the website, and passing it here would let an admin entry be keyed on a
+## string the person themselves can edit on their profile page. A uid is issued; a display
+## name is typed.
+class UidOnlyIdentity:
+	extends RefCounted
+
+	var uid: String = ""
+	var username: String = ""
+	var display_name: String = ""
+
+	func _init(p_uid: String) -> void:
+		uid = p_uid
+
+
 ## What a uid holds, without a session: `{flags: PackedStringArray, immunity: int}`.
 ##
-## [b]The file entry only.[/b] A connected player's permissions are the union of this and
-## every source ([method resolve]), because a source such as dot-auth's needs an identity
-## to look anything up with and an identity is something only a connection carries. So
-## this answers for the local file, which is the half that CAN be answered about somebody
-## who is not here — a reserved slot, an offline promotion, or a command relayed from the
-## website by somebody who is not in the game at all.
+## The local file, **plus every source that can answer from a uid alone**. For a reserved
+## slot, an offline promotion, or a command relayed from the website by somebody who is not
+## in the game at all.
+##
+## [b]It used to be the file only, and that was wrong in the one deployment shape that
+## matters.[/b] The reasoning was that a source needs an identity and an identity is
+## something only a connection carries — true of dot-auth's, which resolves a site group
+## from a live session, and false of every source that is a table keyed by uid. So on a
+## server whose admins live in a config file rather than in `admins.json` — which is
+## `dot-server-deploy`, and therefore every TMC server — a relayed command was refused for
+## everybody, permanently, while `permissions.yml` sat there looking correct. Nothing
+## errored: "that person has no permissions" is a legitimate answer and is indistinguishable
+## from the bug.
+##
+## A source that cannot answer from a uid returns "nothing for this player", which is
+## already its normal case for most players. So asking costs nothing and answering is now
+## possible.
 ##
 ## An unknown uid gets no flags and no immunity rather than an error: "this person has no
 ## permissions" is the correct answer about somebody with no entry, and a caller asking
 ## about a stranger is the normal case rather than a mistake.
 func uid_permissions(uid: String) -> Dictionary:
-	if not _admins.has(uid):
-		return {"flags": PackedStringArray(), "immunity": 0}
+	var flags := PackedStringArray()
+	var immunity := 0
 
-	var entry: Dictionary = _admins[uid]
-	var flags := _flags_of(entry)
-	var immunity := int(entry.get("immunity", 0))
+	if _admins.has(uid):
+		var entry: Dictionary = _admins[uid]
+		flags = _flags_of(entry)
+		immunity = int(entry.get("immunity", 0))
 
-	for group in entry.get("groups", []):
-		if _groups.has(str(group)):
-			var g: Dictionary = _groups[str(group)]
-			flags = DotAdminFlags.merge(flags, _flags_of(g))
+		for group in entry.get("groups", []):
+			if _groups.has(str(group)):
+				var g: Dictionary = _groups[str(group)]
+				flags = DotAdminFlags.merge(flags, _flags_of(g))
 
-			# The HIGHER of the two, matching how `resolve` merges sources. A group is
-			# a floor a member cannot be demoted below by having their own entry, and
-			# an entry is a promotion a group cannot cap.
-			immunity = maxi(immunity, int(g.get("immunity", 0)))
+				# The HIGHER of the two, matching how `resolve` merges sources. A group is
+				# a floor a member cannot be demoted below by having their own entry, and
+				# an entry is a promotion a group cannot cap.
+				immunity = maxi(immunity, int(g.get("immunity", 0)))
+
+	if uid == "":
+		# No identity at all. Asking the sources about the empty string is how a source
+		# with a blank key in its table grants everything to nobody in particular.
+		return {"flags": flags, "immunity": immunity}
+
+	var identity := UidOnlyIdentity.new(uid)
+
+	for source in sources:
+		var res: Variant = source.call("lookup", identity)
+
+		if not (res is DotResult):
+			continue
+
+		var result := res as DotResult
+		if not result.ok:
+			continue
+
+		var payload: Variant = result.value
+		if not (payload is Dictionary):
+			continue
+
+		var d := payload as Dictionary
+		flags = DotAdminFlags.merge(flags, _as_flags(d.get("flags", [])))
+		immunity = maxi(immunity, int(d.get("immunity", 0)))
 
 	return {"flags": flags, "immunity": immunity}
 

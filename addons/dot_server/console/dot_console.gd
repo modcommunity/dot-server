@@ -363,6 +363,51 @@ func _build_context(
 	return ctx
 
 
+## Every command a caller arriving on [param source] could reach, as plain documents.
+##
+## Written for [code]DotChatRelay.commands_fn[/code]: a website composer offering a `/`
+## menu has to be told what this server accepts, because the table depends on which game is
+## loaded and which modules an operator installed, and a list held by the site goes stale
+## the first time either changes.
+##
+## [b]The source gate here is the same one [method _run_command] applies[/b], and that
+## matters more than it looks. A relay configured as RCON reaches everything RCON reaches
+## and a relay configured as CHAT reaches only what is marked [code]with_chat()[/code] — so
+## a menu built from "chat_allowed" alone would offer a records server's map change to
+## somebody whose every attempt is refused, and hide an operator's whole toolbox from a
+## deployment that deliberately made them remote administrators.
+##
+## [b]It answers no permission question.[/b] Whether a particular person may run a
+## particular command is decided per line, later, by the admin manager — this is what is
+## worth OFFERING. Hidden commands are left out, because hidden means "not in the list".
+func command_document(
+	source: DotCmdContext.Source = DotCmdContext.Source.CHAT
+) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+
+	for name in command_names():
+		var cmd: DotConCommand = _commands.get(name)
+		if cmd == null or cmd.hidden:
+			continue
+		if source == DotCmdContext.Source.RCON and not cmd.rcon_allowed:
+			continue
+		if source == DotCmdContext.Source.CHAT and not cmd.chat_allowed:
+			continue
+
+		out.append({
+			"name": cmd.name,
+			"usage": cmd.usage,
+			"description": cmd.description,
+			# What the READER is being told: "you can type this here". The relay's source
+			# is what decided it a few lines above, so a deployment that made its site
+			# admins remote administrators gets a menu that says so.
+			"chat_allowed": true,
+			"permission": cmd.permission,
+		})
+
+	return out
+
+
 func _run_command(cmd: DotConCommand, ctx: DotCmdContext) -> DotResult:
 	if ctx.source == DotCmdContext.Source.RCON and not cmd.rcon_allowed:
 		ctx.reply("'%s' cannot be run remotely." % cmd.name)
