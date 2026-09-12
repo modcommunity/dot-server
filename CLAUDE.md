@@ -57,8 +57,9 @@ config resource -> JSON file -> env -> argv       (DotServerConfig layers)
   -> server.cfg executed                          <- FLAG_STARTUP_ONLY still settable
   -> cvars read back into config
   -> subsystems created (events, audit, admins, bans, chat, games, votes,
-     modules, rcon, query + a2s)
+     modules, rcon)
   -> LISTENER OPENS                               <- FLAG_STARTUP_ONLY locks here
+  -> RUNNING, then the query host is opened       <- dot-server-query, if attached
   -> autoexec.cfg executed
   -> +command arguments executed
 ```
@@ -455,77 +456,48 @@ through dot-cloud sets a *relative* `client_scene` instead and gets the mounted 
 Found by `dot-2d-hungry`, whose sandbox is the first example anywhere in the family to
 connect a client to a server running a real game scene.
 
-## Server queries
+## Server queries live in dot-server-query now
 
-Two protocols answering the same question, from the same `DotQuerySnapshot`, on the
-same UDP socket. `addons/dot_server/query/PROTOCOL.md` is the wire spec; what follows
-is why it is shaped that way.
+**This addon no longer answers a query, and names nothing that does.** Both
+protocols, the snapshot they read from, the challenge, the provider API and the two
+console commands moved to [dot-server-query](../dot-server-query) — with their whole
+self-test, which is why this suite counts 224 checks where it used to count 319.
 
-**A2S is a compatibility shim and is off by default.** It is a packed byte layout
-with positional fields, a multi-packet format that differs between engine branches,
-no room for anything a game knows about itself, and — until 2020 — no defence against
-being used as a DDoS amplifier. What it has is twenty years of tooling: every
-server-list site, chat bot and uptime monitor speaks it and nothing else. That is
-the whole case for it, and it is enough.
+What is left here is one hook:
 
-**DQP is the one to reach for**, and is on by default. JSON in a fixed 26-byte
-envelope, sections requested à la carte, a revision that makes polling nearly free,
-and — the part A2S can never have — a WebSocket variant, because a web page cannot
-open a UDP socket and "click a link and play" needs a server list for the link to
-come from.
+```gdscript
+func attach_query_host(host: Object) -> DotResult
+```
 
-**Both listen on the game port by default, and share one socket.** That is the only
-port a tracker will try, and two listeners cannot bind one UDP port, so `DotQueryServer`
-owns it and hands over anything starting `FF FF FF FF`. A UDP game transport (ENet)
-already holds that port; the bind fails and says so.
+`DotQueryHost` calls it; `DotServer` opens it once the server is `RUNNING`, or
+immediately if it is already. `query_host`, `query_source`, `query` and `a2s` are all
+typed `Object` and reached with `.call(...)`, exactly as `watch_relay` reaches
+dot-chat and `dot_ban_source` reaches dot-moderation.
 
-### The controls, and what each one is for
+**Why it had to be duck-typed rather than merely optional.** A script that mentions a
+`class_name` the project does not have fails to parse *and takes every script
+referencing it down with it*. `DotQueryHost` named anywhere in this addon would make
+an optional repository mandatory for anything that so much as boots a server — the
+same reasoning written down on `DotChatRelay` and `DotWeaponLoadoutBridge`.
 
-- **An address-bound challenge, always, before any payload is built.** UDP source
-  addresses are forged trivially and a query is a small request producing a large
-  response — the exact shape of an amplifier. The cookie is
-  `HMAC(secret, address|port|bucket|width)` and **nothing is stored**: a challenge
-  table is itself a memory-exhaustion target. Same reasoning as a SYN cookie. The
-  unchallenged reply is smaller than the request that provoked it.
-- **The snapshot cache is a security control, not an optimisation.** Gathering one
-  walks every session and every cvar. Per packet, that is the cheapest denial of
-  service there is, and unlike a flood of game traffic it needs no connection.
-- **An oversized response is refused, not truncated.** A body cut off mid-JSON
-  reaches the querier as a parse failure they read as a broken server, and the fix —
-  ask for fewer sections — is something only they can do.
-- **A response arriving on the listening socket is never answered.** That is how two
-  servers become a reflection loop.
-- **`FLAG_PROTECTED` and `FLAG_HIDDEN` cvars are never published**, including when an
-  operator names one in `query_extra_rules`. The flag exists precisely because that
-  value must not leave the server.
-- **No player detail setting ever emits an account uid.** dot-user's point is that an
-  operator cannot correlate their players across servers; publishing the identifier
-  to anyone who sends a datagram would undo that from the other direction.
+**The configuration stayed.** `query_enabled`, `a2s_enabled`, `query_port`,
+`a2s_port`, `query_bind_address`, `query_player_detail` and the rest are still
+`DotServerConfig` fields, and `sv_query`, `sv_a2s` and `sv_query_players` are still
+registered here before `server.cfg` runs. They are plain bools, ints and strings that
+name no class, so an operator's `server.yml` keeps working unchanged and the layering
+promise is unbroken — and a server with the addon absent simply has settings that
+nothing reads. Moving them would have broken every deployment's config file to no
+purpose.
 
-### Bugs the first run found, both parse-clean
+**What a server without the addon does:** boots, runs, and answers nothing on the
+query port. That is a supported configuration. `DotModule.add_query_provider` returns
+a failed `DotResult` naming it, `to_stats_report()` reports 0 bots, and no
+`query_status` command exists to answer "there is no query listener".
 
-- **One flag bit with two meanings.** `FLAG_GZIP` meant "I accept gzip" on a request
-  and "this is gzipped" on a response, on the reasoning that a request is never
-  compressed so the bit was free. It made the header un-parseable without already
-  knowing which direction the packet was going: the parser reads the header to find
-  that out, so it tried to gunzip a plaintext request body and failed. Every query
-  was silently dropped. `FLAG_ACCEPT_GZIP` is now its own bit.
-- **A fragment is not independently decodable.** `parse()` gunzipped and
-  JSON-parsed whatever payload it was handed, so reading a fragment's header — which
-  is exactly what reassembly does first — logged two engine errors on a completely
-  normal path. Nothing failed; it just looked broken in every log it appeared in.
-
-### Where a game plugs in
-
-`DotQueryProvider`, registered with `DotQuerySource.add_provider` — or
-`DotModule.add_query_provider`, which removes it on unload, because a provider left
-behind by an unloaded module is called on the next query with `self` pointing at a
-freed object.
-
-**The bot count is the case that proves it.** Nothing in dot-server can know it — a
-bot is a game concept and the server never sees one connect — so it reaches A2S's bot
-byte, DQP's `info.bots` *and* the backbone stats report only through a provider.
-`to_stats_report()` no longer hardcodes zero.
+**`to_stats_report()`'s bot count still comes from a provider**, through
+`_bot_count()`, which is duck-typed the same way. Nothing in dot-server can know how
+many of a game's entities are bots — it never sees one connect — so zero without a
+provider is honest rather than wrong.
 
 ## Modules
 
@@ -593,7 +565,8 @@ find . -name '*.gd' -not -path './.godot/*' | while read f; do
     godot --headless --path . --check-only --script "res://${f#./}"
 done
 
-# 319 checks. Exits non-zero on any failure.
+# 224 checks. Exits non-zero on any failure. (Was 319; the query
+# protocols and their 95 checks moved to dot-server-query.)
 godot --headless --path . res://examples/dedicated_server.tscn
 
 # 41 checks. A real client, a real socket, and a game that is actually DELIVERED:
@@ -613,13 +586,9 @@ and expiry, admin flag parsing, event cancel/rewrite, module load *and clean unl
 and the audit trail. It does not cover the client handshake — that needs two
 processes.
 
-**Both query protocols are covered end to end without a socket.** `handle_datagram`
-takes a datagram and returns the datagrams to send back, so the self-test drives the
-whole of DQP and A2S — challenge binding, fragmentation, gzip, conditional polling,
-reflection refusal, rate limiting, and every A2S response read back field by field by
-a reader that behaves like a real client. Both bugs above were found by that, and
-neither produced a parse error. The listeners still bind for real in the example
-(A2S on 27056, DQP sharing it), so the shared-socket path is exercised too.
+**The query protocols are covered in dot-server-query's own suite**, not here — 164
+checks, including the hook in both directions: a host that attaches before the server
+has booted and one that attaches after it is already running.
 
 **The example set `startup_config = ""`** on purpose: the addon ships a default
 `server.cfg` that the search path finds, which is correct layering but would make the
@@ -652,15 +621,6 @@ addons/dot_server/
     dot_audit_log.gd         JSONL, flushed per entry.
   rcon/
     dot_rcon_server.gd       Classic RCON protocol + WebSocket. Read the class doc.
-  query/
-    PROTOCOL.md              The wire spec. Enough to write a client in any language.
-    dot_query_challenge.gd   Stateless address-bound cookies. The anti-amplifier.
-    dot_query_protocol.gd    DQP framing: header, flags, fragments, gzip.
-    dot_query_snapshot.gd    What the server looks like from outside, at one moment.
-    dot_query_source.gd      Builds and caches it; where providers are registered.
-    dot_query_provider.gd    Where a game contributes its own state.
-    dot_query_server.gd      DQP over UDP, and over WebSocket for browsers.
-    dot_a2s_server.gd        A2S. Compatibility, and off by default.
   chat/
     dot_chat_manager.gd      Routing, flood control, sanitising, chat triggers.
   game/
@@ -691,13 +651,8 @@ addons/dot_server/
   a game's own concern, and a framework opinion there would be wrong for most games.
   `DotTransport.Channel.STATE` is reserved for it.
 - **Master-server heartbeat.** `sv_lan` exists and does nothing yet. Nothing
-  announces this server anywhere; a tracker has to be told the address. Both query
-  protocols answer once it has been.
-- **A query client.** dot-server answers queries and does not ask them, so there is
-  no server browser here — `PROTOCOL.md` has enough to write one, and `dot-ui` is
-  where the screen would live.
-- **Delta responses.** `if_rev` answers "unchanged" or resends the whole thing. A
-  patch between two revisions would be smaller again and is not worth the complexity
-  until something is polling enough servers to notice.
+  announces this server anywhere; a tracker has to be told the address. With
+  dot-server-query installed, both protocols answer once it has been.
+- **Answering a query at all.** dot-server-query does that, and dot-browser asks.
 - **A listen server helper.** Running `DotServer` and `DotClientLink` in one process
   works — that is why there are no autoloads — but nothing wraps the pattern up.

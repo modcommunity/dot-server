@@ -22,7 +22,6 @@ static func register_all(server: DotServer, console: DotConsole) -> void:
 	_register_players(server, console)
 	_register_moderation(server, console)
 	_register_games(server, console)
-	_register_query(server, console)
 	_register_chat(server, console)
 	_register_votes(server, console)
 	_register_admin(server, console)
@@ -189,49 +188,11 @@ static func _register_status(server: DotServer, console: DotConsole) -> void:
 
 
 # --- Query -----------------------------------------------------------------
-
-static func _register_query(server: DotServer, console: DotConsole) -> void:
-	console.command(
-		"query_status",
-		func(ctx: DotCmdContext) -> void:
-			if server.query_source == null:
-				ctx.reply("No query listener: sv_query and sv_a2s are both off.")
-				return
-
-			ctx.reply("[dot query]")
-			if server.query != null:
-				ctx.reply_lines(server.query.describe_lines())
-			else:
-				ctx.reply("  not listening")
-
-			ctx.reply("")
-			ctx.reply("[a2s]")
-			if server.a2s != null:
-				ctx.reply_lines(server.a2s.describe_lines())
-			else:
-				ctx.reply("  disabled")
-
-			ctx.reply("")
-			ctx.reply("[snapshot]")
-			ctx.reply_lines(server.query_source.describe_lines()),
-		"Show the query listeners and the snapshot they serve."
-	)
-
-	console.command(
-		"query_dump",
-		func(ctx: DotCmdContext) -> void:
-			if server.query_source == null:
-				ctx.reply("No query source.")
-				return
-
-			# Forced, so an operator checking what a provider contributes sees the
-			# current answer rather than one cached up to a second ago — which is
-			# exactly the difference they are looking at.
-			var snap := server.query_source.snapshot(true)
-			ctx.reply(JSON.stringify(snap.to_full_dict(), "  ")),
-		"Print the full query response, as a querier would receive it.",
-		DotAdminFlags.GENERIC
-	)
+#
+# `query_status` and `query_dump` are NOT here. They describe the query listeners,
+# which live in dot-server-query, and a server without that addon should not offer
+# a command whose only possible answer is "there is no query listener". The host
+# registers them when it attaches. See DotServer.attach_query_host.
 
 
 # --- Players -------------------------------------------------------------

@@ -99,12 +99,6 @@ signal game_changing(from_key: String, to_key: String)
 @export var games_ref: DotNodeRef = null
 @export var votes_ref: DotNodeRef = null
 
-## Where to find or create the query snapshot builder.
-##
-## Created when either query protocol is enabled, since both read from it.
-@export var query_source_ref: DotNodeRef = null
-@export var query_ref: DotNodeRef = null
-@export var a2s_ref: DotNodeRef = null
 @export var events_ref: DotNodeRef = null
 @export var modules_ref: DotNodeRef = null
 
@@ -121,9 +115,32 @@ var games: DotGameManager = null
 var votes: DotVoteManager = null
 var events: DotEventBus = null
 var modules: DotModuleHost = null
-var query_source: DotQuerySource = null
-var query: DotQueryServer = null
-var a2s: DotA2SServer = null
+## The query responder, when dot-server-query is installed and plugged in.
+##
+## [b]Duck-typed, and that addon is named nowhere in dot-server.[/b] Answering a
+## query is a whole protocol's worth of concern that most servers in this family
+## never switch on, so it lives in its own repository — and a script mentioning a
+## [code]class_name[/code] the project does not have fails to parse and takes
+## every script referencing it down with it. Naming [code]DotQueryHost[/code] here
+## would make an optional addon mandatory for anything that so much as boots a
+## server.
+##
+## The hook is [method attach_query_host]. Everything below is filled in by the
+## host once it has attached, and stays null when nothing does.
+var query_host: Object = null
+
+## The snapshot builder, set by the query host. See [method attach_query_host].
+##
+## Read by [method DotModule.add_query_provider] and by the builtin query
+## commands, both of which check it for null first — which on a server with no
+## query addon is always.
+var query_source: Object = null
+
+## The dot query protocol listener, set by the query host.
+var query: Object = null
+
+## The A2S listener, set by the query host.
+var a2s: Object = null
 
 var state: State = State.IDLE
 
@@ -250,6 +267,11 @@ func boot() -> DotResult:
 	_set_state(State.RUNNING)
 	_apply_tickrate()
 
+	# Last, and deliberately: a query listener advertises this server to the
+	# outside, and there is nothing worth advertising until everything above has
+	# come up.
+	_open_query_host()
+
 	DotLog.info(
 		CHANNEL,
 		"ready",
@@ -257,7 +279,7 @@ func boot() -> DotResult:
 			"transport": _transport._transport_name(),
 			"web_clients": _transport.supports_web_clients(),
 			"rcon": rcon != null and rcon.is_listening(),
-			"query": query != null and query.is_listening(),
+			"query": query != null and bool(query.call("is_listening")),
 			"a2s": a2s != null,
 			"admins": admins.admin_count() if admins != null else 0,
 			"bans": bans.count() if bans != null else 0,
@@ -410,87 +432,67 @@ func _resolve_subsystems() -> void:
 			CHANNEL, "RCON is disabled (no rcon_password set)"
 		)
 
-	_resolve_query()
-
 	# Record permission-carrying commands in the audit trail. Done here rather than
 	# in the console so the console stays independent of moderation.
 	if audit != null and console != null:
 		console.command_executed.connect(_on_command_for_audit)
 
 
-## Brings up whichever query listeners are enabled.
+## Plugs a query responder into this server.
 ##
-## The order matters. [DotQueryServer] binds first, and [DotA2SServer] then either
-## shares that socket — when both are on the same port, which is the default — or
-## binds its own. Two listeners cannot bind one UDP port, and the two protocols are
-## distinguishable by their first four bytes, so sharing is both necessary and free.
-func _resolve_query() -> void:
-	if not config.query_enabled and not config.a2s_enabled:
-		return
+## [b]The whole of dot-server's query integration.[/b] dot-server-query calls this
+## with its [code]DotQueryHost[/code]; nothing else in this file knows that addon
+## exists, and a server without it simply never has one attached and never answers
+## a query. That is a supported configuration, not a degraded one.
+##
+## Duck-typed deliberately — see [member query_host]. The host is asked for
+## [code]open()[/code] only once this server is running, because opening a
+## listener that advertises a server which has not finished booting invites a
+## querier in before there is anything to tell it. A host attaching after the
+## server is already up is opened immediately, which is what makes this work from
+## a module loaded at runtime as well as from a scene.
+func attach_query_host(host: Object) -> DotResult:
+	if host == null:
+		return DotResult.fail(DotError.CODE_INVALID, "A query host cannot be null.")
 
-	if query_source_ref == null:
-		query_source_ref = DotNodeRef.of_created(&"QuerySource", DotQuerySource)
-	query_source = _resolve(query_source_ref, "query source") as DotQuerySource
-	if query_source == null:
-		return
-	query_source.setup(self)
-
-	if config.query_enabled:
-		if config.effective_query_port() <= 0:
-			# Same reasoning as RCON's: an ephemeral game port leaves nothing to
-			# derive a query port from, and a listener on a port nobody was told
-			# about answers nobody.
-			DotLog.info(
-				CHANNEL,
-				"query listener disabled: set query_port, there is no fixed game "
-				+ "port to derive one from"
-			)
-		else:
-			if query_ref == null:
-				query_ref = DotNodeRef.of_created(&"Query", DotQueryServer)
-			query = _resolve(query_ref, "query") as DotQueryServer
-			if query != null:
-				query.setup(self, query_source)
-				var opened := query.open()
-				if not opened.ok:
-					DotLog.warn(
-						CHANNEL,
-						"could not open the query listener",
-						{"detail": opened.error.message}
-					)
-
-	if not config.a2s_enabled:
-		return
-
-	if config.effective_a2s_port() <= 0:
-		DotLog.info(
-			CHANNEL,
-			"A2S disabled: set a2s_port, there is no fixed game port to derive "
-			+ "one from"
+	if not host.has_method("open"):
+		return DotResult.fail(
+			DotError.CODE_INVALID,
+			"A query host needs an open() method.",
+			"got a %s" % host.get_class()
 		)
+
+	if query_host != null and query_host != host:
+		# Two responders would bind the same port, and the second failure would be
+		# reported as a bind error rather than as the configuration mistake it is.
+		return DotResult.fail(
+			DotError.CODE_STATE,
+			"This server already has a query host.",
+			"attached: %s" % query_host.get_class()
+		)
+
+	query_host = host
+
+	if state == State.RUNNING:
+		return host.call("open") as DotResult
+
+	return DotResult.success(host)
+
+
+## Opens the attached query host, if there is one. Called once the server is up.
+func _open_query_host() -> void:
+	if query_host == null or not is_instance_valid(query_host):
 		return
 
-	if a2s_ref == null:
-		a2s_ref = DotNodeRef.of_created(&"A2S", DotA2SServer)
-	a2s = _resolve(a2s_ref, "a2s") as DotA2SServer
-	if a2s == null:
-		return
+	var opened := query_host.call("open") as DotResult
 
-	a2s.setup(self, query_source)
-
-	var shared := query != null and query.is_listening() \
-		and config.effective_query_port() == config.effective_a2s_port()
-
-	if shared:
-		query.attach_a2s(a2s)
-		return
-
-	var a2s_opened := a2s.open()
-	if not a2s_opened.ok:
+	if opened != null and not opened.ok:
+		# Warned, never fatal. A server that is running and unlisted is worth far
+		# more than one that refused to boot because a query port was taken.
 		DotLog.warn(
 			CHANNEL,
-			"could not open the A2S listener",
-			{"detail": a2s_opened.error.message}
+			"the query host could not open its listeners",
+			{"detail": opened.error.message}
 		)
 
 
@@ -1880,7 +1882,7 @@ func describe() -> Dictionary:
 		"max_players": _cv_maxplayers.get_int() if _cv_maxplayers != null else 0,
 		"transport": _transport._transport_name() if _transport != null else "",
 		"web_clients": _transport.supports_web_clients() if _transport != null else false,
-		"query": query != null and query.is_listening(),
+		"query": query != null and bool(query.call("is_listening")),
 		"a2s": a2s != null,
 		"per_ip_limit": address_guard.limit if address_guard != null else 0,
 		"per_ip_refused": address_guard.refused if address_guard != null else 0,
@@ -1895,9 +1897,9 @@ func to_stats_report() -> Dictionary:
 		"curUsers": player_count(),
 		"maxUsers": _cv_maxplayers.get_int(),
 		# The one place that can know: only a game knows which of its entities are
-		# bots, and it says so through a DotQueryProvider. Without one this is
-		# still 0, which is at least honest about not knowing.
-		"bots": query_source.snapshot().bot_count() if query_source != null else 0,
+		# bots, and it says so through a query provider (dot-server-query). Without
+		# one this is still 0, which is at least honest about not knowing.
+		"bots": _bot_count(),
 		# null, never "": the backbone's IngestServerStatsInput takes `map` as a
 		# non-empty string or null, and a server between games sending "" would
 		# have its whole report refused.
@@ -1906,6 +1908,22 @@ func to_stats_report() -> Dictionary:
 		"dedicated": DotPlatform.is_headless(),
 		"version": VERSION,
 	}
+
+
+## Bots, from the query snapshot, duck-typed like everything else about it.
+##
+## Zero when there is no query addon, and zero when there is one but no game has
+## registered a provider. Both are honest: nothing in dot-server can know how many
+## of a game's entities are bots, because it never sees one connect.
+func _bot_count() -> int:
+	if query_source == null or not is_instance_valid(query_source):
+		return 0
+
+	var snap: Object = query_source.call("snapshot")
+	if snap == null or not snap.has_method("bot_count"):
+		return 0
+
+	return int(snap.call("bot_count"))
 
 
 ## The shape [code]DotBackboneClient.report_users[/code] expects.

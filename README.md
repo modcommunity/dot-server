@@ -60,7 +60,7 @@ The client downloads whatever content the current game needs (via dot-cloud), lo
 
 **RCON that existing tools work with.** The classic RCON wire protocol, so operators keep their clients and panels. Constant-time password comparison, per-address lockout, an optional allow-list, and a WebSocket variant so a browser admin panel can talk to it.
 
-**Server queries, both kinds.** A2S, so the twenty years of trackers, chat bots and uptime monitors that speak nothing else can list your server. It is off by default, and on the game port when you turn it on. And the dot query protocol: JSON sections you ask for by name, a revision that makes polling nearly free, a place for your game to publish its own state, and a WebSocket variant so a browser-based server list can reach it, which A2S can never do. Both are challenged against the source address, so neither can be used to attack somebody else. See [the wire spec](addons/dot_server/query/PROTOCOL.md).
+**Server queries are a separate asset now.** [dot-server-query](https://github.com/modcommunity/dot-server-query) answers them — the whole of A2S for the twenty years of trackers, chat bots and uptime monitors that speak nothing else, and the dot query protocol beside it: JSON sections you ask for by name, a revision that makes polling nearly free, a place for your game to publish its own state, and a WebSocket variant so a browser-based server list can reach it, which A2S can never do. Both are challenged against the source address, so neither can be used to attack somebody else. Install it and add a `DotQueryHost`; leave it out and this server simply answers nothing on the query port. Nothing here names it.
 
 **Permissions that fit real communities.** String flags rather than fixed roles, because nobody agrees what a "moderator" is. Numeric immunity so admins cannot kick each other in a loop. Admins from a JSON file, from dot-auth's site groups, or from your own source, all merged.
 
@@ -88,7 +88,7 @@ Neither is imported; dot-server works without both.
 godot --headless --path . res://examples/dedicated_server.tscn
 ```
 
-303 checks covering console parsing, every cvar flag, permission and immunity enforcement, config execution, the command buffer, ban durations and expiry, event cancellation, module load/unload, the guest path used when dot-auth is absent, and both query protocols end to end, covering challenges, fragmentation, compression, conditional polling and every A2S response read back field by field, plus the per-address connection limit, every way of naming a player, and a real dot-moderation ban list refusing a connection through the registry seam. Add `-- --serve` to run it as an actual server instead.
+224 checks covering console parsing, every cvar flag, permission and immunity enforcement, config execution, the command buffer, ban durations and expiry, event cancellation, module load/unload, the guest path used when dot-auth is absent, the per-address connection limit, every way of naming a player, and a real dot-moderation ban list refusing a connection through the registry seam. The query protocols have their own suite in dot-server-query. Add `-- --serve` to run it as an actual server instead.
 
 ## Licence
 

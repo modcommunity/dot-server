@@ -131,7 +131,8 @@ extends DotConfig
 ## On by default, and safe on by default: every UDP query is answered with an
 ## address-bound challenge before any payload is built, so the listener cannot be
 ## used to attack somebody else, and it is rate limited per address on top of that.
-## See [DotQueryServer].
+## Read by dot-server-query's DQP listener, which is a separate addon; nothing
+## here reads it.
 ##
 ## A server nobody can query is a server nobody can find.
 @export var query_enabled: bool = true
@@ -176,7 +177,7 @@ extends DotConfig
 ## [code]full[/code] adds userid, ping, bot and signon state to the name, score and
 ## duration A2S would give ([code]names[/code]). [code]count[/code] publishes the
 ## number but no list; [code]none[/code] refuses the section. Never includes an
-## account uid at any setting — see [DotQuerySource].
+## account uid at any setting — see dot-server-query.
 @export_enum("full", "names", "count", "none")
 var query_player_detail: String = "full"
 
@@ -220,7 +221,7 @@ var query_player_detail: String = "full"
 ## Off by default. A2S is a compatibility shim for twenty years of trackers,
 ## chat bots and uptime monitors that speak nothing else — worth having when
 ## being listed matters, and a strictly worse protocol otherwise. See
-## [DotA2SServer].
+## dot-server-query's A2S listener, which is a separate addon.
 @export var a2s_enabled: bool = false
 
 ## UDP port for A2S. 0 uses [member port], which is where every tracker looks.

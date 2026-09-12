@@ -146,7 +146,9 @@ func add_query_provider(provider: Object) -> DotResult:
 			"No query source: neither query protocol is enabled on this server."
 		)
 
-	var added := server.query_source.add_provider(provider)
+	# Duck-typed: the query source lives in dot-server-query, which this project
+	# may not have. See DotServer.query_host.
+	var added := server.query_source.call("add_provider", provider) as DotResult
 	if added.ok:
 		_query_providers.append(provider)
 	return added
@@ -166,9 +168,10 @@ func _cleanup_registrations() -> void:
 		events.unhook(str(entry[0]), entry[1])
 	_hooks.clear()
 
-	if server != null and server.query_source != null:
+	if server != null and server.query_source != null \
+			and is_instance_valid(server.query_source):
 		for provider in _query_providers:
-			server.query_source.remove_provider(provider)
+			server.query_source.call("remove_provider", provider)
 	_query_providers.clear()
 
 
