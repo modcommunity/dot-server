@@ -884,8 +884,11 @@ func release_session(peer_id: int) -> DotResult:
 ## nothing more, and an operator who has not made somebody an admin has not accidentally
 ## made them one by turning a relay on.
 ##
-## [param source] defaults to [code]CHAT[/code], which this console documents as the
-## least trusted path — the right classification for a line typed on a web page.
+## [param source] defaults to [code]CHAT[/code], which is the right classification for a
+## line typed on a web page. With `sv_chat_commands` on — the default — that reaches every
+## command the person's own flags allow, so the classification is about provenance rather
+## than about a smaller command table. What it still withholds is anything marked
+## [method DotConCommand.no_chat], where the refusal is about the operation itself.
 ##
 ## Returns the reply lines, so a caller can send them back where the command came from.
 func run_command_as_uid(
@@ -1414,6 +1417,10 @@ func report_loaded() -> void:
 		})
 
 	if chat != null:
+		# Before the join line, not after: the first thing a client hears about chat
+		# should be what is carrying it, so it can decide whether to draw a box at all
+		# rather than drawing one and taking it away a moment later.
+		chat.greet(session)
 		chat.announce_join(session)
 
 	_wake_from_hibernation()
@@ -1707,6 +1714,16 @@ func _register_cvars() -> void:
 		"Seconds of silence before a client is dropped.",
 		DotConVar.FLAG_ARCHIVE
 	).with_range(5, 600)
+
+	# Bound onto the console rather than read here: the console is what applies it, on
+	# every line, and a console with no server (an editor, a test) still answers from its
+	# own exported default.
+	console.chat_commands_cvar = console.cvar(
+		"sv_chat_commands",
+		"1" if config.chat_commands_open else "0",
+		"Let a prefixed chat message run any command the speaker has the flag for.",
+		DotConVar.FLAG_ARCHIVE | DotConVar.FLAG_NOTIFY
+	)
 
 	console.cvar(
 		"sv_lan",

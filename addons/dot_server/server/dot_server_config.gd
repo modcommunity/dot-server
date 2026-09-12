@@ -291,6 +291,17 @@ var query_player_detail: String = "full"
 ## Prefixes that turn a chat message into a command.
 @export var chat_command_prefixes: PackedStringArray = PackedStringArray(["!", "/"])
 
+## Whether a prefixed chat message reaches commands that have not said either way.
+##
+## [b]On.[/b] The console is the console: typing `/map surf_beginner` there needs no prefix
+## and typing it in chat needs one, and past that the two are the same line running the
+## same permission check. Off narrows chat to commands explicitly marked `with_chat()`,
+## which is what this family did by default until it turned out to be a refusal aimed at
+## operators rather than a boundary against anybody.
+##
+## The cvar is `sv_chat_commands`, so `server.cfg` and a running server can both change it.
+@export var chat_commands_open: bool = true
+
 ## Chat messages allowed per player per minute.
 @export_range(1, 240, 1) var chat_rate_per_minute: int = 20
 

@@ -12,9 +12,13 @@ extends Node
 ## in the sense that anyone in the game can send it, it is attacker-controlled text
 ## that ends up in other players' UI and in the log, and it is the path an admin
 ## command arrives through. So: length is capped before anything else, control
-## characters are stripped, the rate limiter runs before the command parser, and a
-## command from chat only reaches commands that opted in with
-## [member DotConCommand.chat_allowed].
+## characters are stripped, and the rate limiter runs before the command parser.
+##
+## What it is [i]not[/i] is a smaller set of commands. A prefixed line reaches whatever
+## [member DotServerConfig.chat_commands_open] leaves open -- by default everything that
+## has not called [method DotConCommand.no_chat] -- and then the speaker's own flags decide,
+## exactly as they do over RCON. The permission check is the boundary; the prefix is only
+## how a line that would otherwise be speech says it is a command.
 
 const CHANNEL := "chat"
 const SERVICE := &"dot_chat_manager"
@@ -230,6 +234,8 @@ func _broadcast_chat(
 	for other in server.playing_sessions():
 		if team_only and not _same_team(session, other):
 			continue
+		if not _can_reach(other):
+			continue
 		_receive_chat.rpc_id(other.peer_id, payload)
 
 
@@ -246,6 +252,87 @@ func _same_team(a: DotClientSession, b: DotClientSession) -> bool:
 	return team_a == team_b
 
 
+# --- What else is carrying this conversation --------------------------------
+
+## Whether chat is also being carried somewhere off this server. `() -> bool`.
+##
+## [b]Pointed at a chat relay, and held as a callable rather than as one.[/b] dot-server
+## does not depend on dot-chat — the relay is [code]DotChatRelay[/code] in every game here
+## and a script that names it would not compile in a server without dot-chat installed.
+## The question is also broader than one class: a deployment bridging chat to anything at
+## all answers yes the same way.
+##
+## Unset means no, which is the honest default for a server that was never told.
+var relay_fn: Callable = Callable()
+
+## Points [member relay_fn] at a relay, and tells everybody what changed.
+##
+## [b]Duck-typed, and that is the whole reason this method exists rather than five copies
+## of `chat.relay_fn = relay.is_carrying`.[/b] The object is a [code]DotChatRelay[/code] in
+## every game here, and dot-server cannot name it: dot-chat is an optional addon and a
+## script that mentions the class fails to compile without it. One line in a game, and the
+## contract — a method called `is_carrying` returning a bool — is written down here.
+##
+## A relay that is null, or that has no such method, means nothing is carrying chat. That
+## is also how a game turns the answer back off.
+func watch_relay(relay: Object) -> void:
+	if relay != null and relay.has_method("is_carrying"):
+		relay_fn = Callable(relay, "is_carrying")
+	else:
+		relay_fn = Callable()
+
+	announce_state()
+
+
+## What the client is told about the conversation it just joined.
+##
+## [b]Why a client is told at all.[/b] A player whose lines already reach a web page they
+## are looking at does not need a second chat box in front of the game, and a player whose
+## lines reach nothing but this server needs one badly. Only the server knows which of
+## those is true, so only the server can say. What the client then DOES with the answer is
+## the client's: [code]DotChatWindow.enabled[/code] and a setting beside it, because "the
+## site has a chat box" and "I am looking at the site" are not the same sentence.
+func chat_state() -> Dictionary:
+	return {
+		"kind": "state",
+		"relay": is_relayed(),
+	}
+
+
+## Whether anything is carrying chat off this server right now.
+func is_relayed() -> bool:
+	if not relay_fn.is_valid():
+		return false
+
+	var answer: Variant = relay_fn.call()
+	return answer is bool and answer
+
+
+## Tells one joining client what is carrying chat.
+##
+## Called by [DotServer] as a session starts playing, before the join announcement, so
+## that the client has the answer before it has any line to draw.
+func greet(session: DotClientSession) -> void:
+	if not _can_reach(session):
+		return
+
+	_receive_chat.rpc_id(session.peer_id, chat_state())
+
+
+## Tells everybody, for a relay that came up or went down mid-match.
+func announce_state() -> void:
+	if server == null:
+		return
+
+	var payload := chat_state()
+
+	for session in server.playing_sessions():
+		if _can_reach(session):
+			_receive_chat.rpc_id(session.peer_id, payload)
+
+	DotLog.info(CHANNEL, "chat state", payload)
+
+
 ## Sends a system message to everyone playing.
 func broadcast_system(text: String) -> void:
 	var payload := {
@@ -255,14 +342,39 @@ func broadcast_system(text: String) -> void:
 	}
 
 	for session in server.playing_sessions():
-		_receive_chat.rpc_id(session.peer_id, payload)
+		if _can_reach(session):
+			_receive_chat.rpc_id(session.peer_id, payload)
 
 	DotLog.info(CHANNEL, "system message", {"text": text})
 
 
+## Whether a line addressed to this session can actually be put on the wire.
+##
+## [b]`is_active()` is not enough, and a chat command is where that shows.[/b] A session's
+## state is what the server last decided; the peer list is what the multiplayer layer
+## currently has. Between a player leaving and the server noticing, `rpc_id` on their id
+## prints an engine error and a full GDScript backtrace — per reply line, so a `status` from
+## somebody who just disconnected fills the log with twenty of them. Found by a suite that
+## drove the whole chat path with a synthetic session, which is the only way it shows up:
+## every assertion about a reply passes while this is happening.
+##
+## [b]`get_peers()` excludes this process's own id[/b], so a session on the host peer of a
+## listen server reads as unreachable. That is not a loss: `rpc_id` at your own id is
+## refused by the engine, so such a session never received a line here anyway — it printed
+## an error instead. A host player who should see their own chat needs the payload handed
+## to the local client directly, which is a listen-server seam dot-server does not have yet.
+func _can_reach(session: DotClientSession) -> bool:
+	if session == null or not session.is_active():
+		return false
+	var mp := multiplayer
+	if mp == null or mp.multiplayer_peer == null:
+		return false
+	return session.peer_id > 0 and Array(mp.get_peers()).has(session.peer_id)
+
+
 ## Sends a system message to one client.
 func send_system_to(session: DotClientSession, text: String) -> void:
-	if session == null or not session.is_active():
+	if not _can_reach(session):
 		return
 
 	_receive_chat.rpc_id(session.peer_id, {
@@ -285,7 +397,7 @@ func broadcast_admin(from: String, text: String) -> void:
 
 	var recipients := 0
 	for session in server.playing_sessions():
-		if session.has_permission(DotAdminFlags.CHAT):
+		if session.has_permission(DotAdminFlags.CHAT) and _can_reach(session):
 			_receive_chat.rpc_id(session.peer_id, payload)
 			recipients += 1
 

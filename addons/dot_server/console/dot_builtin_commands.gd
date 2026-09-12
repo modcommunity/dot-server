@@ -1197,7 +1197,12 @@ static func _register_lifecycle(server: DotServer, console: DotConsole) -> void:
 			server.get_tree().quit.call_deferred(),
 		"Shut the server down.",
 		DotAdminFlags.ROOT
-	).with_usage("[reason]").with_rcon(true)
+	# The one builtin that refuses chat outright, and the reason is the operation rather
+	# than the asker: `quit` ends the session for everybody in it, it cannot be undone from
+	# where it was typed, and a chat box is a place where a stray relayed line or a
+	# half-finished message lands. ROOT already holds it; this is about the blast radius of
+	# a typo in the one input that has no confirmation step.
+	).with_usage("[reason]").with_rcon(true).no_chat()
 
 	console.command(
 		"say_shutdown",

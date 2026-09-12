@@ -41,11 +41,44 @@ var max_args: int = -1
 ## about who is asking.
 var rcon_allowed: bool = true
 
-## Whether this may be triggered from in-game chat (`!kick`, `/map`).
+## What this command says about being typed in chat (`!kick`, `/map`).
 ##
-## Off by default. Chat is the least authenticated path into the console and the
-## easiest to spoof in a log, so commands opt in.
-var chat_allowed: bool = false
+## [b]Three states, and the middle one is the default.[/b] [code]ALLOWED[/code] and
+## [code]REFUSED[/code] are the command's own decision and no server setting overrules
+## either; [code]DEFAULT[/code] defers to [member DotConsole.chat_commands_open], which
+## ships on.
+##
+## It was a plain bool defaulting to false, and every command opted in. That read as a
+## security boundary and was not one: the thing that decides whether a person may kick
+## somebody is [member permission], checked on the same line for every source. What the
+## old default actually did was make a prefix a player had already typed correctly answer
+## "'map' cannot be run from chat" to an operator holding the flag for it -- a refusal
+## with no attacker on the other end of it.
+enum ChatPolicy {
+	## Follow the server: [member DotConsole.chat_commands_open].
+	DEFAULT,
+	## Always reachable from chat, whatever the server's default is.
+	ALLOWED,
+	## Never reachable from chat, whatever the server's default is.
+	REFUSED,
+}
+
+var chat_policy: ChatPolicy = ChatPolicy.DEFAULT
+
+## Whether this command has not refused chat outright.
+##
+## [b]Not the whole answer[/b] -- a [code]DEFAULT[/code] command on a server with
+## [member DotConsole.chat_commands_open] off is reachable by nobody, and this still reads
+## true. Kept because it is what a suite asks and what the relay's published table carries;
+## the executable answer is [method allows_chat], which is what the console calls.
+##
+## Assigning is still the old opt-in: true marks [code]ALLOWED[/code], false
+## [code]REFUSED[/code]. Both are explicit, which is what an assignment meant.
+var chat_allowed: bool:
+	get:
+		return chat_policy != ChatPolicy.REFUSED
+	set(value):
+		chat_policy = ChatPolicy.ALLOWED if value else ChatPolicy.REFUSED
 
 ## Hidden from `help` and completion.
 var hidden: bool = false
@@ -79,9 +112,38 @@ func with_args(p_min: int, p_max: int = -1) -> DotConCommand:
 	return self
 
 
+## Marks this reachable from chat whatever the server's default is.
+##
+## Still worth writing on a command a game means to be typed -- `!rtv`, `!top` -- because
+## it survives an operator turning the server-wide default off, which is the deployment
+## that setting exists for.
 func with_chat(allowed: bool = true) -> DotConCommand:
-	chat_allowed = allowed
+	chat_policy = ChatPolicy.ALLOWED if allowed else ChatPolicy.REFUSED
 	return self
+
+
+## Marks this unreachable from chat whatever the server's default is.
+##
+## For the handful where the answer is about the operation rather than about who is
+## asking: `quit` on a listen server, a map change on a records server mid-run. Everything
+## else should carry a [member permission] and let the flag decide.
+func no_chat() -> DotConCommand:
+	chat_policy = ChatPolicy.REFUSED
+	return self
+
+
+## Whether a CHAT-sourced line may reach this, given the server's default.
+##
+## The console asks this and nothing else. Says nothing about permission, which is checked
+## straight after for every source alike.
+func allows_chat(open_by_default: bool) -> bool:
+	match chat_policy:
+		ChatPolicy.ALLOWED:
+			return true
+		ChatPolicy.REFUSED:
+			return false
+		_:
+			return open_by_default
 
 
 func with_rcon(allowed: bool) -> DotConCommand:
@@ -144,8 +206,11 @@ func describe_help() -> PackedStringArray:
 		out.append("  requires permission: %s" % permission)
 	if not rcon_allowed:
 		out.append("  cannot be run over RCON")
-	if chat_allowed:
-		out.append("  can be run from chat")
+	match chat_policy:
+		ChatPolicy.ALLOWED:
+			out.append("  can be run from chat")
+		ChatPolicy.REFUSED:
+			out.append("  cannot be run from chat")
 
 	return out
 

@@ -116,8 +116,11 @@ to fix. Matches what an operator already expects.
 **Every path into the server goes through `DotConsole.execute` with a
 `DotCmdContext`** saying who is calling — local terminal, RCON, chat trigger, config
 file, module. That is what makes one permission check cover all of them instead of
-four that can disagree. Commands opt into chat (`chat_allowed`, off by default) and
-out of RCON (`rcon_allowed`).
+four that can disagree. Commands opt out of RCON (`rcon_allowed`) and say what they think of chat (`chat_policy`: `DEFAULT`, `ALLOWED`, `REFUSED`).
+
+**Chat reaches every command by default, and `permission` is what refuses anybody.** `sv_chat_commands` (config: `chat_commands_open`) ships on: a line typed with one of `chat_command_prefixes` — `!` or `/` — runs whatever the speaker's flags allow, exactly as RCON does. Setting it to 0 restores the old behaviour, where only `with_chat()` commands were reachable by typing.
+
+That default was the other way round for most of this family's life, and it was wrong in a specific way: the chat check ran *before* the permission check and never looked at who was asking, so an operator holding `changemap` typed `/map surf_beginner` into the chat box in front of them and was told the command cannot be run from chat. It read as a security boundary and was not one — the boundary is the flag, checked on the same line for every source. `.no_chat()` is what a command uses when the answer really is about the operation rather than the asker; `quit` is the only builtin that says it.
 
 ## Permissions
 
@@ -289,7 +292,7 @@ or their account id, and `status` shows neither.
 ## Moderation from chat
 
 `ban`, `banid`, `banip`, `unban`, `banlist`, `kick`, `kickid`, `mute`, `gag`, `unmute`
-and `whois` are all `chat_allowed`. They run through `DotConsole.execute` with the
+and `whois` are all marked `with_chat()`, so they stay typable even on a server that set `sv_chat_commands 0`. They run through `DotConsole.execute` with the
 speaker's own `DotCmdContext`, so the permission flag, the immunity check and the audit
 entry are the same ones RCON gets — there is no second code path to keep in step.
 
@@ -299,6 +302,16 @@ that stops a player flooding chat does not run on the server's own messages.
 
 `users` is deliberately *not* chat-allowed: it has no permission flag and prints every
 player's account id.
+
+## Telling a joining client what is carrying chat
+
+`DotChatManager.greet(session)` sends `{kind: "state", relay: bool}` to a client as it starts playing, **before** the join announcement. `announce_state()` sends it to everybody when the answer changes mid-match.
+
+**Why a client is told at all.** A player whose lines already reach a web page they are looking at does not need a second chat box in front of the game; a player whose lines reach nothing but this server needs one badly. Only the server knows which of those is true, so only the server can say. What the client then *does* with the answer is the client's — every game here resolves it against a three-way setting of the player's own, because "the site has a chat box" and "I am looking at the site" are not the same sentence.
+
+**`relay_fn` is a callable and `watch_relay` is duck-typed**, because dot-server must not name `DotChatRelay`: dot-chat is an optional addon and a script that mentions the class fails to compile without it. The contract is one method, `is_carrying() -> bool`, written down on `watch_relay` so five games do not each write their own version of `chat.relay_fn = relay.is_carrying`. Unset means no, which is the honest default for a server nobody told.
+
+**It rides the chat signal rather than the handshake**, which is worth naming because the handshake looks like the obvious place. The challenge is built before a session is playing and before any module has loaded, so a relay that starts with the game would not exist yet — and the answer has to be re-sendable when a relay comes up or goes down, which a handshake is not. The cost is that a client listening on `chat_received` now sees one payload that is not a line: two games' sandbox suites assert that dot-server's own chat path delivers **nothing** beside their own wire, and both separate this one out by `kind` rather than counting it.
 
 ## Coupling: nothing is imported
 
@@ -580,7 +593,7 @@ find . -name '*.gd' -not -path './.godot/*' | while read f; do
     godot --headless --path . --check-only --script "res://${f#./}"
 done
 
-# 303 checks. Exits non-zero on any failure.
+# 319 checks. Exits non-zero on any failure.
 godot --headless --path . res://examples/dedicated_server.tscn
 
 # 41 checks. A real client, a real socket, and a game that is actually DELIVERED:

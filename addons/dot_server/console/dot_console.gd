@@ -55,6 +55,26 @@ signal cvar_changed(cvar: DotConVar, old_value: String)
 ## The direct guard against a config that execs itself.
 @export_range(1, 32, 1) var max_exec_depth: int = 8
 
+## Whether a chat line that opens with a command prefix reaches commands that have
+## said nothing either way.
+##
+## [b]On, and that is a deliberate reversal.[/b] Commands used to opt in one at a time
+## and everything else answered "cannot be run from chat" -- to an operator holding the
+## flag for it as readily as to a stranger, because the check ran before the permission
+## check and did not look at who was asking. The gate that decides what a person may do is
+## [member DotConCommand.permission], and it runs on the same line for chat, RCON, the
+## terminal and a config file alike. This one decides something narrower: whether typing is
+## a way in at all.
+##
+## Off restores the old behaviour exactly -- only [code]with_chat()[/code] commands are
+## reachable by typing -- for a deployment that wants its console reached by console.
+## Either way [method DotConCommand.no_chat] still wins for a command whose answer is about
+## the operation rather than about who is asking.
+##
+## [DotServer] binds [member chat_commands_cvar] over this, so an operator can flip it at
+## runtime and a server.cfg can set it at boot.
+@export var chat_commands_open: bool = true
+
 ## Log every executed command at INFO.
 ##
 ## On for a dedicated server: the command log is how an operator reconstructs what
@@ -81,6 +101,10 @@ var _server_running: bool = false
 
 ## Set by [DotServer] so cheat gating can be evaluated without a hard dependency.
 var cheats_cvar: DotConVar = null
+
+## `sv_chat_commands`, bound by [DotServer]. Null on a console with no server, which is
+## when [member chat_commands_open] answers instead.
+var chat_commands_cvar: DotConVar = null
 
 
 func _ready() -> void:
@@ -266,6 +290,16 @@ func _context_dict(c: DotConVar, ctx: DotCmdContext) -> Dictionary:
 	}
 
 
+## Whether a prefixed chat line reaches a command that has said nothing either way.
+##
+## The cvar wins when there is one, so `sv_chat_commands 0` takes effect on the next line
+## typed rather than at the next restart.
+func chat_commands_are_open() -> bool:
+	if chat_commands_cvar != null:
+		return chat_commands_cvar.get_bool()
+	return chat_commands_open
+
+
 func set_server_running(running: bool) -> void:
 	_server_running = running
 
@@ -371,11 +405,13 @@ func _build_context(
 ## the first time either changes.
 ##
 ## [b]The source gate here is the same one [method _run_command] applies[/b], and that
-## matters more than it looks. A relay configured as RCON reaches everything RCON reaches
-## and a relay configured as CHAT reaches only what is marked [code]with_chat()[/code] — so
-## a menu built from "chat_allowed" alone would offer a records server's map change to
-## somebody whose every attempt is refused, and hide an operator's whole toolbox from a
-## deployment that deliberately made them remote administrators.
+## matters more than it looks. A relay configured as RCON reaches everything RCON reaches;
+## a relay configured as CHAT reaches what this server takes from chat, which with
+## [member chat_commands_open] on is everything that has not called
+## [method DotConCommand.no_chat] — so a menu built from a per-command flag alone would
+## hide an operator's whole toolbox from a deployment that deliberately made them remote
+## administrators, and, on a server that closed chat commands, offer a table where every
+## entry is refused.
 ##
 ## [b]It answers no permission question.[/b] Whether a particular person may run a
 ## particular command is decided per line, later, by the admin manager — this is what is
@@ -391,7 +427,9 @@ func command_document(
 			continue
 		if source == DotCmdContext.Source.RCON and not cmd.rcon_allowed:
 			continue
-		if source == DotCmdContext.Source.CHAT and not cmd.chat_allowed:
+		if source == DotCmdContext.Source.CHAT and not cmd.allows_chat(
+			chat_commands_are_open()
+		):
 			continue
 
 		out.append({
@@ -416,8 +454,19 @@ func _run_command(cmd: DotConCommand, ctx: DotCmdContext) -> DotResult:
 			DotError.CODE_FORBIDDEN, "Not allowed over RCON."
 		)
 
-	if ctx.source == DotCmdContext.Source.CHAT and not cmd.chat_allowed:
-		ctx.reply("'%s' cannot be run from chat." % cmd.name)
+	if ctx.source == DotCmdContext.Source.CHAT and not cmd.allows_chat(
+		chat_commands_are_open()
+	):
+		# Two refusals, because they are two different conversations. One is "not this
+		# command, ever"; the other is "not this server, by a setting" -- and an operator
+		# who reads the second knows there is a cvar to look for, where the old single
+		# message sent them looking for a `with_chat()` they could not add.
+		var why := (
+			"'%s' cannot be run from chat." % cmd.name
+			if cmd.chat_policy == DotConCommand.ChatPolicy.REFUSED
+			else "This server does not take commands from chat."
+		)
+		ctx.reply(why)
 		command_refused.emit(ctx, "not allowed from chat")
 		return DotResult.fail(
 			DotError.CODE_FORBIDDEN, "Not allowed from chat."

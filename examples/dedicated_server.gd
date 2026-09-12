@@ -23,6 +23,12 @@ var _passed := 0
 var _failed := 0
 
 
+## Stands in for a DotChatRelay, which this addon deliberately cannot name.
+class FakeRelay extends RefCounted:
+	func is_carrying() -> bool:
+		return true
+
+
 func _ready() -> void:
 	DotLog.set_level(DotLog.Level.INFO)
 	DotLog.timestamps = true
@@ -126,6 +132,8 @@ func _run_selftest() -> void:
 	_test_targeting()
 	await _test_ban_source()
 	_test_events()
+	_test_chat_state()
+	_test_chat_commands()
 	_test_query()
 	_test_query_protocol()
 	_test_a2s()
@@ -277,18 +285,53 @@ func _test_permissions() -> void:
 	_check("higher immunity outranks", mid.outranks(20))
 	_check("root bypasses immunity", root.outranks(DotAdminFlags.MAX_IMMUNITY))
 
-	# A command that opted out of chat must be unreachable from chat.
+	# Chat reaches the console, and the permission check is what decides. `rcon_status`
+	# has never been marked `with_chat()` and is reachable anyway, because this holder has
+	# ROOT -- that reversal is the whole point of `sv_chat_commands`.
 	var chat_ctx := _client_context(PackedStringArray([DotAdminFlags.ROOT]))
 	chat_ctx.source = DotCmdContext.Source.CHAT
-	var chat_res := console.execute("writeconfig", chat_ctx)
+	var chat_res := console.execute("rcon_status", chat_ctx)
+	_check("an unmarked command runs from chat with the flag", chat_res.ok)
+
+	# The same line without the flag stops at the permission check, not before it: what
+	# refuses a player is the flag they do not hold, on every source alike.
+	var chat_nobody := _client_context(PackedStringArray())
+	chat_nobody.source = DotCmdContext.Source.CHAT
+	var chat_denied := console.execute("rcon_status", chat_nobody)
 	_check(
-		"non-chat command refused from chat",
-		not chat_res.ok and chat_res.code() == DotError.CODE_FORBIDDEN
+		"and is refused without it",
+		not chat_denied.ok and chat_denied.code() == DotError.CODE_FORBIDDEN
+	)
+
+	# A command that refuses chat outright is refused for ROOT too. That is the difference
+	# between `no_chat()` and a permission: one is about the operation, the other about who.
+	var quit_res := console.execute("quit", chat_ctx)
+	_check(
+		"a no_chat() command is refused from chat even for root",
+		not quit_res.ok and quit_res.code() == DotError.CODE_FORBIDDEN
 	)
 
 	# And one that opted in must be reachable.
 	var chat_ok := console.execute("whoami", chat_ctx)
 	_check("chat-allowed command works from chat", chat_ok.ok)
+
+	# `sv_chat_commands 0` restores the old behaviour exactly: only `with_chat()` is
+	# reachable by typing. Checked by flipping the cvar the console reads, because a
+	# deployment that wants its console reached by console is a supported one.
+	var chat_cvar := console.find_cvar("sv_chat_commands")
+	_check("sv_chat_commands exists and ships on", chat_cvar != null and chat_cvar.get_bool())
+	if chat_cvar != null:
+		chat_cvar.set_value("0", {"has_permission": true, "cheats_enabled": true})
+		var closed := console.execute("rcon_status", chat_ctx)
+		_check(
+			"closing it puts the unmarked command back out of reach",
+			not closed.ok and closed.code() == DotError.CODE_FORBIDDEN
+		)
+		_check(
+			"while a with_chat() command still answers",
+			console.execute("whoami", chat_ctx).ok
+		)
+		chat_cvar.set_value("1", {"has_permission": true, "cheats_enabled": true})
 
 
 func _test_config_files() -> void:
@@ -777,6 +820,49 @@ func _test_admins() -> void:
 
 	_check("admins listed", _run("admins").contains("backbone:alice"))
 	_check("admin_remove", admins.remove_admin("backbone:alice").ok)
+
+
+func _test_chat_state() -> void:
+	print("")
+	print("[chat state]")
+	var chat := server.chat
+
+	_check("a server nobody told carries chat nowhere else", not chat.is_relayed())
+	_check(
+		"and says so in a payload a client can tell from a line",
+		str(chat.chat_state().get("kind", "")) == "state"
+	)
+	_check("with relay false", not bool(chat.chat_state().get("relay", true)))
+
+	# The point of the seam: dot-server never names a relay, it asks.
+	chat.relay_fn = func() -> bool: return true
+	_check("a server with a relay says so", chat.is_relayed())
+	_check("and the payload carries it", bool(chat.chat_state().get("relay", false)))
+
+	# A seam that answers with something that is not a bool must read as "no" rather
+	# than as truthy: a host wiring this to a method that returns a DotResult would
+	# otherwise tell every client the conversation is carried when it is not.
+	chat.relay_fn = func() -> Variant: return "yes"
+	_check("a non-boolean answer is no", not chat.is_relayed())
+
+	# `watch_relay` is the one line a game writes, and it is duck-typed because
+	# dot-server cannot name DotChatRelay.
+	#
+	# [b]Held in a variable, and that is not style.[/b] A [Callable] stores an object id
+	# and does NOT keep a [RefCounted] alive, so `watch_relay(FakeRelay.new())` binds to
+	# something that is freed on the next line and the seam reads as "no relay" for ever.
+	# The real one is a [Node] the game keeps in the tree, which is why this is a trap the
+	# test walked into and the product did not.
+	var fake := FakeRelay.new()
+	chat.watch_relay(fake)
+	_check("watch_relay takes anything with is_carrying", chat.is_relayed())
+
+	var plain := RefCounted.new()
+	chat.watch_relay(plain)
+	_check("and an object without one carries nothing", not chat.is_relayed())
+
+	chat.watch_relay(null)
+	_check("and clearing it goes back to no", not chat.is_relayed())
 
 
 func _test_events() -> void:
@@ -1459,6 +1545,71 @@ func _run(line: String) -> String:
 
 
 ## A context that looks like a client, for permission tests.
+## The whole chat-command path, end to end, which had no executed coverage at all.
+##
+## Everything else about chat commands is asserted against a hand-built context with
+## `Source.CHAT` on it. That skips the part a player actually uses: the prefix, the
+## manager's parse, the dispatch into the console. The bug that started this — an operator
+## typing `/map surf_beginner` and being told the command cannot be run from chat — lived
+## precisely in the gap between those two, and no assertion in this suite could see it.
+func _test_chat_commands() -> void:
+	print("")
+	print("[chat commands]")
+
+	var chat := server.chat
+	var console := server.console
+
+	# A session the manager will accept: SPAWNED, with a peer id no transport knows. The
+	# replies really are sent — this is the whole path, not a stubbed one — and the
+	# multiplayer layer drops them, which is what it does for a player who left mid-command.
+	var session := DotClientSession.new()
+	session.userid = 9001
+	session.peer_id = 424242
+	session.display_name = "operator"
+	session.address = "203.0.113.9"
+	session.state = DotClientSession.State.SPAWNED
+	session.immunity = 50
+	session.permissions = PackedStringArray([DotAdminFlags.RCON])
+
+	var ran: Array[String] = []
+	var on_run := func(c: DotCmdContext) -> void: ran.append(c.command)
+	console.command_executed.connect(on_run)
+
+	# `/` and `!`, both of dot-server's default prefixes, on a command that never marked
+	# itself `with_chat()`. This is the line the screenshot was of.
+	chat.handle_message(session, "/rcon_status")
+	_check("a `/` line runs an unmarked command", ran.has("rcon_status"))
+	ran.clear()
+	chat.handle_message(session, "!rcon_status")
+	_check("and so does a `!` line", ran.has("rcon_status"))
+	ran.clear()
+
+	# Without the flag it stops at the permission check. The refusal is the same one RCON
+	# gets, from the same line of the same function.
+	session.permissions = PackedStringArray()
+	var denied := chat.handle_message(session, "/rcon_status")
+	_check(
+		"the flag is what refuses, not the prefix",
+		not denied.ok and denied.code() == DotError.CODE_FORBIDDEN and ran.is_empty()
+	)
+
+	# A command that refuses chat outright stays refused for somebody holding ROOT.
+	session.permissions = PackedStringArray([DotAdminFlags.ROOT])
+	var quit_res := chat.handle_message(session, "/quit")
+	_check(
+		"and `no_chat()` refuses even root, because it is about the operation",
+		not quit_res.ok and ran.is_empty()
+	)
+
+	# An ordinary sentence that happens to start with a slash must not be eaten silently
+	# and must not become a command either.
+	var typo := chat.handle_message(session, "/what is this")
+	_check("an unknown `/` line is refused rather than spoken", not typo.ok)
+	_check("and nothing ran", ran.is_empty())
+
+	console.command_executed.disconnect(on_run)
+
+
 func _client_context(permissions: PackedStringArray) -> DotCmdContext:
 	var ctx := DotCmdContext.new()
 	ctx.source = DotCmdContext.Source.RCON
