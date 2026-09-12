@@ -106,6 +106,14 @@ extends DotConfig
 ## TCP port for RCON. 0 uses [member port] + 1.
 @export var rcon_port: int = 0
 
+## Read the server's own terminal and run what is typed into it.
+##
+## On, and harmless when there is nothing to read: [DotStdinConsole] checks
+## [method OS.get_stdin_type] and does nothing when no terminal is attached, which is
+## every unit file, every container started without `-i`, and every CI run. Turn it off
+## for a server whose stdin carries something that is not commands.
+@export var stdin_console_enabled: bool = true
+
 ## Also serve RCON over WebSocket, for browser-based admin panels.
 ##
 ## Same authentication and rate limits; only the framing differs.

@@ -96,6 +96,7 @@ signal game_changing(from_key: String, to_key: String)
 @export var audit_ref: DotNodeRef = null
 @export var chat_ref: DotNodeRef = null
 @export var rcon_ref: DotNodeRef = null
+@export var stdin_ref: DotNodeRef = null
 @export var games_ref: DotNodeRef = null
 @export var votes_ref: DotNodeRef = null
 
@@ -111,6 +112,8 @@ var bans: DotBanManager = null
 var audit: DotAuditLog = null
 var chat: DotChatManager = null
 var rcon: DotRconServer = null
+## The server's own terminal, when there is one to read.
+var stdin_console: DotStdinConsole = null
 var games: DotGameManager = null
 var votes: DotVoteManager = null
 var events: DotEventBus = null
@@ -431,6 +434,25 @@ func _resolve_subsystems() -> void:
 		DotLog.info(
 			CHANNEL, "RCON is disabled (no rcon_password set)"
 		)
+
+	# [b]The console an operator standing at the machine actually has.[/b] Built
+	# unconditionally: it reports no terminal and does nothing when there is none --
+	# a unit file, a container without `-i`, CI -- so there is no setting to get
+	# wrong and no deployment it costs anything on.
+	#
+	# `stdin_console_enabled` exists for the one case that is a real decision rather
+	# than an environment: a server whose stdin carries something that is not
+	# commands.
+	if config.stdin_console_enabled:
+		if stdin_ref == null:
+			stdin_ref = DotNodeRef.of_created(&"StdinConsole", DotStdinConsole)
+		stdin_console = _resolve(stdin_ref, "stdin_console") as DotStdinConsole
+		if stdin_console != null:
+			var reading := stdin_console.setup(self)
+			if not reading.ok:
+				DotLog.warn(CHANNEL, "the stdin console did not start", {
+					"error": str(reading.error)
+				})
 
 	# Record permission-carrying commands in the audit trail. Done here rather than
 	# in the console so the console stays independent of moderation.
