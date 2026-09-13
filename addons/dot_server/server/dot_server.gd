@@ -1290,16 +1290,43 @@ func _advance_to_content(session: DotClientSession) -> void:
 	session.content_progress = 0.0
 	client_state_changed.emit(session)
 
-	_begin_content_sync.rpc_id(session.peer_id, {
-		"manifest_url": manifest_url,
+	_begin_content_sync.rpc_id(session.peer_id, content_sync_info(
+		manifest_url,
 		# Documented on the descriptor since the first version and sent by nothing,
 		# so a game that named optional groups had every client fetch only the
 		# required set and then miss the assets the groups held.
-		"content_groups": games.current_content_groups() if games != null else [],
-		"content_key": games.current_content_key() if games != null else "",
+		games.current_content_groups() if games != null else [],
+		games.current_content_key() if games != null else ""
+	))
+
+
+## The payload that tells a client what to download and where from.
+##
+## [b]Built here because there are two places that send it, and one of them was
+## missed.[/b] The join path builds it from the CURRENT game and [DotGameManager]
+## builds it from the descriptor it is changing TO, so the two will always differ in
+## their first three fields -- but everything derived from [member config] is the same
+## fact twice, and a field added to one copy is a field the other silently does not
+## send. That is exactly what happened to `content_base_urls`: added to the join path,
+## absent from the game change, and a client therefore learned where the content was
+## only if it connected while the server was already running that game.
+##
+## Two copies of one list is this family's most repeated bug. There is one copy.
+func content_sync_info(
+	manifest_url: String, content_groups: Array, content_key: String
+) -> Dictionary:
+	return {
+		"manifest_url": manifest_url,
+		"content_groups": content_groups,
+		"content_key": content_key,
 		"allow_netchan": config.allow_netchan_content,
 		"chunk_bytes": config.netchan_chunk_bytes,
-	})
+		# Where the maps come from. Sent with every sync rather than once at the
+		# handshake: a game change is when a client is about to need content it has
+		# not got, and a client that connected before an operator corrected this
+		# setting would otherwise keep the old answer until it reconnected.
+		"content_base_urls": config.content_base_urls,
+	}
 
 
 @rpc("authority", "reliable", "call_remote", CHANNEL_CONTROL)

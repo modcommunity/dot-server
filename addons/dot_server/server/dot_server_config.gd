@@ -322,6 +322,25 @@ var query_player_detail: String = "full"
 ## Manifest URL for the game clients should load on connect. Empty means none.
 @export var content_manifest_url: String = ""
 
+## Where a client should fetch this server's content from, best first.
+##
+## [b]Sent to every client at the handshake, because otherwise nobody knows.[/b] The
+## server is told where its content lives and downloads maps from there; the client was
+## left to guess, and the only guess a shipped build can make is "the origin the page
+## came from" -- which is right for a self-hosted deployment and wrong for every one
+## that puts content on a CDN. A map the server fetched, mounted and is running would
+## then fail to download on the client with a 404 from a host that has nothing to do
+## with it.
+##
+## A client tries its own configured bases first and these after, so a LAN mirror or a
+## developer's local tree still wins. Nothing here is trusted: a manifest still has to
+## carry a signature from a key the CLIENT already trusts, so the worst a hostile
+## address can do is serve bytes that fail verification.
+##
+## The host sets this from the same setting it gives its own content client, so the two
+## halves cannot disagree about where the content is.
+@export var content_base_urls: PackedStringArray = PackedStringArray()
+
 ## Let clients fetch content over the game connection when they cannot reach the
 ## content host.
 ##

@@ -305,13 +305,14 @@ func _sync_clients(descriptor: DotGameDescriptor) -> DotResult:
 	phase = Phase.SYNCING
 	_sync_deadline = int(Time.get_unix_time_from_system()) + int(sync_timeout_sec)
 
-	var info := {
-		"manifest_url": descriptor.manifest_url,
-		"content_groups": Array(descriptor.content_groups),
-		"content_key": descriptor.content_key(),
-		"allow_netchan": server.config.allow_netchan_content,
-		"chunk_bytes": server.config.netchan_chunk_bytes,
-	}
+	# Built by the server, not here: everything in this payload that comes from the
+	# config is the same fact the join path sends, and the copy that lived here went
+	# out of step the first time a field was added to the other one.
+	var info := server.content_sync_info(
+		descriptor.manifest_url,
+		Array(descriptor.content_groups),
+		descriptor.content_key()
+	)
 
 	var expected := 0
 

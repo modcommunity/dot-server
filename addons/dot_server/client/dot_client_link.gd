@@ -433,6 +433,8 @@ func _begin_content_sync(info: Dictionary) -> void:
 		if not cloud.is_connected("progress_changed", _progress_handler):
 			cloud.connect("progress_changed", _progress_handler)
 
+	_adopt_content_bases(cloud, info.get("content_base_urls", []))
+
 	DotLog.info(
 		CHANNEL, "syncing content", {"content": content_key, "url": manifest_url}
 	)
@@ -450,6 +452,65 @@ func _begin_content_sync(info: Dictionary) -> void:
 		return
 
 	report_content_ready.rpc_id(1, content_key)
+
+
+## Adds the server's content addresses to the ones this client already had.
+##
+## [b]A client cannot know where a server keeps its maps, and it was left guessing.[/b]
+## The server is configured with the address and fetches from it; the client had only
+## whatever its own build was compiled with -- for a browser build, the page's own
+## origin -- so a deployment serving content from a CDN worked on the server and failed
+## on every client, with a 404 from a host that has nothing to do with the content.
+##
+## ADDED, never substituted, and added AFTER: a client that was given its own base
+## meant it, and a LAN mirror or a developer's local tree should still win a race
+## against the public one. This is a fallback that is always correct, not an override.
+##
+## [b]Nothing about this trusts the server.[/b] An address is only ever somewhere to
+## ask; the manifest that comes back still has to carry a signature from a key the
+## client already holds, or [DotCloudClient] refuses it. So the worst a hostile server
+## can do here is name a host that serves bytes which fail verification.
+##
+## Duck-typed like every other call into dot-cloud from this addon -- dot-server does
+## not depend on it, and a build without it has no property to set.
+func _adopt_content_bases(cloud: Object, urls: Variant) -> void:
+	# [b]`PackedStringArray is Array` is FALSE, and this silently dropped everything
+	# the server sent.[/b] The packed arrays are their own Variant types rather than
+	# specialisations of [Array], so a `urls is Array` guard rejects exactly the value
+	# the config holds and the RPC carries -- no error, no warning, just a client that
+	# never learns the address. Found by the check below failing with "it had []" on a
+	# payload that was demonstrably being sent.
+	var list: Array = []
+	if urls is PackedStringArray:
+		list = Array(urls as PackedStringArray)
+	elif urls is Array:
+		list = urls as Array
+
+	if list.is_empty():
+		return
+	if not (cloud.get("http_base_urls") is PackedStringArray):
+		return
+
+	var bases: PackedStringArray = cloud.get("http_base_urls")
+	var added := PackedStringArray()
+
+	for u in list:
+		var one := str(u).strip_edges()
+		# Re-sent on every game change, so without this the list grows by the same
+		# addresses each time and every miss costs one more request than the last.
+		if one != "" and not bases.has(one):
+			bases.append(one)
+			added.append(one)
+
+	if added.is_empty():
+		return
+
+	cloud.set("http_base_urls", bases)
+	DotLog.info(
+		CHANNEL,
+		"the server said where its content is",
+		{"added": ", ".join(added)}
+	)
 
 
 func _on_cloud_progress(p: Dictionary) -> void:

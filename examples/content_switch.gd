@@ -61,6 +61,11 @@ const PACK_SCENE := "world.tscn"
 ## and the client half of this test has to be told where to connect.
 const PORT := 27515
 
+## The address the server hands out. Deliberately one nothing dials: this pack is
+## served from a local search directory, so the check is that the address REACHES the
+## client's content layer, not that anything downloads from it.
+const CONTENT_BASE := "https://content.invalid/content"
+
 var _passed := 0
 var _failed := 0
 var _failures := PackedStringArray()
@@ -103,6 +108,7 @@ func _run() -> void:
 				await _test_switch_to_delivered()
 				await _test_switch_back()
 				await _test_switch_to_delivered_again()
+				_check_bases_are_not_duplicated()
 
 	_teardown()
 	DotPaths.remove_tree(DATA)
@@ -294,6 +300,11 @@ func _boot() -> bool:
 	config.a2s_enabled = false
 	config.query_enabled = false
 	config.hibernate_when_empty = false
+	# What the server will tell clients about where its content lives. Not a real
+	# host: the point of the check below is that the address REACHES the client's
+	# content layer, and this pack is served out of a local search directory, so a
+	# base that nothing dials proves the delivery without depending on a network.
+	config.content_base_urls = PackedStringArray([CONTENT_BASE])
 	config.admins_path = DATA.path_join("admins.json")
 	config.bans_path = DATA.path_join("bans.json")
 	config.audit_log_path = DATA.path_join("audit.jsonl")
@@ -499,6 +510,29 @@ func _test_switch_to_delivered() -> void:
 		+ "correct, and used to be rejected: got '%s'" % _refused[0]
 	)
 
+	# [b]The client is told where the content is, because it cannot know.[/b] The
+	# server is configured with the address and fetches from it; a shipped client
+	# build can only guess, and the one guess a browser build makes is the origin its
+	# page came from -- correct for a self-hosted deployment and wrong for every CDN.
+	# The map the server had just mounted then 404'd on every client.
+	var client_cloud := DotRegistry.get_service(&"dot_cloud_client")
+	if _check(client_cloud != null, "the client's content service is resolvable"):
+		var bases: PackedStringArray = client_cloud.get("http_base_urls")
+		_check(
+			bases.has(CONTENT_BASE),
+			"the client adopted the server's content address",
+			"it had %s" % str(Array(bases))
+		)
+		# Guarded: indexing an empty PackedStringArray is a runtime error, which
+		# ABORTS THE SECTION rather than failing a check -- so the first version of
+		# this took the remaining checks down with it and the section counter was the
+		# only thing that said so.
+		_check(
+			not bases.is_empty() and bases[bases.size() - 1] == CONTENT_BASE,
+			"and put it LAST, behind anything the client was already given",
+			"a client with a mirror of its own meant it; this is a fallback"
+		)
+
 	var told := await _until(func() -> bool: return _games_seen.has("arena"))
 	_check(told, "the client was told about the change")
 	_check(
@@ -574,6 +608,26 @@ func _test_switch_back() -> void:
 ## against. Without clearing it the client counted as ready on the first pass — before
 ## the RPC telling it to download had been processed at all — and the swap went out to
 ## a client that had not been asked for anything.
+## The same address arrives on every game change, and a list that grows costs a
+## request per entry on every miss.
+func _check_bases_are_not_duplicated() -> void:
+	var client_cloud := DotRegistry.get_service(&"dot_cloud_client")
+	if client_cloud == null:
+		return
+
+	var bases: PackedStringArray = client_cloud.get("http_base_urls")
+	var seen := 0
+	for b in bases:
+		if b == CONTENT_BASE:
+			seen += 1
+
+	_check(
+		seen == 1,
+		"the address is still there exactly once after three game changes",
+		"it appears %d times" % seen
+	)
+
+
 func _test_switch_to_delivered_again() -> void:
 	_section("changelevel back to the delivered game")
 
