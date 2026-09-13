@@ -442,7 +442,34 @@ func _begin_content_sync(info: Dictionary) -> void:
 	var groups := PackedStringArray()
 	for group in info.get("content_groups", []):
 		groups.append(str(group))
-	var res: Variant = await cloud.call("acquire", manifest_url, groups)
+
+	# [b]By id and version, with the server's URL as an override rather than as the
+	# instruction.[/b] `acquire` mounts whatever is at an address; `ensure` is told what
+	# the content is supposed to BE, so a manifest that answers to a different id or
+	# version is refused instead of mounted. The server is the party naming the address
+	# here, so that check is not a formality: without it a server could point a client at
+	# any published pack and have it mount under the key the client was told to expect,
+	# and every path the client then resolved would be somebody else's file.
+	#
+	# It is also what lets a server run a delivered game without writing an address into
+	# its descriptor at all: the client has `content_base_urls` from the payload above.
+	var parts := content_key.split("@", true, 1)
+	var want_id := parts[0] if parts.size() > 0 else ""
+	var want_version := parts[1] if parts.size() > 1 else ""
+
+	if want_id == "":
+		# No key to check against, so there is nothing to resolve by either. A server
+		# that sent a URL and no content key is old or broken; mounting blind is how the
+		# confusion above happens, so this refuses rather than falling back.
+		_fail(DotError.make(
+			DotError.CODE_INVALID,
+			"This server asked for content without saying what it is."
+		))
+		return
+
+	var res: Variant = await cloud.call(
+		"ensure", want_id, want_version, groups, manifest_url
+	)
 
 	if not (res is DotResult) or not (res as DotResult).ok:
 		var err := (res as DotResult).error if res is DotResult else DotError.make(

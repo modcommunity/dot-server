@@ -322,7 +322,7 @@ at runtime:
 | Optional addon | Registry name | What happens without it |
 | --- | --- | --- |
 | dot-auth | `dot_auth_server` | Everyone is a guest with a per-device id. `DotGuestIdentity` provides the same duck-typed surface `DotAuthIdentity` does, so the rest of the server does not branch. |
-| dot-cloud | `dot_cloud_client` | Games must ship inside the build (`manifest_url` empty). A server needing downloadable content refuses the client with a clear reason. |
+| dot-cloud | `dot_cloud_client` | Games must ship inside the build (an absolute `scene`). A server needing downloadable content refuses the client with a clear reason. |
 | dot-auth admin source | duck-typed `lookup()` / `source_name()` | File-based admins only. |
 | dot-moderation | `dot_ban_source` | `DotBanManager`'s own list is the whole ban list. |
 
@@ -356,7 +356,7 @@ client to fetch the new content → wait for all of them (or the timeout) → fr
 scene → instantiate the new one → put everyone back through `LOADING`.
 
 **None of that had ever run.** Every game in every suite in this family ships inside its
-build, `manifest_url` is empty for all of them, and `change_game` skips the whole of
+build, none of them is delivered, and `change_game` skips the whole of
 `_sync_clients` when it is — so the announce, the download, the readiness wait, the
 timeout and the re-load were four hundred lines nothing had executed.
 `examples/content_switch.tscn` publishes a real signed pack, boots a server with one
@@ -438,8 +438,8 @@ nothing, so anything reacting to the signal never saw a game change happen.
 
 ## A game that ships inside its build has no client scene to name
 
-`DotGameDescriptor.client_scene_or_scene()` returns `""` when there is no
-`manifest_url`, and that is not a convenience.
+`DotGameDescriptor.client_scene_or_scene()` returns `""` for a game that is not
+delivered, and that is not a convenience.
 
 `DotClientLink._resolve_scene` refuses every absolute path that is not already inside
 dot-cloud's mount prefix — correctly, because a server that could name one could ask
@@ -452,6 +452,28 @@ The empty string is the documented "you already have it" path — `report_loaded
 `PLAYING` — which is the shape every game shipped alongside its client actually wants.
 The application then loads whatever its own build says the client is. A game delivered
 through dot-cloud sets a *relative* `client_scene` instead and gets the mounted one.
+
+**Delivered is `needs_delivered_content()`, not "has a `manifest_url`".** That was the
+marker for most of this addon's life and it forced every delivered game to carry an
+address — a per-deployment fact written into a per-game descriptor, re-edited on every
+version bump. A relative scene path can only ever resolve against a mount, so a
+descriptor carrying one has already said what it is; the id and the version say *which*
+content, and `DotCloudClient.ensure` finds it against whatever bases that client has.
+`manifest_url` is still honoured and still wins, for content whose client has no base
+for it.
+
+The same rule had to reach `content_key()` and `client_scene_or_scene()`, which both
+read `manifest_url == ""` and both returned the empty string for a delivered game with
+no URL. An empty content key is not a missing label: it is what a client reports back,
+what `report_content_ready` checks, and what `DotClientLink._resolve_scene` splits to
+build the mount path — so the client was told to download something with no name and
+refused signon with "This server asked for content without saying what it is".
+
+**And the client `ensure`s rather than `acquire`s.** `acquire` mounts whatever is at an
+address; `ensure` is told the id and version too, so a manifest that answers to neither
+is refused rather than mounted. The server is the party naming that address, so the check
+is not a formality: without it a server could point a client at any published pack and
+have it mount under the key the client was told to expect.
 
 Found by `dot-2d-hungry`, whose sandbox is the first example anywhere in the family to
 connect a client to a server running a real game scene.

@@ -22,10 +22,11 @@ extends Resource
 
 @export_group("Content")
 
-## dot-cloud manifest URL. Empty means the game ships inside the build.
+## dot-cloud manifest URL. [b]An override, not the switch.[/b]
 ##
-## When set, joining and switching clients are sent to fetch it before the scene
-## loads.
+## Whether a game is delivered is [method needs_delivered_content] — a relative scene
+## path — because a pack is findable by its content id against whatever bases a client
+## has. Set this only when the content lives somewhere those bases do not reach.
 @export var manifest_url: String = ""
 
 ## Content id from the manifest, if it differs from [member game_id].
@@ -95,21 +96,33 @@ func validate() -> DotResult:
 			"'%s' names no scene." % game_id
 		)
 
-	# A relative scene path is resolved against downloaded content, so a game with
-	# no manifest and a relative path can never resolve.
-	if scene != "" and not scene.contains("://") and manifest_url == "":
-		return DotResult.fail(
-			DotError.CODE_INVALID,
-			"'%s' has a relative scene path but no manifest_url." % game_id,
-			"either use a res:// path, or set manifest_url so the content is fetched"
-		)
-
 	if scene != "" and not scene.contains("://"):
 		var safe := DotPaths.safe_relative(scene)
 		if not safe.ok:
 			return safe.wrap("'%s' has an unsafe scene path." % game_id)
 
 	return DotResult.success(true)
+
+
+## Whether this game's files have to be fetched and mounted before it can load.
+##
+## [b]A relative path IS the statement, and [member manifest_url] is only an override.[/b]
+## This used to be "manifest_url is set", and it forced every delivered game to carry an
+## address -- which is a per-deployment fact written into a per-game file. A server that
+## published its own packs into `dist/` had to spell out an absolute path that was true
+## on one box, and bumping a version meant editing it again.
+##
+## A relative scene path can only ever resolve against a mount, so a descriptor carrying
+## one has already said it is delivered; the id and the version say WHICH content, and
+## [method DotCloudClient.ensure] finds it against whatever bases that client has --
+## local directories first, then the network. An explicit [member manifest_url] still
+## wins, for content that lives somewhere its client has no base for.
+func needs_delivered_content() -> bool:
+	if manifest_url != "":
+		return true
+	if scene != "" and not scene.contains("://"):
+		return true
+	return client_scene != "" and not client_scene.contains("://")
 
 
 ## The content id the manifest uses.
@@ -122,7 +135,14 @@ func effective_content_id() -> String:
 ## [code]id@version[/code], so two versions of one game are distinct — which is what
 ## lets a client's reported content be checked against the server's.
 func content_key() -> String:
-	if manifest_url == "":
+	# [b]Delivered, not "has a URL".[/b] This read `manifest_url == ""` and returned the
+	# empty string, which was the same statement everywhere else in this file — and once a
+	# pack became findable by id, a delivered game with no URL had no key. The key is what
+	# a client reports back, what `report_content_ready` checks it against, and what
+	# `DotClientLink._resolve_scene` splits to build the mount path, so an empty one is
+	# not a missing label: the client is told to download something with no name, and
+	# refuses.
+	if not needs_delivered_content():
 		return ""
 	return "%s@%s" % [
 		effective_content_id(),
@@ -161,13 +181,12 @@ func _resolve(path: String) -> String:
 ## mount prefix rather than trusting a server-supplied absolute path — which would
 ## let a server name [code]res://addons/…[/code] and have the client load it.
 ##
-## [b]Empty for a game that ships inside the build.[/b] With no
-## [member manifest_url] there is no mount for a path to be inside, and
-## [method DotClientLink._resolve_scene] refuses every absolute path that is not —
-## so falling back to the server's own [member scene] could produce nothing but a
-## refusal, and a game shipped with its client could not be joined at all. The empty
-## string is the documented "you already have it" path: the client reports ready,
-## enters play, and loads whatever scene its own build says is the client.
+## [b]Empty for a game that ships inside the build.[/b] There is no mount for a path to
+## be inside, and [method DotClientLink._resolve_scene] refuses every absolute path that
+## is not — so falling back to the server's own [member scene] could produce nothing but
+## a refusal, and a game shipped with its client could not be joined at all. The empty
+## string is the documented "you already have it" path: the client reports ready, enters
+## play, and loads whatever scene its own build says is the client.
 ##
 ## A game delivered through dot-cloud sets [member client_scene] to a relative path
 ## and gets the mounted one instead.
@@ -175,7 +194,7 @@ func client_scene_or_scene() -> String:
 	if client_scene != "":
 		return client_scene
 
-	return scene if manifest_url != "" else ""
+	return scene if needs_delivered_content() else ""
 
 
 func display_name_or_id() -> String:
@@ -188,7 +207,7 @@ func describe() -> Dictionary:
 		"display_name": display_name_or_id(),
 		"version": version,
 		"content_key": content_key(),
-		"bundled": manifest_url == "",
+		"bundled": not needs_delivered_content(),
 		"scene": resolve_scene_path(),
 		"client_scene": client_scene_or_scene(),
 	}

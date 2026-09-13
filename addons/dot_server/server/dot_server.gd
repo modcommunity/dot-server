@@ -1280,7 +1280,14 @@ func _advance_to_content(session: DotClientSession) -> void:
 	if manifest_url == "":
 		manifest_url = config.content_manifest_url
 
-	if manifest_url == "":
+	# [b]Having an address is no longer the same as having content to fetch.[/b] A pack is
+	# findable by its id, so a delivered game needs no URL in its descriptor and this used
+	# to read that as "ships in the build" -- sending the client straight to LOADING and a
+	# relative scene path it had no mount to resolve against. The game says whether it is
+	# delivered; the URL, when there is one, only says where from.
+	var delivered := games != null and games.current_needs_content()
+
+	if manifest_url == "" and not delivered:
 		session.transition_to(DotClientSession.State.LOADING)
 		client_state_changed.emit(session)
 		_send_load_game(session)

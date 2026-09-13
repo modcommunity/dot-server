@@ -208,7 +208,7 @@ func change_game(game_id: String, by: String = "console") -> DotResult:
 
 	# Clients only need to sync when the new game has content they must fetch. A
 	# game shipped inside the build swaps immediately.
-	if descriptor.manifest_url != "":
+	if descriptor.needs_delivered_content():
 		# [b]The server fetches it first, and used to fetch it never.[/b] This class
 		# has always announced the content, waited for every client to have it, and
 		# then loaded `res://dot_cloud/<id>/<version>/<scene>` — a path that exists
@@ -262,7 +262,7 @@ func change_game(game_id: String, by: String = "console") -> DotResult:
 func _acquire_content(descriptor: DotGameDescriptor) -> DotResult:
 	var cloud := DotRegistry.get_service(&"dot_cloud_client")
 
-	if cloud == null or not cloud.has_method("acquire"):
+	if cloud == null or not cloud.has_method("ensure"):
 		return DotResult.fail(
 			DotError.CODE_STATE,
 			"'%s' is delivered content and dot-cloud is not installed."
@@ -274,15 +274,31 @@ func _acquire_content(descriptor: DotGameDescriptor) -> DotResult:
 	DotLog.info(
 		CHANNEL,
 		"fetching the new game's content",
-		{"game": descriptor.game_id, "url": descriptor.manifest_url}
+		{
+			"game": descriptor.game_id,
+			"content": descriptor.content_key(),
+			"url": descriptor.manifest_url if descriptor.manifest_url != ""
+				else "(by id)",
+		}
 	)
 
 	var groups := PackedStringArray()
 	for group in descriptor.content_groups:
 		groups.append(String(group))
 
+	# [b]`ensure`, not `acquire`, and the difference is more than the missing URL.[/b]
+	# `acquire` takes an address and mounts whatever is at it. `ensure` is told the id and
+	# the version as well, so it can refuse a manifest that does not answer to them --
+	# which is the check that stops a mirror, or a badly configured base, serving one
+	# game's pack under another game's name and having every path inside it come out as
+	# somebody else's file. The manifest_url is still honoured when there is one; it just
+	# stops being the only way to say where content is.
 	var acquired: Variant = await cloud.call(
-		"acquire", descriptor.manifest_url, groups
+		"ensure",
+		descriptor.effective_content_id(),
+		descriptor.version,
+		groups,
+		descriptor.manifest_url
 	)
 
 	if acquired is DotResult:
@@ -508,7 +524,7 @@ func _swap_to(descriptor: DotGameDescriptor) -> DotResult:
 			and session.state != DotClientSession.State.SPAWNED:
 			continue
 		if session.content_key == descriptor.content_key() \
-			or descriptor.manifest_url == "":
+			or not descriptor.needs_delivered_content():
 			session.transition_to(DotClientSession.State.LOADING)
 			server._send_load_game(session)
 
@@ -729,6 +745,14 @@ func current_manifest_url() -> String:
 	return _current.manifest_url if _current != null else ""
 
 
+## Whether the running game is delivered, and so whether a joining client must sync.
+##
+## Not "has a manifest_url": that stopped being the marker when a pack became findable
+## by id. See [method DotGameDescriptor.needs_delivered_content].
+func current_needs_content() -> bool:
+	return _current != null and _current.needs_delivered_content()
+
+
 ## The optional content groups the running game asks clients to fetch.
 func current_content_groups() -> Array:
 	return Array(_current.content_groups) if _current != null else []
@@ -795,7 +819,11 @@ func describe_lines() -> PackedStringArray:
 		out.append("%s %-20s %s" % [
 			marker,
 			descriptor.game_id,
-			descriptor.manifest_url if descriptor.manifest_url != "" else "(bundled)",
+			(
+				descriptor.manifest_url if descriptor.manifest_url != ""
+				else ("delivered: %s" % descriptor.content_key()
+					if descriptor.needs_delivered_content() else "(bundled)")
+			),
 		])
 
 	return out
