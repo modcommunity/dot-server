@@ -87,6 +87,26 @@ var last_seen_ms: int = 0
 ## Round-trip time in milliseconds, -1 when unknown.
 var ping_ms: int = -1
 
+## Whether this client has told the server its page went into the background.
+##
+## [b]A browser stops driving the Godot main loop for a hidden tab.[/b] It stops
+## calling [code]requestAnimationFrame[/code] altogether, so [code]_process[/code],
+## every [Timer] and the multiplayer poll all stop: the client sends no heartbeats
+## and reads nothing, while the socket stays open and healthy. Without this flag
+## that is indistinguishable from a client whose machine has died, and
+## [code]sv_timeout[/code] drops somebody who only switched tabs.
+##
+## Set by the client's own announcement and cleared by the next packet that proves
+## its loop is running again — see [member background_grace_sec].
+var backgrounded: bool = false
+
+## Seconds of silence allowed while [member backgrounded], already clamped to the
+## server's [code]sv_background_grace[/code]. 0 means the normal timeout applies.
+##
+## [b]The client asks and the server decides.[/b] A grace a client could set for
+## itself is a way to hold a slot on a full server for as long as it likes.
+var background_grace_sec: float = 0.0
+
 ## Score, for `status` output and roster reporting. The game sets this.
 var score: int = 0
 
@@ -371,6 +391,8 @@ func status_line() -> String:
 		flags += "M"
 	if used_reserved_slot:
 		flags += "R"
+	if backgrounded:
+		flags += "B"
 
 	return "# %-4d %-20s %-10s %-6s %-5s %-4s %s" % [
 		userid,
@@ -397,6 +419,8 @@ func describe() -> Dictionary:
 		"permissions": Array(permissions),
 		"immunity": immunity,
 		"silenced": is_silenced(),
+		"backgrounded": backgrounded,
+		"background_grace": background_grace_sec,
 		"content": content_key,
 		"progress": content_progress,
 	}

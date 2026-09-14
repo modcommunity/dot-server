@@ -84,6 +84,25 @@ extends DotConfig
 ## Seconds without a packet before a spawned client is dropped.
 @export_range(5.0, 600.0, 5.0) var client_timeout_sec: float = 60.0
 
+## Seconds of silence allowed a client that has announced its tab is in the background.
+##
+## [b]A browser stops the Godot main loop for a hidden tab.[/b] It stops calling
+## [code]requestAnimationFrame[/code], so [code]_process[/code], every [Timer] and the
+## multiplayer poll all stop together: the client sends no heartbeat and reads nothing
+## while its socket stays open. Under [member client_timeout_sec] alone, switching tabs
+## for a minute is indistinguishable from a machine that died, and the player is dropped.
+##
+## A client announces the switch on its way out and asks for a budget; this is the
+## ceiling on what it gets. 0 refuses the grace entirely and restores the old
+## behaviour.
+##
+## [b]Do not set this to an hour.[/b] The server goes on sending to a client that is
+## not reading, and those bytes queue — in the game's own per-peer send, and then in
+## the socket. The longer the grace, the bigger the burst the player gets on their way
+## back in, and the more a parked tab costs everybody still playing. Minutes, not
+## tens of minutes.
+@export_range(0.0, 1800.0, 15.0) var background_grace_max_sec: float = 300.0
+
 @export_group("Hibernation")
 
 ## Reduce tick processing when nobody is connected.
@@ -266,6 +285,63 @@ var query_player_detail: String = "full"
 ## check on a timer.
 @export var admins_auto_reload: bool = true
 
+@export_group("Logging")
+
+## The level below which nothing is emitted: trace, debug, info, warn, error, fatal, off.
+##
+## [code]info[/code] is the level a server is meant to run at — everything at or above it
+## is something an admin would want kept. [code]debug[/code] answers "why did it do that"
+## and is not a level to leave on: it is per-decision, and on a busy server it is the
+## difference between a log somebody reads and a log somebody greps in despair.
+@export var log_level: String = "info"
+
+## Per-channel overrides, as [code]channel=level[/code].
+##
+## The reason a global level is rarely the right tool: turning on DEBUG to diagnose one
+## download also turns on every physics and RPC trace, and the lines you wanted scroll
+## past. [code]--sv-log-channel-levels cloud=debug[/code] turns up one subsystem.
+@export var log_channel_levels: PackedStringArray = PackedStringArray()
+
+## The lowest level mirrored into the engine's own warning and error output.
+##
+## [b]error, and lowering it has a cost worth knowing.[/b] The engine appends an
+## [code]at:[/code] line and a full GDScript backtrace to every [method push_warning] and
+## [method push_error] in a debug build, and nothing suppresses that per call. At
+## [code]warn[/code] every recoverable, expected warning — an optional profile lookup that
+## was refused, a vote that cannot open yet — costs eight lines of stderr and reads like a
+## crash to whoever is scanning the log. The one-line [code]WRN[/code] already carries the
+## same message.
+@export var log_mirror_min_level: String = "error"
+
+## Write the log to a file as well as to stdout.
+##
+## On. stdout is captured by whatever supervises the process and is gone when that
+## rotates or restarts; the file is the copy an admin can still read on Tuesday. It costs
+## nothing when nothing is wrong and it is the only artefact when something is.
+@export var log_file_enabled: bool = true
+
+## Directory for log files.
+@export var log_directory: String = "user://logs"
+
+## Base name. A timestamp and [code].log[/code] are appended, so a directory listing is
+## in chronological order without any renaming.
+@export var log_basename: String = "server"
+
+## One JSON object per line instead of the human format.
+##
+## Off: the primary reader is a person over SSH. On for a box where something else tails
+## the file.
+@export var log_json: bool = false
+
+## Rotate once a file passes this size. 0 disables size rotation.
+@export var log_max_file_bytes: int = 16 * 1024 * 1024
+
+## Log files to keep, oldest deleted first. 0 keeps everything.
+##
+## [b]Not zero.[/b] An unbounded log directory is the most common way a game server fills
+## a disk, and a full disk stops the server rather than the logging.
+@export var log_max_files: int = 10
+
 @export_group("Moderation")
 
 @export var bans_path: String = "user://cfg/bans.json"
@@ -361,6 +437,14 @@ var query_player_detail: String = "full"
 @export_range(1, 512, 1) var netchan_chunks_per_second: int = 32
 
 
+## Parses one of the level names this config accepts, or -1.
+static func parse_log_level(name: String) -> int:
+	var trimmed: String = name.strip_edges().to_lower()
+	if trimmed == "warning":
+		trimmed = "warn"
+	return DotLog.parse_level(trimmed)
+
+
 func env_prefix() -> String:
 	return "DOT_SERVER_"
 
@@ -374,6 +458,29 @@ func sensitive_keys() -> PackedStringArray:
 
 
 func validate() -> DotResult:
+	if parse_log_level(log_level) < 0:
+		return DotResult.fail(
+			DotError.CODE_INVALID,
+			"Unknown log_level '%s'." % log_level,
+			"trace, debug, info, warn, error, fatal or off"
+		)
+
+	if parse_log_level(log_mirror_min_level) < 0:
+		return DotResult.fail(
+			DotError.CODE_INVALID,
+			"Unknown log_mirror_min_level '%s'." % log_mirror_min_level,
+			"trace, debug, info, warn, error, fatal or off"
+		)
+
+	for entry: String in log_channel_levels:
+		var parts: PackedStringArray = entry.split("=", false, 1)
+		if parts.size() != 2 or parse_log_level(parts[1]) < 0:
+			return DotResult.fail(
+				DotError.CODE_INVALID,
+				"A channel level must be written channel=level.",
+				entry
+			)
+
 	if port < 0 or port > 65535:
 		return DotResult.fail(
 			DotError.CODE_INVALID, "port must be between 0 and 65535."

@@ -55,6 +55,13 @@ signal disconnected(reason: String)
 
 signal chat_received(payload: Dictionary)
 
+## The browser tab was hidden or shown. Never fires off-web.
+##
+## Emitted from a JavaScript listener rather than from a frame, so a handler must be
+## synchronous — see [member background_keepalive] for why there is no next frame to
+## [code]await[/code] on the way out.
+signal page_visibility_changed(visible: bool)
+
 ## Server details from the handshake challenge.
 signal server_info(info: Dictionary)
 
@@ -97,6 +104,33 @@ signal game_changed(game_id: String, content_id: String, display_name: String)
 ## Seconds between heartbeats, which also measure ping.
 @export_range(0.5, 30.0, 0.5) var heartbeat_interval_sec: float = 2.0
 
+## Tell the server before this client's browser tab goes silent, and ask it to wait.
+##
+## [b]A browser stops the Godot main loop for a hidden tab.[/b] It stops calling
+## [code]requestAnimationFrame[/code] altogether, which stops [code]_process[/code],
+## every [Timer] and the multiplayer poll together — so no heartbeat is sent, nothing
+## is read, and the socket sits open and idle. To the server that is indistinguishable
+## from a machine that died, and [code]sv_timeout[/code] drops the player about a
+## minute into a tab switch.
+##
+## With this on, the client announces the switch on the way out, while the page is
+## still live, and announces its return. The server holds the slot for up to
+## [code]sv_background_grace[/code].
+##
+## [b]It is a request, not a guarantee.[/b] The server clamps what it grants and may
+## grant nothing; the announcement can also be lost, in which case the ordinary
+## timeout applies and the behaviour is what it was before this existed.
+##
+## No effect off-web, where a window that is not on screen still runs its frames.
+@export var background_keepalive: bool = true
+
+## Seconds to ask for. 0 asks for whatever the server allows.
+##
+## Worth setting below the server's ceiling rather than above it: while the tab is
+## hidden the server goes on sending to a client that is not reading, and those bytes
+## queue up for the burst that arrives when the player comes back.
+@export_range(0.0, 1800.0, 15.0) var background_grace_sec: float = 0.0
+
 var phase: Phase = Phase.IDLE
 
 ## Set from the handshake, so a client knows which server it is talking to.
@@ -136,6 +170,9 @@ var _ping_ms: int = -1
 var _password: String = ""
 var _connected: bool = false
 
+## Name the visibility listener is rooted under, unique per link.
+var _visibility_key: String = ""
+
 ## The cloud progress subscription, kept so it is only ever made once.
 var _progress_handler: Callable = Callable()
 
@@ -157,9 +194,15 @@ func _ready() -> void:
 	_heartbeat.timeout.connect(_send_heartbeat)
 	add_child(_heartbeat)
 
+	_watch_page_visibility()
+
 
 func _exit_tree() -> void:
 	DotRegistry.unregister_instance(SERVICE, self)
+
+	if _visibility_key != "":
+		DotWeb.unwatch_visibility(_visibility_key)
+		_visibility_key = ""
 
 
 # --- Connecting ------------------------------------------------------------
@@ -746,6 +789,76 @@ func report_ping(_ping: int) -> void:
 
 func ping_ms() -> int:
 	return _ping_ms
+
+
+# --- Background tabs -------------------------------------------------------
+
+## Subscribes to the browser's visibility events. No-op off-web.
+##
+## Deliberately not gated on [member background_keepalive]: that is an exported
+## property a host can change at runtime, and a listener installed once in
+## [method _ready] could not honour a later change to it. The flag is checked where it
+## is acted on instead. Listening costs nothing off-web, where
+## [method DotWeb.watch_visibility] installs nothing at all — and
+## [signal page_visibility_changed] is about the page rather than about the keepalive,
+## so a game that wants to pause or mute on a tab switch gets it either way.
+func _watch_page_visibility() -> void:
+	# Keyed by instance rather than by class: two links in one process would
+	# otherwise root their listeners under the same name, and the second would
+	# silently replace the first.
+	var key := "dot_client_link_visibility_%d" % get_instance_id()
+	if DotWeb.watch_visibility(
+		key, func(visible: bool) -> void: _on_page_visibility(visible)
+	):
+		_visibility_key = key
+
+
+func _on_page_visibility(visible: bool) -> void:
+	page_visibility_changed.emit(visible)
+
+	if not background_keepalive or not _connected:
+		return
+
+	DotLog.debug(
+		CHANNEL,
+		"page visibility changed",
+		{"visible": visible, "grace": background_grace_sec}
+	)
+
+	client_visibility.rpc_id(1, visible, background_grace_sec)
+
+	if visible:
+		# Coming back, the heartbeat timer resumes on its own — but its next tick is
+		# up to heartbeat_interval_sec away, and the server has been counting silence
+		# for the whole time the tab was hidden. Say something now rather than spend
+		# any more of a budget that is already nearly gone.
+		_send_heartbeat()
+
+	_flush_peer()
+
+
+## Pushes what [code]rpc_id[/code] queued out of the socket without waiting for a
+## frame.
+##
+## [b]The announcement above has no frame to wait for.[/b] `visibilitychange` arrives
+## as a JavaScript-to-wasm call, not as a frame callback, and it fires as the browser
+## is stopping [code]requestAnimationFrame[/code] — so the poll that would ordinarily
+## do the sending may never happen again. An announcement that never leaves is the
+## same as no announcement, and costs the player the slot it was asking to keep.
+func _flush_peer() -> void:
+	var peer := multiplayer.multiplayer_peer
+	if peer == null:
+		return
+	if peer.get_connection_status() != MultiplayerPeer.CONNECTION_CONNECTED:
+		return
+	peer.poll()
+
+
+## Declared here only so the server's method has a matching counterpart; a client
+## never receives this one.
+@rpc("any_peer", "reliable", "call_remote", CHANNEL_CONTROL)
+func client_visibility(_visible: bool, _requested_grace_sec: float) -> void:
+	pass
 
 
 # --- Chat ------------------------------------------------------------------

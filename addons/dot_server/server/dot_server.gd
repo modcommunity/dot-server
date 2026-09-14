@@ -103,8 +103,25 @@ signal game_changing(from_key: String, to_key: String)
 @export var events_ref: DotNodeRef = null
 @export var modules_ref: DotNodeRef = null
 
-## Optional log sink. Created only if this ref resolves.
+## Where the log goes, over and above stdout.
+##
+## Resolve it to a [DotLogSink] for a rotating file, or to a **dot-log**
+## [code]DotLogRouter[/code] for the whole sink layer — a file, a ring in memory the
+## console can read back, syslog, a database table, a hosted collector. Either is
+## recognised by duck typing; dot-server names neither, because only dot-core may be a
+## hard dependency here.
+##
+## Leave it null and the server makes its own [DotLogSink] from
+## [member DotServerConfig.log_file_enabled], so a server has a log file without anybody
+## having configured one. That default exists because a dedicated server whose only record
+## is stdout has no record at all the moment its supervisor rotates or restarts.
 @export var log_sink_ref: DotNodeRef = null
+
+## Where the log is going, if anywhere: a [DotLogSink], a dot-log router, or null.
+var log_node: Node = null
+
+## Whether [member log_node] is a router rather than a plain sink. Duck-typed.
+var log_is_router: bool = false
 
 var console: DotConsole = null
 var admins: DotAdminManager = null
@@ -165,6 +182,7 @@ var _cv_maxplayers: DotConVar
 var _cv_cheats: DotConVar
 var _cv_tickrate: DotConVar
 var _cv_timeout: DotConVar
+var _cv_background_grace: DotConVar
 
 var _connect_limiter: DotRateLimiter = null
 var _warned_about_ban_source: bool = false
@@ -336,6 +354,26 @@ func shutdown(reason: String = "Server shutting down") -> void:
 	_set_state(State.STOPPED)
 	DotRegistry.unregister_instance(SERVICE, self)
 
+	# Last, and after the final state change, so the shutdown itself is in the file.
+	# Records still sitting in a buffer when the process goes are the ones that would
+	# have explained why it went.
+	flush_log()
+
+
+## Writes out whatever the log destination is holding.
+##
+## Called on shutdown, and worth calling from anything that is about to do something it
+## might not come back from. A remote destination is started rather than waited for — the
+## only thing that can honestly be promised to a process that is stopping — and dot-log's
+## own [code]shutdown()[/code] is the path that waits.
+func flush_log() -> void:
+	if log_node == null or not is_instance_valid(log_node):
+		return
+	if log_node.has_method("flush_all"):
+		log_node.call("flush_all")
+	elif log_node.has_method("flush"):
+		log_node.call("flush")
+
 
 func _exit_tree() -> void:
 	if state == State.RUNNING or state == State.HIBERNATING:
@@ -350,12 +388,76 @@ func _resolve_console() -> void:
 	console = _resolve(console_ref, "console") as DotConsole
 
 
+## Applies the configured levels, then attaches or creates somewhere for the log to go.
+##
+## Runs before the first line this boot emits, which is the whole point: a level applied
+## after the subsystems have started is a level that did not apply to the interesting
+## part.
 func _resolve_log_sink() -> void:
-	if log_sink_ref == null:
+	_apply_log_levels()
+
+	if log_sink_ref != null:
+		log_node = log_sink_ref.resolve_or_null(self, CHANNEL)
+
+	if log_node == null and config.log_file_enabled:
+		log_node = _create_log_sink()
+
+	if log_node == null:
 		return
-	var node := log_sink_ref.resolve_or_null(self, CHANNEL)
-	if node != null:
-		DotLog.debug(CHANNEL, "log sink attached", {"node": node.name})
+
+	# A router is anything that can be asked what it is doing and told to flush — which
+	# is dot-log's, and could be somebody else's. Probed rather than named: naming it
+	# would make an optional addon a hard dependency of every server in the family.
+	log_is_router = (
+		log_node.has_method("describe_lines") and log_node.has_method("flush_all")
+	)
+
+	if log_is_router and log_node.has_method("set_tag"):
+		# The tags a collector needs to tell four servers apart. Set here rather than by
+		# the host because the server is the only thing that knows them.
+		log_node.call("set_tag", "hostname", config.hostname)
+		log_node.call("set_tag", "port", config.port)
+
+	DotLog.debug(
+		CHANNEL,
+		"log destination attached",
+		{"node": log_node.name, "router": log_is_router}
+	)
+
+
+func _apply_log_levels() -> void:
+	var level: int = DotServerConfig.parse_log_level(config.log_level)
+	if level >= 0:
+		DotLog.set_level(level)
+
+	var mirror: int = DotServerConfig.parse_log_level(config.log_mirror_min_level)
+	if mirror >= 0:
+		DotLog.mirror_min_level = mirror
+
+	for entry in config.log_channel_levels:
+		var parts: PackedStringArray = String(entry).split("=", false, 1)
+		if parts.size() != 2:
+			continue
+		var parsed: int = DotServerConfig.parse_log_level(parts[1])
+		if parsed >= 0:
+			DotLog.set_channel_level(parts[0].strip_edges(), parsed)
+
+
+## The plain file sink every server gets when nothing better was placed.
+func _create_log_sink() -> Node:
+	var sink := DotLogSink.new()
+	sink.name = "LogSink"
+	sink.directory = config.log_directory
+	sink.basename = config.log_basename
+	sink.json_lines = config.log_json
+	sink.max_file_bytes = config.log_max_file_bytes
+	sink.max_files = config.log_max_files
+	# The file keeps whatever DotLog itself let through: a second threshold here would
+	# mean an operator who raised the level still found nothing in the file, with two
+	# places to look before working out why.
+	sink.level = DotLog.Level.TRACE
+	add_child(sink)
+	return sink
 
 
 func _resolve_subsystems() -> void:
@@ -1493,6 +1595,16 @@ func heartbeat(client_time_ms: int) -> void:
 		return
 
 	session.touch()
+
+	# A heartbeat means the client's main loop is running, whatever it last announced.
+	# Self-correcting on purpose: the "I am back" announcement can be missed — a tab
+	# restored while the peer was being re-created, an announcement sent a frame after
+	# the loop had already stopped — and a session left flagged would keep a grace it
+	# no longer needs.
+	if session.backgrounded:
+		session.backgrounded = false
+		session.background_grace_sec = 0.0
+
 	_heartbeat_ack.rpc_id(peer_id, client_time_ms)
 
 
@@ -1511,6 +1623,76 @@ func report_ping(ping_ms: int) -> void:
 		return
 	session.touch()
 	session.ping_ms = clampi(ping_ms, 0, 60_000)
+
+
+## A client announcing that its page went into, or came back from, the background.
+##
+## [b]Reliable, unlike the heartbeat above it.[/b] A dropped heartbeat costs one ping
+## sample. A dropped announcement costs the player their slot, because this is the only
+## thing standing between a hidden tab and [member DotServerConfig.client_timeout_sec] —
+## and the client cannot retry, having no frames left to retry in.
+##
+## [param requested_grace_sec] is a request, not a setting. The server clamps it to
+## [code]sv_background_grace[/code], because a number a client chose for itself is a way
+## to hold a slot on a full server for as long as it likes. 0 asks for whatever the
+## server allows.
+@rpc("any_peer", "reliable", "call_remote", CHANNEL_CONTROL)
+func client_visibility(visible: bool, requested_grace_sec: float) -> void:
+	var session: DotClientSession = _sessions.get(
+		multiplayer.get_remote_sender_id()
+	)
+	if session == null:
+		return
+
+	session.touch()
+	set_session_background(session, not visible, requested_grace_sec)
+
+
+## Records that a session has gone into, or come back from, the background.
+##
+## Split out from the RPC above so the clamp is reachable without a peer to send from
+## — by the suite, and by a host that knows on its own that a client has gone quiet on
+## purpose (a mobile app moving to the background has the same problem and a different
+## event to hear it from).
+##
+## [param requested_grace_sec] is clamped to [code]sv_background_grace[/code]; 0 asks
+## for the maximum. A server whose maximum is 0 grants nothing, and says so by leaving
+## the session unflagged: recording a refused request as backgrounded anyway would put
+## a `B` in `status` against a session being judged on the ordinary timeout, which is
+## the opposite of what that column is for.
+func set_session_background(
+	session: DotClientSession,
+	backgrounded: bool,
+	requested_grace_sec: float = 0.0
+) -> void:
+	if session == null:
+		return
+
+	var cap := (
+		_cv_background_grace.get_float() if _cv_background_grace != null else 0.0
+	)
+
+	if not backgrounded or cap <= 0.0:
+		session.backgrounded = false
+		session.background_grace_sec = 0.0
+		return
+
+	session.backgrounded = true
+	session.background_grace_sec = (
+		clampf(requested_grace_sec, 0.0, cap) if requested_grace_sec > 0.0 else cap
+	)
+
+
+## How long this session is allowed to say nothing before it is dropped.
+##
+## [code]sv_timeout[/code], unless the client announced that its tab was going into
+## the background and the server granted it longer — see
+## [method set_session_background].
+func silence_budget(session: DotClientSession) -> float:
+	var budget := _cv_timeout.get_float() if _cv_timeout != null else 0.0
+	if session != null and session.backgrounded:
+		budget = maxf(budget, session.background_grace_sec)
+	return budget
 
 
 # --- Kicking ---------------------------------------------------------------
@@ -1653,8 +1835,20 @@ func _sweep_timeouts() -> void:
 				limit = config.load_timeout_sec
 			DotClientSession.State.SPAWNED:
 				# Spawned clients are judged on silence, not on time in state.
-				if session.idle_seconds() > _cv_timeout.get_float():
-					kick(session, "Timed out")
+				#
+				# Except one that told us it was about to go silent. A browser stops
+				# the whole main loop for a hidden tab, so a player who switches tabs
+				# has no frame left in which to send a heartbeat, and on the ordinary
+				# budget looks exactly like a machine that died. The grace is the
+				# server's number, clamped when the announcement arrived — never the
+				# client's.
+				if session.idle_seconds() > silence_budget(session):
+					kick(
+						session,
+						"Timed out in the background"
+						if session.backgrounded
+						else "Timed out"
+					)
 				continue
 			_:
 				continue
@@ -1773,6 +1967,13 @@ func _register_cvars() -> void:
 		DotConVar.FLAG_ARCHIVE
 	).with_range(5, 600)
 
+	_cv_background_grace = console.cvar(
+		"sv_background_grace",
+		str(config.background_grace_max_sec),
+		"Seconds of silence allowed a client that says its tab is hidden. 0 refuses.",
+		DotConVar.FLAG_ARCHIVE
+	).with_range(0, 1800)
+
 	# Bound onto the console rather than read here: the console is what applies it, on
 	# every line, and a console with no server (an editor, a test) still answers from its
 	# own exported default.
@@ -1861,6 +2062,10 @@ func _register_cvars() -> void:
 		func(_old: String, value: String) -> void:
 			config.client_timeout_sec = value.to_float()
 	)
+	_cv_background_grace.changed.connect(
+		func(_old: String, value: String) -> void:
+			config.background_grace_max_sec = value.to_float()
+	)
 
 
 ## Reads cvars back into the config after server.cfg has run.
@@ -1870,6 +2075,7 @@ func _apply_cvars_to_config() -> void:
 	config.max_players = _cv_maxplayers.get_int()
 	config.tickrate = _cv_tickrate.get_int()
 	config.client_timeout_sec = _cv_timeout.get_float()
+	config.background_grace_max_sec = _cv_background_grace.get_float()
 	config.reserved_slots = console.get_int("sv_reserved_slots", config.reserved_slots)
 	config.max_connections_per_ip = console.get_int(
 		"sv_max_connections_per_ip", config.max_connections_per_ip
@@ -1943,7 +2149,24 @@ func describe() -> Dictionary:
 		"per_ip_limit": address_guard.limit if address_guard != null else 0,
 		"per_ip_refused": address_guard.refused if address_guard != null else 0,
 		"ban_source": DotRegistry.get_service(BAN_SOURCE) != null,
+		"log_level": DotLog.level_name(DotLog.get_level()),
+		# Named rather than a bool, because "where does the log go" is a question an
+		# operator asks of a server that has just lost something, and "true" is not an
+		# answer to it.
+		"log": _log_destination(),
 	}
+
+
+func _log_destination() -> String:
+	if log_node == null or not is_instance_valid(log_node):
+		return "stdout only"
+	if log_is_router:
+		return "router: %s" % log_node.name
+	if log_node.has_method("describe"):
+		var d: Variant = log_node.call("describe")
+		if d is Dictionary and (d as Dictionary).has("path"):
+			return str((d as Dictionary)["path"])
+	return log_node.name
 
 
 ## The shape [code]DotBackboneClient.report_stats[/code] expects.

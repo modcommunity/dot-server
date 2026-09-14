@@ -129,6 +129,7 @@ func _run_selftest() -> void:
 	await _test_bans()
 	_test_admins()
 	_test_connection_limits()
+	_test_background_grace()
 	_test_targeting()
 	await _test_ban_source()
 	_test_events()
@@ -533,6 +534,85 @@ func _test_connection_limits() -> void:
 	server.release_session(two.peer_id)
 	server.address_guard.limit = before
 	_run("sv_max_connections_per_ip %d" % before)
+
+
+## The flags column of a `status` line, or "" when it is empty.
+##
+## Every other column is a fixed width the format string owns; splitting on runs of
+## whitespace finds them all regardless, and an empty flags column simply is not there.
+## Depends on the display name having no spaces in it, which is why the sessions this
+## is used on are named in one word.
+func _status_flags(session: DotClientSession) -> String:
+	var fields := session.status_line().split(" ", false)
+	# "# userid name state time ping [flags] addr"
+	return fields[6] if fields.size() >= 8 else ""
+
+
+func _test_background_grace() -> void:
+	print("")
+	print("[background grace]")
+
+	var console := server.console
+	var session := _adopt(9100, "10.0.0.9", "Backgrounder")
+	session.state = DotClientSession.State.SPAWNED
+
+	console.execute("sv_timeout 60")
+	console.execute("sv_background_grace 300")
+
+	_check("an ordinary session is judged on sv_timeout", is_equal_approx(
+		server.silence_budget(session), 60.0
+	))
+
+	server.set_session_background(session, true, 120.0)
+	_check("a background announcement is recorded", session.backgrounded)
+	_check("a grace inside the cap is granted as asked", is_equal_approx(
+		session.background_grace_sec, 120.0
+	))
+	_check("the grace is what the sweep judges on", is_equal_approx(
+		server.silence_budget(session), 120.0
+	))
+	# The flags COLUMN, not the line: this session's name and address both contain a
+	# "B", and a `contains` over the whole line passed whether the flag was set or not.
+	_check("status shows the flag", _status_flags(session).contains("B"))
+
+	# The whole point of the cap. A client that names its own number could hold a slot
+	# on a full server for as long as it liked.
+	server.set_session_background(session, true, 9999.0)
+	_check("a greedy request is clamped to sv_background_grace", is_equal_approx(
+		session.background_grace_sec, 300.0
+	))
+
+	server.set_session_background(session, true, 0.0)
+	_check("asking for nothing in particular gets the maximum", is_equal_approx(
+		session.background_grace_sec, 300.0
+	))
+
+	# A grace shorter than the ordinary timeout must not SHORTEN it. maxf, not
+	# assignment: a client asking for 15 seconds is asking for more tolerance than it
+	# had, never for less.
+	server.set_session_background(session, true, 15.0)
+	_check("a grace below sv_timeout does not shorten it", is_equal_approx(
+		server.silence_budget(session), 60.0
+	))
+
+	server.set_session_background(session, false)
+	_check("coming back clears the flag", not session.backgrounded)
+	_check("coming back restores the ordinary budget", is_equal_approx(
+		server.silence_budget(session), 60.0
+	))
+	_check("status drops the flag", not _status_flags(session).contains("B"))
+
+	# 0 is the off switch, and off has to mean the session is not flagged either --
+	# a `B` in `status` against a session on the ordinary budget would be a lie.
+	console.execute("sv_background_grace 0")
+	server.set_session_background(session, true, 120.0)
+	_check("a server granting no grace refuses the request", not session.backgrounded)
+	_check("and judges it on sv_timeout", is_equal_approx(
+		server.silence_budget(session), 60.0
+	))
+
+	console.execute("sv_background_grace 300")
+	server.release_session(session.peer_id)
 
 
 func _test_targeting() -> void:

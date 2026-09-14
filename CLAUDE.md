@@ -90,6 +90,24 @@ support.
 `SPAWNED -> DOWNLOADING` is a legal transition — that is the game change, and it is
 the whole reason the family exists.
 
+### A browser tab that is not on screen is not running
+
+A `SPAWNED` client is judged on silence rather than on time in state: `sv_timeout` seconds without a packet and it is dropped. **A browser client that is not the front tab sends nothing at all, and its socket stays open and healthy while it does.** The main loop on web is driven by `requestAnimationFrame`, and a browser stops calling it for a hidden tab — which stops `_process`, every `Timer` and the multiplayer poll together. Nothing is sent, nothing is read, and from the server's side that is indistinguishable from a machine that died. A player who switched tabs was being dropped about a minute in.
+
+The client therefore announces the switch on its way out, from a `visibilitychange` listener, and announces its return. `sv_background_grace` is the ceiling on what it gets; `DotServer.set_session_background` applies the clamp and `silence_budget` is what the sweep asks. A backgrounded session wears a `B` in `status`.
+
+Three things about it are load-bearing and none of them errors:
+
+- **The announcement is reliable and the heartbeat beside it is not.** A dropped heartbeat costs one ping sample. A dropped announcement costs the player their slot, and the client cannot retry — it has no frames left to retry in.
+- **The client flushes the peer itself.** `visibilitychange` arrives as a JavaScript-to-wasm call, not as a frame callback, and it fires as the browser is stopping `requestAnimationFrame`. The poll that would ordinarily send what `rpc_id` queued may simply never happen again, so `DotClientLink._flush_peer` calls `poll()` inside the listener. An announcement that never leaves is the same as no announcement.
+- **The grace is the server's number, never the client's.** It arrives as a request and is clamped. A client that named its own would be able to sit on a slot of a full server for as long as it liked.
+
+Any heartbeat clears the flag, whatever the client last announced: a heartbeat is proof that the loop is running, and a session left flagged would keep a grace it no longer needs.
+
+**Adding an `@rpc` to this pair is a protocol break, and it announces itself badly.** Godot checksums a node's RPC methods and refuses to confirm a path when the two ends disagree, so a client built before `client_visibility` existed meets a server built after it with *"The rpc node checksum failed. Make sure to have the same methods on both nodes."* — and then sits in `AUTHENTICATING` until it is timed out, because the path it needs to reply on was never confirmed. Neither end says "version mismatch"; the server reports a client that would not answer its challenge. Observed while testing this change against a stale exported client. `DotServer` and `DotClientLink` must gain and lose RPC methods **together**, and every shipped client has to be rebuilt alongside the servers it will meet — which for this platform means re-exporting the web shell and the native builds, not only restarting the servers.
+
+**The ceiling is deliberately measured in minutes.** While the tab is hidden the server goes on sending to a client that is not reading, and those bytes queue — in a game's own per-peer send, and then in the socket. The longer the grace, the bigger the burst that lands when the player comes back, and the more a parked tab costs everybody still playing. A game that wants to make long graces cheap should gate its replication on `session.backgrounded`; dot-server does not do that for it, because only the game knows what is safe to stop sending.
+
 ## Console design
 
 **Values are strings.** Every path a cvar value arrives through is textual (a `.cfg`
