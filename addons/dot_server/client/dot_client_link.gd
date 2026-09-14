@@ -247,12 +247,18 @@ func _on_connection_failed() -> void:
 	))
 
 
+## The transport reported that the connection is gone.
+##
+## [b]Shares the teardown with [method disconnect_from_server] rather than repeating it.[/b]
+## The two ways a connection ends have to leave the same state behind and they did not:
+## this one left the closed peer assigned, so `multiplayer.has_multiplayer_peer()` stayed
+## true and everything downstream went on believing it was on a network. Clearing it from
+## inside the poll that reported the drop is supported -- [MultiplayerAPI] re-checks the
+## peer after polling for exactly this case.
 func _on_server_disconnected() -> void:
 	DotLog.info(CHANNEL, "server closed the connection")
-	_connected = false
-	_heartbeat.stop()
-	_unload_scene()
-	_set_phase(Phase.IDLE, "")
+	# No reason, so it does not emit; this function owns the reason it reports.
+	disconnect_from_server()
 	disconnected.emit("Connection to the server was lost.")
 
 
