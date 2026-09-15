@@ -52,6 +52,11 @@ func setup(p_server: DotServer) -> void:
 		server.games.game_loaded.connect(_on_game_changed)
 
 	if auto_load:
+		# Not awaited, and it cannot be: `setup` is called from [DotServer]'s boot, which
+		# is itself a coroutine, and making this one would mean every caller of `setup`
+		# had to be. A module that suspends during a scan-load finishes on a later frame;
+		# what matters is that `load_module` itself awaits the module, which is what was
+		# missing and what produced "Trying to call an async function without 'await'".
 		load_all()
 
 
@@ -74,7 +79,7 @@ func load_all() -> int:
 			if not rel.ends_with(".gd"):
 				continue
 
-			var res := load_module(dir.path_join(rel))
+			var res: DotResult = await load_module(dir.path_join(rel))
 			if res.ok:
 				loaded_count += 1
 
@@ -134,7 +139,24 @@ func load_module(path: String) -> DotResult:
 
 	add_child(module)
 
-	var result := module._module_load()
+	# [b]Awaited, and it was not.[/b] `_module_load` is allowed to be a coroutine and
+	# every non-trivial one is -- an identity layer reaches a content host, a profile
+	# store, an avatar store, and an un-awaited GDScript coroutine returns at its first
+	# suspension. Godot 4.7 reports that as **"Trying to call an async function without
+	# 'await'"**, `result` is then null, and the next line reads `.ok` off it: the module
+	# fails to load with a message about async functions, on a server whose only crime is
+	# that something it talks to was slow.
+	#
+	# It hid because it only fires when a load ACTUALLY suspends. Every module in the
+	# tree awaited things that happened to finish inside one call -- a cloud client with
+	# nothing to fetch, a backbone that is not configured -- so the coroutine ran to
+	# completion and returned its value like an ordinary function. The first module whose
+	# setup really waited was a test fixture written to wait on purpose.
+	#
+	# `await` on a value that is not a coroutine passes it straight through, so this is
+	# correct for a synchronous module too. Typed explicitly rather than inferred,
+	# because `await` yields a Variant and `:=` would quietly widen `result`.
+	var result: DotResult = await module._module_load()
 
 	if not result.ok:
 		# A module that refused to load must not stay half-attached: its partial
@@ -158,7 +180,15 @@ func load_module(path: String) -> DotResult:
 		{
 			"module": module_name,
 			"version": module._module_version(),
-			"commands": module.describe()["commands"],
+			# [b]`get`, not `[]`.[/b] `describe()` is a method a module is expected to
+			# override -- it is the family's "dump your runtime state" convention -- and
+			# indexing an override that did not happen to keep this key throws, inside
+			# the logging call, AFTER the module has been registered. What that produced
+			# was a load that reported "Invalid access to property or key 'commands'",
+			# returned null to its caller, and left the module in `_modules` anyway, so
+			# the next attempt said it was already loaded. A log line must not be able to
+			# fail the operation it is describing.
+			"commands": module.describe().get("commands", 0),
 		}
 	)
 
@@ -178,7 +208,27 @@ func unload_module(module_name: String) -> DotResult:
 
 	# The module's own teardown runs first, while its registrations still exist —
 	# a module that wants to announce its departure needs its command to work.
-	module._module_unload()
+	# [b]`_module_unload` must be SYNCHRONOUS, and this is where that is enforced.[/b]
+	# Unlike `_module_load`, this one cannot be awaited: `unload_all` runs from
+	# `_exit_tree`, where the node is already leaving and there is no frame left to
+	# resume a coroutine in -- so awaiting here would make shutdown depend on a
+	# suspension that can no longer complete. A module with something to flush on the
+	# way out has to have flushed it by the time it returns.
+	#
+	# Detected rather than assumed: a GDScript coroutine that suspends returns a
+	# [Signal] instead of its value, so a module that ignored this is visible right
+	# here, by name, instead of leaving half a teardown behind and no message at all.
+	# Through `call`, because GDScript refuses to take the return value of a function
+	# declared `-> void` -- which is exactly what a module's teardown is declared as, and
+	# is also what makes the suspension invisible without this.
+	var teardown: Variant = module.call("_module_unload")
+
+	if teardown is Signal:
+		push_error(
+			"%s._module_unload() suspended. Module teardown must be synchronous: "
+			% module_name
+			+ "unloading runs during shutdown, where there is no frame to resume in."
+		)
 	module._cleanup_registrations()
 
 	# Belt and braces: a module that hooked directly rather than through the
@@ -213,7 +263,7 @@ func reload_module(module_name: String) -> DotResult:
 
 	var path := str(_paths[module_name])
 
-	var unloaded := unload_module(module_name)
+	var unloaded := unload_module(module_name)  # synchronous; see unload_module
 	if not unloaded.ok:
 		return unloaded
 
@@ -225,7 +275,7 @@ func reload_module(module_name: String) -> DotResult:
 		if script is GDScript:
 			(script as GDScript).reload()
 
-	return load_module(path)
+	return await load_module(path)
 
 
 # --- Queries ---------------------------------------------------------------

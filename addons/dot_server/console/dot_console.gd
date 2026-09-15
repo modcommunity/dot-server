@@ -188,6 +188,237 @@ func command(
 	)
 
 
+## Registers everything a duck-typed command source claims, as ordinary commands.
+##
+## [b]The point is that this is not a second dispatch path.[/b] An addon that ships a
+## command object -- dot-log's [code]log[/code], and anything else with the same shape --
+## has a whole console's worth of machinery it would otherwise have to do without on a
+## dedicated server: permissions, the RCON gate, the chat gate, the audit line, `cmdlist`,
+## `help`, aliases and completion. Wrapping each claimed name in a real [DotConCommand]
+## means every one of those keeps working and there is exactly one place a command is run.
+##
+## [b]Duck-typed, and the source's class is named nowhere.[/b] Same reasoning as
+## [method DotServer.attach_query_host]: a script mentioning a [code]class_name[/code] the
+## project does not have fails to parse and takes every script referencing it down with it,
+## so an optional addon may not be named by a mandatory one. The shape is the one
+## dot-console's [code]DotConsoleBridge[/code] already duck-types, which is why an addon
+## implements it once and reaches a client console and a server console both.
+##
+## [codeblock]
+## # in the host, with dot-log installed:
+## server.console.add_source(DotLogCommands.new(router), DotAdminFlags.GENERIC)
+## [/codeblock]
+##
+## [param source] must have [code]names()[/code] and [code]execute(line)[/code].
+## [code]help_for(name)[/code] and [code]complete(partial, limit)[/code] are used when
+## present and skipped when not.
+##
+## Returns the names actually registered, which is not always every name claimed: one that
+## collides with an existing command or cvar is refused by [method register_command] and
+## left to whoever had it. Read the returned array rather than assuming.
+func add_source(
+	source: Object,
+	permission: String = "",
+	chat: bool = false
+) -> DotResult:
+	if source == null or not is_instance_valid(source):
+		return DotResult.fail(
+			DotError.CODE_INVALID, "A console source cannot be null."
+		)
+
+	for required in ["names", "execute"]:
+		if not source.has_method(required):
+			return DotResult.fail(
+				DotError.CODE_INVALID,
+				"A console source needs a %s() method." % required,
+				"got a %s" % source.get_class()
+			)
+
+	var claimed: Variant = source.call("names")
+
+	if not (claimed is PackedStringArray or claimed is Array):
+		return DotResult.fail(
+			DotError.CODE_INVALID,
+			"A console source's names() must return an array of names."
+		)
+
+	var wanted := PackedStringArray(claimed)
+
+	if wanted.is_empty():
+		# Not an error. A source that claims nothing is a source whose feature is off,
+		# and refusing here would make an optional subsystem fatal to the boot.
+		DotLog.debug(
+			CHANNEL, "a console source claimed no commands",
+			{"source": source.get_class()}
+		)
+		return DotResult.success(PackedStringArray())
+
+	var has_help: bool = source.has_method("help_for")
+	var has_complete: bool = source.has_method("complete")
+	var registered := PackedStringArray()
+
+	for raw in wanted:
+		var name := String(raw).strip_edges().to_lower()
+
+		if name == "":
+			continue
+
+		if has_name(name):
+			DotLog.warn(
+				CHANNEL,
+				"a console source claimed a name that is already taken",
+				{"name": name, "source": source.get_class()}
+			)
+			continue
+
+		var description := ""
+
+		if has_help:
+			description = String(source.call("help_for", name))
+
+		if description == "":
+			description = "Provided by %s." % source.get_class()
+
+		var cmd := DotConCommand.new(
+			name,
+			_source_handler(source, name),
+			description,
+			permission
+		)
+
+		if chat:
+			cmd.with_chat()
+
+		if has_complete:
+			cmd.with_completer(_source_completer(source, name))
+
+		# `!=` rather than `.ok`: register_command returns whatever already held the
+		# name on a collision, and has_name() above cannot see a name a source claimed
+		# twice in one list.
+		if register_command(cmd) == cmd:
+			registered.append(name)
+
+	DotLog.debug(
+		CHANNEL,
+		"console source registered",
+		{"source": source.get_class(), "commands": " ".join(Array(registered))}
+	)
+
+	return DotResult.success(registered)
+
+
+## One command's forwarder. Bound per name so the source sees the line it expects.
+##
+## [b]The whole line, command word included.[/b] Every source of this shape parses its own
+## first word -- dot-log's refuses a line that does not begin with `log` -- so handing it
+## only the arguments would make every one of them answer "not a log command".
+func _source_handler(source: Object, name: String) -> Callable:
+	return func(ctx: DotCmdContext) -> void:
+		if not is_instance_valid(source):
+			# A source outlives nothing here by design, but a module that shipped one
+			# and then unloaded without removing it is a crash otherwise, on the first
+			# command after a game change.
+			ctx.reply("'%s' is no longer available." % name)
+			return
+
+		var line := name
+
+		if ctx.argc() > 0:
+			line += " " + ctx.rest()
+
+		var out: Variant = source.call("execute", line)
+
+		if out is DotResult:
+			var res := out as DotResult
+			if not res.ok:
+				ctx.reply_error(res)
+				return
+			_reply_value(ctx, res.value)
+			return
+
+		_reply_value(ctx, out)
+
+
+## Puts whatever a source returned on the caller's console.
+##
+## A source is entitled to answer with a string, a string with newlines in it, or an array
+## of lines, and a console that only understood one of the three would make two thirds of
+## them look like a command that ran and said nothing.
+func _reply_value(ctx: DotCmdContext, value: Variant) -> void:
+	if value == null:
+		return
+
+	if value is PackedStringArray:
+		ctx.reply_lines(value)
+		return
+
+	if value is Array:
+		ctx.reply_lines(PackedStringArray(value))
+		return
+
+	var text := str(value)
+
+	if text == "":
+		return
+
+	ctx.reply_lines(text.split("\n"))
+
+
+## A source's own completion, in the shape [member DotConCommand.completer] is called in.
+##
+## The source is handed the whole line it would be asked to execute and answers with whole
+## lines, which is the convention everywhere in this family -- dot-console's panel replaces
+## the input box with the candidate it picked. [method complete] puts the line back
+## together from the pieces the completer contract hands over.
+func _source_completer(source: Object, name: String) -> Callable:
+	return func(partial: String, index: int) -> PackedStringArray:
+		if not is_instance_valid(source):
+			return PackedStringArray()
+
+		var line := name
+
+		for _i in range(index):
+			# The arguments already typed are not passed to a completer -- only the one
+			# being completed and its position -- so they are stood in for. Every source
+			# of this shape completes on the POSITION and the prefix, which is what makes
+			# that lossless here; one that parsed the earlier arguments would need the
+			# whole line and would be asking for a different contract.
+			line += " ?"
+
+		line += " " + partial
+
+		var out: Variant = source.call("complete", line, 24)
+
+		if out is PackedStringArray:
+			return out
+
+		if out is Array:
+			return PackedStringArray(out)
+
+		return PackedStringArray()
+
+
+## Unregisters everything a source claims. For a module that shipped one and is unloading.
+##
+## Every name it still claims, not every name it was given: a source whose claim list has
+## grown since is one whose extra commands would otherwise be left pointing at it after it
+## is gone.
+func remove_source(source: Object) -> void:
+	if source == null or not is_instance_valid(source):
+		return
+
+	if not source.has_method("names"):
+		return
+
+	var claimed: Variant = source.call("names")
+
+	if not (claimed is PackedStringArray or claimed is Array):
+		return
+
+	for raw in PackedStringArray(claimed):
+		unregister_command(String(raw))
+
+
 ## Removes a command. For modules unloading cleanly.
 func unregister_command(name: String) -> void:
 	_commands.erase(name.to_lower())
@@ -859,9 +1090,32 @@ static func tokenize(statement: String) -> PackedStringArray:
 
 # --- Completion ------------------------------------------------------------
 
-## Names starting with [param partial], for tab completion.
+## Completions for what is in the input box, as whole command lines.
+##
+## [b]Whole lines, not tokens, and that is the contract the callers already have.[/b]
+## dot-console's panel replaces the input box with the candidate it picked, so a candidate
+## that was only the argument would delete the command word with it. For a one-word partial
+## a name IS the whole line, which is why this reads as a name list until an argument is
+## being completed.
+##
+## [b]Once there is a space, the command's own completer answers.[/b] It used to be that
+## nothing did: [member DotConCommand.completer] was set by seven builtins -- `kick`,
+## `ban`, `mute`, `gag`, `unban`, and both game commands -- read only by
+## [method complete_argument], and [method complete_argument] had no callers anywhere in
+## this family. Every one of those completers was correct, reachable and never once run,
+## which is why tab on `kick ` offered nothing on a server that knew exactly who was
+## connected. The name list still comes back for a bare word, so nothing that completed
+## before completes differently.
 func complete(partial: String, limit: int = 24) -> PackedStringArray:
-	var prefix := partial.to_lower()
+	# Leading whitespace is never meaningful and a trailing space always is, so only the
+	# left is stripped. `strip_edges()` here would turn "kick " -- completing the first
+	# argument -- into "kick", which completes the command that is already typed.
+	var line := partial.lstrip(" \t")
+
+	if line.contains(" "):
+		return _complete_arguments(line, limit)
+
+	var prefix := line.to_lower()
 	var out := PackedStringArray()
 
 	for name in command_names():
@@ -889,7 +1143,77 @@ func complete(partial: String, limit: int = 24) -> PackedStringArray:
 	return out
 
 
-## Completions for an argument, via the command's own completer.
+## Argument completions for a partial line, put back together as whole lines.
+##
+## The trailing space matters and is the whole of the parsing here: `kick ` is completing
+## argument 0 with an empty prefix, and `kick Bo` is completing argument 0 with the prefix
+## `Bo`. Getting that backwards offers the second player's name while the first is being
+## typed, which reads as the completer being broken rather than off by one.
+func _complete_arguments(partial: String, limit: int) -> PackedStringArray:
+	var tokens := tokenize(partial)
+
+	if tokens.is_empty():
+		return PackedStringArray()
+
+	var name := tokens[0].to_lower()
+	var cmd := find_command(name)
+
+	if cmd == null:
+		var expanded: Variant = _aliases.get(name)
+		if expanded != null:
+			# An alias completes as whatever it expands to. Without this, completion is
+			# the one place an alias is not the command it stands for.
+			var alias_tokens := tokenize(str(expanded))
+			if not alias_tokens.is_empty():
+				cmd = find_command(alias_tokens[0].to_lower())
+
+	if cmd == null or not cmd.completer.is_valid():
+		return PackedStringArray()
+
+	var completing_new := partial.ends_with(" ") or partial.ends_with("\t")
+	var index := tokens.size() - 1 if completing_new else tokens.size() - 2
+	var prefix := "" if completing_new else tokens[tokens.size() - 1]
+
+	if index < 0:
+		return PackedStringArray()
+
+	var raw: Variant = cmd.completer.call(prefix, index)
+	var candidates := PackedStringArray()
+
+	if raw is PackedStringArray:
+		candidates = raw
+	elif raw is Array:
+		for item in (raw as Array):
+			candidates.append(str(item))
+	else:
+		return PackedStringArray()
+
+	# The arguments already settled, so a candidate can be put back as a whole line. The
+	# same slice either way: `index` is the position being completed, so everything before
+	# it is settled whether or not the prefix is an empty token.
+	var head := " ".join(Array(tokens.slice(0, index + 1)))
+	var out := PackedStringArray()
+
+	for candidate in candidates:
+		var text := str(candidate)
+
+		if text == "":
+			continue
+
+		# A source that already answered with a whole line -- dot-log's does -- is left
+		# alone. Prefixing it again would offer `log log tail`.
+		out.append(text if text.to_lower().begins_with(name + " ") else head + " " + text)
+
+		if out.size() >= limit:
+			break
+
+	return out
+
+
+## Completions for one argument, as bare tokens, via the command's own completer.
+##
+## [method complete] is what a console calls; this is the piece under it, kept public
+## because a game with its own input box may want the tokens rather than the lines.
 func complete_argument(
 	command_name: String,
 	partial: String,

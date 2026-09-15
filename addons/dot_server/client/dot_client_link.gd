@@ -104,6 +104,19 @@ signal game_changed(game_id: String, content_id: String, display_name: String)
 ## Seconds between heartbeats, which also measure ping.
 @export_range(0.5, 30.0, 0.5) var heartbeat_interval_sec: float = 2.0
 
+## Seconds to wait for the server's challenge before deciding it is never coming.
+##
+## [b]A client that is never challenged is the OTHER half of an RPC mismatch, and it is
+## the half no message can reach.[/b] [DotSignon] rides on the challenge and catches a
+## server whose revision differs -- but a break severe enough that the challenge itself
+## does not arrive leaves this end with a connected socket and silence, until the server
+## times the session out and closes it with "Timed out while authenticating". That
+## sentence blames the player's network for a build mismatch.
+##
+## Shorter than the server's `sv_auth_timeout` on purpose, so the answer comes from the
+## end that can name the likely cause rather than from the end that cannot.
+@export_range(2.0, 120.0, 1.0) var signon_timeout_sec: float = 15.0
+
 ## Tell the server before this client's browser tab goes silent, and ask it to wait.
 ##
 ## [b]A browser stops the Godot main loop for a hidden tab.[/b] It stops calling
@@ -132,6 +145,10 @@ signal game_changed(game_id: String, content_id: String, display_name: String)
 @export_range(0.0, 1800.0, 15.0) var background_grace_sec: float = 0.0
 
 var phase: Phase = Phase.IDLE
+
+## The server's signon revision, from the handshake. Empty for a server too old to
+## send one, which is not an error -- see [DotSignon].
+var server_signon: String = ""
 
 ## Set from the handshake, so a client knows which server it is talking to.
 var server_id: String = ""
@@ -165,6 +182,10 @@ var last_error: DotError = null
 var _game_root: Node = null
 var _scene_instance: Node = null
 var _heartbeat: Timer = null
+
+## Started when the transport connects, stopped by the server's challenge. See
+## [member signon_timeout_sec].
+var _signon_watchdog: Timer = null
 var _ping_sent_ms: int = 0
 var _ping_ms: int = -1
 var _password: String = ""
@@ -193,6 +214,11 @@ func _ready() -> void:
 	_heartbeat.wait_time = heartbeat_interval_sec
 	_heartbeat.timeout.connect(_send_heartbeat)
 	add_child(_heartbeat)
+
+	_signon_watchdog = Timer.new()
+	_signon_watchdog.one_shot = true
+	_signon_watchdog.timeout.connect(_on_signon_timeout)
+	add_child(_signon_watchdog)
 
 	_watch_page_visibility()
 
@@ -269,8 +295,23 @@ func disconnect_from_server(reason: String = "") -> void:
 
 	_connected = false
 	_heartbeat.stop()
+
+	if _signon_watchdog != null:
+		_signon_watchdog.stop()
 	_unload_scene()
-	_set_phase(Phase.IDLE, "")
+
+	# [b]A failure survives the disconnect that reports it.[/b] Every legible refusal in
+	# this class is `_fail(...)` followed by a disconnect -- a signon revision that
+	# cannot match, a server that never challenged us -- and an unconditional IDLE here
+	# wiped the FAILED phase a frame after setting it. `last_error` stayed, so anything
+	# reading the error still worked and anything watching the PHASE showed the player a
+	# blank idle screen for a join that was refused with a reason. Found by a suite that
+	# asserted the phase rather than the error.
+	#
+	# A later `connect_to_server` sets CONNECTING before anything reads this, so a
+	# lingering FAILED cannot be mistaken for the state of a new attempt.
+	if phase != Phase.FAILED:
+		_set_phase(Phase.IDLE, "")
 
 	if reason != "":
 		disconnected.emit(reason)
@@ -281,6 +322,11 @@ func _on_connected() -> void:
 	_set_phase(Phase.AUTHENTICATING, "Signing in…")
 	DotLog.info(CHANNEL, "transport connected")
 
+	# The socket is open, so every remaining failure is a protocol failure. Nothing else
+	# in this client is watching for one.
+	if _signon_watchdog != null:
+		_signon_watchdog.start(signon_timeout_sec)
+
 
 func _on_connection_failed() -> void:
 	_fail(DotError.make(
@@ -288,6 +334,42 @@ func _on_connection_failed() -> void:
 		"Could not reach the server.",
 		"the address may be wrong, or the server may be using a different transport"
 	))
+
+
+## The server accepted a socket and then never said anything.
+##
+## [b]There is exactly one common cause and it is worth naming even when it is a
+## guess.[/b] A server that is listening, accepting and silent has almost always been
+## built against a different version of this addon: Godot compares the `@rpc` method
+## sets, refuses to confirm the path, and the challenge never leaves the server -- and
+## because that refusal is printed by the engine on whichever end noticed, and says
+## nothing about versions, nobody reads it as one. The alternative causes -- a server
+## wedged mid-boot, a proxy that completed a handshake it is not forwarding -- leave the
+## same silence, so this says "probably" rather than "is".
+##
+## The message names the fix a player can act on. The detail names the one an operator
+## can.
+func _on_signon_timeout() -> void:
+	if phase != Phase.AUTHENTICATING:
+		return
+
+	DotLog.error(CHANNEL, "the server never sent a challenge", {
+		"host": server_hostname,
+		"seconds": signon_timeout_sec,
+		"client_signon": DotSignon.revision([DotClientLink, DotClientChat]),
+	})
+
+	var err := DotError.make(
+		DotError.CODE_TIMEOUT,
+		"This server accepted the connection and then said nothing.",
+		"it is probably built against a different version of the game -- this client's "
+		+ "signon revision is %s; try an older build, or ask the operator which one "
+		% DotSignon.revision([DotClientLink, DotClientChat])
+		+ "this server was built with"
+	)
+
+	_fail(err)
+	disconnect_from_server(err.message)
 
 
 ## The transport reported that the connection is gone.
@@ -312,6 +394,39 @@ func _on_server_disconnected() -> void:
 func _request_credentials(challenge: Dictionary) -> void:
 	server_hostname = str(challenge.get("hostname", ""))
 	server_id = str(challenge.get("server_id", ""))
+
+	# [b]Before anything else, because everything else is about to stop working
+	# quietly.[/b] If this server declares a different set of `@rpc` methods than this
+	# build does, Godot has already refused to confirm the path cache -- this very call
+	# got through only because a first call goes out by full path -- and every message
+	# after it goes nowhere. What the player would otherwise see is a spinner, then
+	# "Timed out", for a reason no one could guess from either end.
+	#
+	# An older server sends no revision and is not refused: see [method
+	# DotSignon.compatible].
+	var ours := DotSignon.revision([DotClientLink, DotClientChat])
+	var theirs := str(challenge.get("signon", ""))
+
+	# [b]Kept BEFORE the refusal, not after it.[/b] It was assigned past the early
+	# return, so the one case anything downstream needs it for -- a shell telling the
+	# page which build the server wants -- was the one case it was empty. The value is
+	# the server's claim about itself either way; refusing to talk to that server does
+	# not make the claim less true.
+	server_signon = theirs
+
+	if not DotSignon.compatible(ours, theirs):
+		var mismatch := DotSignon.explain(ours, theirs)
+		DotLog.error(CHANNEL, "signon revision mismatch", {
+			"server": theirs, "client": ours, "host": server_hostname
+		})
+		_fail(mismatch)
+		disconnect_from_server(mismatch.message)
+		return
+
+	# Challenged, so the connection is a conversation rather than a socket. Whatever
+	# fails after this has a stage of its own to be reported against.
+	if _signon_watchdog != null:
+		_signon_watchdog.stop()
 
 	server_info.emit(challenge)
 

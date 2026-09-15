@@ -106,6 +106,18 @@ Any heartbeat clears the flag, whatever the client last announced: a heartbeat i
 
 **Adding an `@rpc` to this pair is a protocol break, and it announces itself badly.** Godot checksums a node's RPC methods and refuses to confirm a path when the two ends disagree, so a client built before `client_visibility` existed meets a server built after it with *"The rpc node checksum failed. Make sure to have the same methods on both nodes."* — and then sits in `AUTHENTICATING` until it is timed out, because the path it needs to reply on was never confirmed. Neither end says "version mismatch"; the server reports a client that would not answer its challenge. Observed while testing this change against a stale exported client. `DotServer` and `DotClientLink` must gain and lose RPC methods **together**, and every shipped client has to be rebuilt alongside the servers it will meet — which for this platform means re-exporting the web shell and the native builds, not only restarting the servers.
 
+**`DotSignon` is that break made checkable, and none of it is written down by hand.** `DotSignon.revision([DotServer, DotChatManager])` on a server and `DotSignon.revision([DotClientLink, DotClientChat])` on a client hash the sorted `@rpc` method names out of `Script.get_rpc_config()` — the same declaration Godot itself checksums, so the answer cannot drift from the engine's. The two sides run different scripts and must produce the **same** twelve characters; `examples/signon_revision.tscn` asserts exactly that, which is the check that fails on the commit rather than on the deployment.
+
+Three things carry it, and each answers a different person's question:
+
+- **The handshake challenge** carries `signon`, and `DotClientLink` refuses a mismatch with `CODE_UNSUPPORTED` and a sentence naming both revisions. This works *because* the challenge still arrives after the checksum has failed: the first call to a node goes out by full path, and what the checksum refuses to confirm is the path **cache**. Measured, not assumed — a probe with an added method delivered its first RPC and then failed to confirm, on both ends.
+- **`signon_timeout_sec` on the client**, for the break severe enough that the challenge never arrives at all. A connected socket that says nothing used to end as the server's "Timed out while authenticating", which blames the player's network for a build mismatch; it now ends on the client, in the words of the thing that is probably wrong.
+- **`info.signon` in the query response**, so a server browser or a web loader can tell **before connecting** whether the build it is about to boot can join — which is what makes an "open the build this server needs" affordance possible at all.
+
+An empty revision on either side is never a mismatch: a server older than this class sends none, and refusing it would break every client against every server already deployed — the same failure, reached from the other direction. `signon` on the console prints the revision, the count and the method names, because "revision differs" is only ever the first half of the question.
+
+**What is hashed is method names and nothing else.** Two nodes whose methods differ only in transfer mode or channel talk perfectly — the RPC id is an index into the sorted names — so hashing the modes would report an incompatibility the engine does not have and send a player to an older build for nothing.
+
 **The ceiling is deliberately measured in minutes.** While the tab is hidden the server goes on sending to a client that is not reading, and those bytes queue — in a game's own per-peer send, and then in the socket. The longer the grace, the bigger the burst that lands when the player comes back, and the more a parked tab costs everybody still playing. A game that wants to make long graces cheap should gate its replication on `session.backgrounded`; dot-server does not do that for it, because only the game knows what is safe to stop sending.
 
 ## Console design
@@ -539,6 +551,67 @@ a failed `DotResult` naming it, `to_stats_report()` reports 0 bots, and no
 many of a game's entities are bots — it never sees one connect — so zero without a
 provider is honest rather than wrong.
 
+## An addon's commands reach a dedicated server's console now
+
+`DotConsole.add_source(source, permission, chat)` registers every name a **duck-typed**
+command object claims, each as a real `DotConCommand`. `remove_source` takes them back.
+
+```gdscript
+# in the host, with dot-log installed:
+server.console.add_source(DotLogCommands.new(router), DotAdminFlags.GENERIC)
+```
+
+The shape is `names()` and `execute(line)` required, `help_for(name)` and
+`complete(partial, limit)` used when present — which is exactly the shape dot-console's
+`DotConsoleBridge` already duck-types. That matters more than it looks: an addon implements
+it **once** and reaches a client console *and* a server console, and neither console is
+named in it.
+
+**The alternative was the one this family keeps refusing.** An addon whose commands only
+existed on a client is one whose whole operator surface is missing from the deployment it
+was written for — dot-log shipped `log status`, `log tail`, `log targets` and `log test`,
+and not one of them could be typed on a dedicated server, which is the only kind of process
+that has a log worth tailing. The other way out is for each such addon to take a hard
+dependency on dot-server so it can name `DotConCommand`, and then dot-log — whose only
+dependency is dot-core — is unusable in a project without a server in it.
+
+**It is not a second dispatch path**, and that is the point of wrapping rather than
+forwarding. A name registered this way gets the permission check, the RCON gate, the chat
+gate, the audit line, `cmdlist`, `help`, aliases, `find` and completion, because it *is* a
+command. A source that claims a name somebody already has is warned and skipped rather than
+overwriting: two objects answering one word is a console that runs a different command
+depending on registration order, which is the bug you cannot reproduce.
+
+**The whole line is handed over, command word included.** Every source of this shape parses
+its own first word — dot-log's refuses a line that does not begin with `log` — so passing
+only the arguments makes every one of them answer "not a log command".
+
+### And it found that no argument completer had ever run
+
+`DotConCommand.completer` is set by seven builtins — `kick`, `ban`, `gag`, `mute`, `unban`
+and both game commands — each with a completer that offers connected player names or game
+ids. The only thing that read it was `complete_argument`, and **`complete_argument` had no
+callers anywhere in this family.** `DotConsole.complete()` matched the partial against
+command names, cvar names and aliases, so `kick Bo` matched nothing and tab offered nothing
+on a server that knew exactly who was connected.
+
+`complete()` now delegates once the partial contains a space: it tokenizes, finds the
+command (following an alias to what it stands for), asks its completer for the position
+being completed, and puts the answer back together as a **whole line**. Whole lines because
+that is the contract the callers already had — dot-console's panel replaces the input box
+with the candidate it picked, so a candidate that was only the argument would delete the
+command word with it. A bare word still completes names, so nothing that completed before
+completes differently.
+
+The other half of the same seam was in dot-console and is fixed there: its panel returned
+early from `_complete()` on any space at all, so even a source that *did* complete arguments
+was never asked. Two halves of one feature, each correct, never introduced.
+
+The trailing space is the whole of the parsing and it is worth stating: `kick ` is argument
+0 with an empty prefix, `kick Bo` is argument 0 with the prefix `Bo`. Backwards, it offers
+the second argument's candidates while the first is being typed, which reads as a broken
+completer rather than an off-by-one.
+
 ## Modules
 
 `DotModule`'s `add_command` / `add_cvar` / `hook_pre` / `hook_post` helpers exist for
@@ -605,7 +678,7 @@ find . -name '*.gd' -not -path './.godot/*' | while read f; do
     godot --headless --path . --check-only --script "res://${f#./}"
 done
 
-# 224 checks. Exits non-zero on any failure. (Was 319; the query
+# 262 checks. Exits non-zero on any failure. (Was 319 before the query
 # protocols and their 95 checks moved to dot-server-query.)
 godot --headless --path . res://examples/dedicated_server.tscn
 

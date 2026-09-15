@@ -1176,7 +1176,18 @@ func resolve_target(
 
 func _handshake_challenge(session: DotClientSession) -> Dictionary:
 	return {
-		"protocol": 1,
+		"protocol": DotSignon.PROTOCOL,
+		# [b]The RPC surface, so a client that cannot finish this join can say why.[/b]
+		# Godot refuses an RPC when the two ends declare different `@rpc` methods, and
+		# what that looks like from here is a client that never answers the challenge --
+		# it is timed out, and the log says "timed out during join" about a build that
+		# was never going to get further. The client compares this against its own and
+		# fails with a sentence instead. See [DotSignon].
+		#
+		# It rides on the challenge because the challenge is the one message that still
+		# arrives after the checksum has failed: the first call to a node goes by full
+		# path, and it is the path CACHE that the checksum refuses to confirm.
+		"signon": DotSignon.revision([DotServer, DotChatManager]),
 		"hostname": _cv_hostname.get_string(),
 		"server_id": config.server_id,
 		"needs_password": _cv_password.get_string() != "",

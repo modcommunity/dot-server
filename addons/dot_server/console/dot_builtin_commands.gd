@@ -147,6 +147,24 @@ static func _register_status(server: DotServer, console: DotConsole) -> void:
 		"Show server and player status."
 	)
 
+	# [b]An operator cannot read an RPC checksum, and this is the question they will
+	# actually be asked.[/b] "Players on the old build cannot join" is answered by
+	# comparing this line with what the client prints, and there is no other way to get
+	# it out of a running server without a packet capture. See [DotSignon].
+	console.command(
+		"signon",
+		func(ctx: DotCmdContext) -> void:
+			var d := DotSignon.describe([DotServer, DotChatManager])
+			ctx.reply("revision   %s" % str(d.get("revision", "")))
+			ctx.reply("protocol   %d" % int(d.get("protocol", 0)))
+			ctx.reply("methods    %d" % int(d.get("rpc_methods", 0)))
+			# The names, because a revision that differs says only THAT it differs, and
+			# the next question is always which method moved.
+			for name in d.get("names", []):
+				ctx.reply("           %s" % str(name)),
+		"Show the signon revision a client has to match."
+	)
+
 	console.command(
 		"stats",
 		func(ctx: DotCmdContext) -> void:
@@ -1019,7 +1037,7 @@ static func _register_modules(server: DotServer, console: DotConsole) -> void:
 	console.command(
 		"module_load",
 		func(ctx: DotCmdContext) -> void:
-			var res := server.modules.load_module(ctx.arg(0))
+			var res: DotResult = await server.modules.load_module(ctx.arg(0))
 			if not res.ok:
 				ctx.reply_error(res)
 				return
@@ -1043,7 +1061,7 @@ static func _register_modules(server: DotServer, console: DotConsole) -> void:
 	console.command(
 		"module_reload",
 		func(ctx: DotCmdContext) -> void:
-			var res := server.modules.reload_module(ctx.arg(0))
+			var res: DotResult = await server.modules.reload_module(ctx.arg(0))
 			if not res.ok:
 				ctx.reply_error(res)
 				return

@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://dotserver0signonrev"]
+
+[ext_resource type="Script" path="res://examples/signon_revision.gd" id="1_sr"]
+
+[node name="SignonRevision" type="Node"]
+script = ExtResource("1_sr")

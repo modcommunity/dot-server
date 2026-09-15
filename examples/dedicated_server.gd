@@ -122,6 +122,8 @@ func _run_selftest() -> void:
 	print("")
 
 	_test_console()
+	_test_console_source()
+	_test_argument_completion()
 	_test_cvar_flags()
 	_test_permissions()
 	_test_config_files()
@@ -173,6 +175,152 @@ func _test_console() -> void:
 
 	console.set_alias("mystatus", "status")
 	_check("alias resolves", _run("mystatus").contains("hostname:"))
+
+
+## A command object of the duck-typed shape, for [method DotConsole.add_source].
+##
+## Deliberately a bare [RefCounted] with nothing of this family on it. The whole point of
+## the hook is that an addon dot-server has never heard of can plug a command in, and a
+## fixture that extended one of ours would prove a narrower thing than the one claimed.
+class ProbeSource:
+	extends RefCounted
+
+	var calls: int = 0
+	var last_line: String = ""
+
+	func names() -> PackedStringArray:
+		return PackedStringArray(["probe", "probe2"])
+
+	func claims(name: String) -> bool:
+		return names().has(name.to_lower())
+
+	func help_for(name: String) -> String:
+		return "probe — a test source" if name == "probe" else ""
+
+	## Whole lines, filtered on the last token. The shape every source of this kind has:
+	## it is handed the line it would execute and answers with lines that could be.
+	func complete(partial: String, _limit: int = 24) -> PackedStringArray:
+		if not partial.begins_with("probe"):
+			return PackedStringArray()
+		var words := partial.split(" ", false)
+		var prefix := "" if partial.ends_with(" ") else words[words.size() - 1]
+		var out := PackedStringArray()
+		for word in ["alpha", "beta"]:
+			if word.begins_with(prefix):
+				out.append("probe " + word)
+		return out
+
+	func execute(line: String) -> DotResult:
+		calls += 1
+		last_line = line
+		if line.contains("fail"):
+			return DotResult.fail(DotError.CODE_INVALID, "the probe refused")
+		if line.contains("lines"):
+			return DotResult.success(PackedStringArray(["one", "two"]))
+		return DotResult.success("probe ran: %s" % line)
+
+
+func _test_console_source() -> void:
+	print("")
+	print("[a duck-typed console source]")
+	var console := server.console
+
+	var source := ProbeSource.new()
+	var added := console.add_source(source, "", true)
+
+	_check("a source registers", added.ok)
+	_check("both of its names are taken",
+		console.find_command("probe") != null and console.find_command("probe2") != null)
+
+	# The reason the hook exists at all: everything downstream treats it as a command.
+	_check("it is in the name list", console.command_names().has("probe"))
+	_check("help_for became the description",
+		console.find_command("probe").description.contains("a test source"))
+	_check("a name with no help still has one",
+		console.find_command("probe2").description != "")
+
+	_check("running it reaches the source", _run("probe status").contains("probe ran"))
+	# The command word travels with the line. Every source of this shape parses its own
+	# first word and answers "not mine" without it, which is the failure this asserts.
+	_check("the whole line is handed over, command word included",
+		source.last_line == "probe status")
+
+	_check("an array result becomes several lines",
+		_run("probe lines").split("\n").size() == 2)
+	_check("a refusal is reported as one", _run("probe fail").contains("refused"))
+
+	# Completion, which is the half that used to have nowhere to arrive.
+	var completions := console.complete("probe al")
+	_check("the source completes its own arguments",
+		completions.size() == 1 and completions[0] == "probe alpha")
+
+	# A source may not take a name somebody already has: two objects answering one word
+	# is a console that runs a different command depending on registration order.
+	var thief := ProbeSource.new()
+	var stolen := console.add_source(thief)
+	_check("a second source cannot steal a name", stolen.ok and PackedStringArray(stolen.value).is_empty())
+	_run("probe status")
+	_check("and the original still answers", thief.calls == 0)
+
+	var refused := console.add_source(RefCounted.new())
+	_check("an object with no execute() is refused", not refused.ok)
+	_check("and null is too", not console.add_source(null).ok)
+
+	console.remove_source(source)
+	_check("remove_source unregisters every name",
+		console.find_command("probe") == null and console.find_command("probe2") == null)
+
+
+func _test_argument_completion() -> void:
+	print("")
+	print("[argument completion]")
+	var console := server.console
+
+	# `DotConCommand.completer` was set by seven builtins and read by nothing: the only
+	# reader was `complete_argument`, which had no callers in this family. These two
+	# assertions are the difference between a completer that exists and one that runs.
+	var seen := PackedStringArray()
+	console.command(
+		"probe_args",
+		func(_ctx: DotCmdContext) -> void: pass,
+		"A command with a completer."
+	).with_completer(
+		func(partial: String, index: int) -> PackedStringArray:
+			seen.append("%d:%s" % [index, partial])
+			if index == 0:
+				return PackedStringArray(["alpha", "amber", "beta"])
+			return PackedStringArray(["second"])
+	)
+
+	var first := console.complete("probe_args ")
+	_check("a trailing space completes the first argument",
+		first.size() == 3 and first[0] == "probe_args alpha")
+	_check("and asks for position 0 with an empty prefix", seen.has("0:"))
+
+	var narrowed := console.complete("probe_args a")
+	_check("a partial token is passed as the prefix", seen.has("0:a"))
+	_check("candidates come back as whole lines",
+		narrowed.size() == 3 and narrowed[1] == "probe_args amber")
+
+	var second := console.complete("probe_args alpha ")
+	_check("the settled arguments are kept in the line",
+		second.size() == 1 and second[0] == "probe_args alpha second")
+	_check("and the position moves on", seen.has("1:"))
+
+	# Nothing that completed before completes differently.
+	_check("a bare word still completes command names",
+		console.complete("probe_arg").has("probe_args"))
+	_check("a command with no completer offers nothing",
+		console.complete("status ").is_empty())
+	_check("an unknown command offers nothing",
+		console.complete("nonsense_xyz ").is_empty())
+
+	console.set_alias("pa", "probe_args")
+	_check("an alias completes as what it stands for",
+		console.complete("pa ").size() == 3)
+
+	console.unregister_command("probe_args")
+	console.remove_alias("pa")
 
 
 func _test_cvar_flags() -> void:
@@ -1046,7 +1194,9 @@ func _on_spawn(_e: DotEvent) -> void:
 
 	DotPaths.write_text("user://example/modules/example.gd", module_source)
 
-	var loaded := server.modules.load_module("user://example/modules/example.gd")
+	var loaded: DotResult = await server.modules.load_module(
+		"user://example/modules/example.gd"
+	)
 	_check("module loaded", loaded.ok)
 
 	if loaded.ok:
@@ -1082,7 +1232,7 @@ func _on_spawn(_e: DotEvent) -> void:
 	)
 	_check(
 		"non-module script refused",
-		not server.modules.load_module("user://example/bad_module.gd").ok
+		not (await server.modules.load_module("user://example/bad_module.gd")).ok
 	)
 
 
