@@ -21,7 +21,9 @@ extends Node
 ##
 ## So: same name as the server's node, same two methods, nothing else.
 
-const CHANNEL := "server.client"
+# No log channel: an RPC shim whose whole job is to match the server's method names. A
+# message is logged, filtered and rate-limited by DotChatManager on the server; what
+# arrives here is handed to DotClientLink.chat_received and is the game's to show.
 
 ## Matches [constant DotTransport.Channel.EVENT] on the server side.
 const CHANNEL_EVENT := 2

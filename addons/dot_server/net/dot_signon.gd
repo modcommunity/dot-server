@@ -51,7 +51,9 @@ extends Object
 ## carrying the revision -- and the client can say so, immediately, instead of waiting
 ## out a timeout for a reason nobody will guess.
 
-const CHANNEL := "server.signon"
+# No log channel: static and pure. explain() builds the error rather than logging it,
+# because the caller holds what the line needs -- DotClientLink logs a mismatch at ERROR
+# with the host it was talking to.
 
 ## Bumped only for a change the method names cannot express.
 ##

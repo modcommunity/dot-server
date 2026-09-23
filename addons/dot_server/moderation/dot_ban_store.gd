@@ -127,7 +127,9 @@ func put(key: String, ban: Dictionary) -> DotResult:
 			"The ban store is read-only.",
 			"bans are managed centrally; add it there"
 		)
-	return await _put(key, ban)
+	var res: DotResult = await _put(key, ban)
+	_report_write("a ban was not recorded", key, res)
+	return res
 
 
 func remove(key: String) -> DotResult:
@@ -135,7 +137,28 @@ func remove(key: String) -> DotResult:
 		return DotResult.fail(
 			DotError.CODE_FORBIDDEN, "The ban store is read-only."
 		)
-	return await _remove(key)
+	var res: DotResult = await _remove(key)
+	_report_write("a ban was not lifted", key, res)
+	return res
+
+
+## Logged here, in the base, because every store's write passes through it and the
+## admin who typed the command is the only one who otherwise hears about it -- in a
+## console that scrolls, on one of the eight servers sharing the list.
+##
+## ERROR: a ban that did not reach a shared store is a player the other servers still
+## let in. Only the backend's own failure; a read-only store refusing is configuration
+## and is said to the admin by the refusal itself. Load and refresh failures are
+## logged by DotBanManager, which knows whether the last good list is still in force.
+func _report_write(what: String, key: String, res: DotResult) -> void:
+	if res == null or res.ok:
+		return
+	DotLog.error(CHANNEL, what, {
+		"store": _store_name(),
+		"key": key,
+		"code": res.code(),
+		"error": res.error.message if res.error != null else "",
+	})
 
 
 func refresh() -> DotResult:
