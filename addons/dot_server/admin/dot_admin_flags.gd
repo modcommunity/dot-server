@@ -16,8 +16,11 @@ extends RefCounted
 ## and equal levels cannot act on each other at all.
 ##
 ## Flags are strings rather than bits so a game can add its own
-## ([code]"slay"[/code], [code]"noclip"[/code], [code]"give_weapon"[/code]) without
-## coordinating with this file or running out of bits.
+## ([code]"give_weapon"[/code], [code]"spawn_npc"[/code]) without coordinating with this
+## file or running out of bits. [constant SLAY] and [constant TELEPORT] started as exactly
+## that kind of game flag and were promoted here once dot-moderation's live tools used them
+## in every game, because a flag every game shares is one an operator's group file should be
+## able to name without a boot-time "unknown flag" warning.
 
 # --- Standard flags --------------------------------------------------------
 
@@ -45,9 +48,22 @@ const CHANGEMAP := "changemap"
 ## Change console variables.
 const CVAR := "cvar"
 
-## Change cheat-flagged console variables. Deliberately distinct from
-## [constant CVAR]: "may adjust the round timer" is not "may turn on noclip".
+## Change cheat-flagged console variables, and use a game's cheats on players: noclip,
+## god mode, setting health, speed and gravity, giving and stripping items. Deliberately
+## distinct from [constant CVAR]: "may adjust the round timer" is not "may turn on noclip".
 const CHEATS := "cheats"
+
+## Act on a player's body without changing the rules: slay, slap, freeze, respawn, rename,
+## burn. The moderator's live toolkit, and not [constant CHEATS] on purpose — freezing a
+## griefer is handling a person, giving somebody a rocket launcher is changing the game,
+## and a community that trusts somebody with the first has not thereby trusted them with
+## the second. dot-moderation's [code]DotModToolCommands[/code] is what checks it.
+const SLAY := "slay"
+
+## Move players: bring, goto, send, return. Separate from [constant SLAY] because
+## teleporting is the power that looks most like cheating from the outside — "an admin
+## moved themselves behind me" — and a community may want it held more narrowly.
+const TELEPORT := "teleport"
 
 ## Execute config files and reload configuration.
 const CONFIG := "config"
@@ -80,7 +96,7 @@ const ADMIN := "admin"
 ## Every flag this addon defines. A game's own flags are simply not in this list.
 const ALL: Array[String] = [
 	ROOT, RESERVATION, GENERIC, KICK, BAN, UNBAN, MUTE, CHANGEMAP,
-	CVAR, CHEATS, CONFIG, RCON, CHAT, VOTE, PASSWORD, MODULES, LOGS, ADMIN,
+	CVAR, CHEATS, SLAY, TELEPORT, CONFIG, RCON, CHAT, VOTE, PASSWORD, MODULES, LOGS, ADMIN,
 ]
 
 ## Human-readable descriptions, for `admin_flags` output.
@@ -94,7 +110,9 @@ const DESCRIPTIONS := {
 	MUTE: "mute and gag players",
 	CHANGEMAP: "change the game or map",
 	CVAR: "change console variables",
-	CHEATS: "change cheat-flagged variables",
+	CHEATS: "change cheat-flagged variables; noclip, god, health, speed, give",
+	SLAY: "slay, slap, freeze, respawn and rename players",
+	TELEPORT: "bring, goto, send and return players",
 	CONFIG: "execute config files",
 	RCON: "use remote console",
 	CHAT: "use admin chat",

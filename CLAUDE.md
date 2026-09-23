@@ -156,9 +156,11 @@ That default was the other way round for most of this family's life, and it was 
 ## Permissions
 
 Flags, not roles, because operators do not agree on what a "moderator" is. Strings,
-not bits, so a game adds `"slay"` or `"noclip"` without coordinating with
+not bits, so a game adds `"give_weapon"` without coordinating with
 `DotAdminFlags` or running out of bits. Unknown flags are **reported, not refused** —
 they are legal for a game and also what a typo looks like.
+
+`slay` and `teleport` began as exactly that kind of game flag and are `DotAdminFlags.SLAY` and `TELEPORT` now, because dot-moderation's live tools (`DotModToolCommands`) use them in every game and a flag every game shares is one a group file must be able to name without an "unknown flag" warning at boot. **`slay` is handling a person** — slay, slap, freeze, respawn, rename — and is a moderator's; **`cheats` is changing the game** — noclip, god, health, speed, gravity, give — and was already documented as "may turn on noclip"; `teleport` is moving people, separate because it is the power that looks most like cheating from outside. Those commands are registered by dot-moderation onto this console, duck-typed, and nothing here names them.
 
 **Immunity is separate from flags** because "may kick" and "may be kicked" are
 different questions. Equal immunity cannot act on equal, which is the rule every
