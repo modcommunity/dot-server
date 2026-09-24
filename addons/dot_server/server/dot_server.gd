@@ -46,6 +46,10 @@ const VERSION := "0.1.0"
 ## Multiplayer channel used for the join handshake and console traffic.
 const CHANNEL_CONTROL := DotTransport.Channel.CONTROL
 
+## Multiplayer channel for [DotNotice]s: reliable and ordered, like chat, and off the
+## control channel so a HUD line never waits behind a content sync.
+const CHANNEL_EVENT := DotTransport.Channel.EVENT
+
 enum State {
 	IDLE,
 	BOOTING,
@@ -69,6 +73,11 @@ signal client_state_changed(session: DotClientSession)
 
 ## Emitted before the game changes, so subsystems can prepare.
 signal game_changing(from_key: String, to_key: String)
+
+## A [DotNotice] went out. [param recipients] is how many clients it was put on the wire
+## for, which is 0 on a server with nobody playing — and a notice nobody received is still
+## one the server meant, so a host that logs or mirrors them hears it either way.
+signal notice_sent(notice: DotNotice, recipients: int)
 
 @export_group("Configuration")
 
@@ -1795,6 +1804,79 @@ func _disconnect_peer(peer_id: int) -> void:
 func broadcast_message(text: String) -> void:
 	if chat != null:
 		chat.broadcast_system(text)
+
+
+## Puts a [DotNotice] on every playing client's HUD. Returns how many it reached.
+##
+## [b]Playing clients only, the same audience as [method broadcast_message].[/b] A client
+## still downloading has no HUD to draw on, and a countdown it hears the end of after it
+## loads is a countdown that has already been wrong for most of its length. A host that
+## wants a late joiner to see a line that is still true resends it from
+## [signal client_spawned], which is where it knows what is still true.
+func broadcast_notice(notice: DotNotice) -> int:
+	if notice == null or notice.is_empty():
+		return 0
+
+	var payload := notice.to_wire()
+	var sent := 0
+
+	for session in playing_sessions():
+		if _put_notice(session, payload):
+			sent += 1
+
+	DotLog.debug(CHANNEL, "notice", {
+		"cue": String(notice.cue),
+		"topic": String(notice.topic),
+		"seconds": notice.seconds,
+		"text": notice.text,
+		"recipients": sent,
+	})
+
+	notice_sent.emit(notice, sent)
+	return sent
+
+
+## Puts a [DotNotice] on one client's HUD. False when it could not be sent.
+func send_notice(session: DotClientSession, notice: DotNotice) -> bool:
+	if notice == null or notice.is_empty() or session == null or not session.is_playing():
+		return false
+
+	var ok := _put_notice(session, notice.to_wire())
+
+	if ok:
+		notice_sent.emit(notice, 1)
+
+	return ok
+
+
+## Whether this session can be sent an RPC right now, and sends it if so.
+##
+## [b]The peer list is asked, not the session's state.[/b] Between a player leaving and the
+## server noticing, `rpc_id` on their id prints an engine error and a backtrace — once per
+## notice, so a one-second countdown fills a log with them. An adopted session has no peer
+## at all. Same test as [method DotChatManager._can_reach], for the same reasons.
+func _put_notice(session: DotClientSession, payload: Dictionary) -> bool:
+	if session == null or session.local or not session.is_active():
+		return false
+
+	if multiplayer == null or multiplayer.multiplayer_peer == null:
+		return false
+
+	if session.peer_id <= 0 or not Array(multiplayer.get_peers()).has(session.peer_id):
+		return false
+
+	_notice.rpc_id(session.peer_id, payload)
+	return true
+
+
+## [b]Adding this pair changed the signon revision.[/b] Godot refuses every RPC between two
+## nodes whose `@rpc` method names differ, so a client built before this existed cannot
+## join a server built after it — and says so, through [DotSignon], rather than timing out.
+## That cost is paid once for a message that carries a dictionary: see [DotNotice] for why
+## no later field needs another.
+@rpc("authority", "reliable", "call_remote", CHANNEL_EVENT)
+func _notice(_payload: Dictionary) -> void:
+	pass
 
 
 ## Sends a message to clients holding a permission flag.

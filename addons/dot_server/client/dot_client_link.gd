@@ -55,6 +55,15 @@ signal disconnected(reason: String)
 
 signal chat_received(payload: Dictionary)
 
+## The server put something on this player's HUD: a line, a countdown, a sound, or the
+## end of one of those. See [DotNotice] for what each field means to a client.
+##
+## [b]The one message the server sends to the APPLICATION rather than to the game on
+## screen.[/b] A game's own wire is the game's and is replaced when the game changes; this
+## is dot-server's, and is how something that outlives a game — a vote for the next one, a
+## restart warning — reaches a player as anything but chat.
+signal notice_received(notice: DotNotice)
+
 ## The browser tab was hidden or shown. Never fires off-web.
 ##
 ## Emitted from a JavaScript listener rather than from a frame, so a handler must be
@@ -178,6 +187,10 @@ var server_game_name: String = ""
 var server_content_id: String = ""
 
 var last_error: DotError = null
+
+## The last [DotNotice] the server sent, for [method describe] and for a HUD built after
+## it arrived. Null until one has.
+var last_notice: DotNotice = null
 
 var _game_root: Node = null
 var _scene_instance: Node = null
@@ -1008,6 +1021,26 @@ func _ensure_chat() -> void:
 	add_child(_chat)
 
 
+# --- Notices ---------------------------------------------------------------
+
+## The server's HUD line, countdown or cue. See [signal notice_received].
+##
+## Decoded through [method DotNotice.from_wire], which defaults and bounds every field:
+## this is a Variant off the wire, and a server one build older or newer may send a shape
+## this one has never seen. A payload that decodes to nothing is dropped here rather than
+## handed to a HUD that would have to ask.
+@rpc("authority", "reliable", "call_remote", CHANNEL_EVENT)
+func _notice(payload: Dictionary) -> void:
+	var notice := DotNotice.from_wire(payload)
+
+	if notice.is_empty():
+		return
+
+	last_notice = notice
+	DotLog.debug(CHANNEL, "notice", notice.describe())
+	notice_received.emit(notice)
+
+
 # --- Disconnection ---------------------------------------------------------
 
 ## The server explaining why it is about to close the connection.
@@ -1059,4 +1092,5 @@ func describe() -> Dictionary:
 		"server": server_hostname,
 		"server_id": server_id,
 		"ping": _ping_ms,
+		"last_notice": last_notice.describe() if last_notice != null else {},
 	}

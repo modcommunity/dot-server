@@ -26,12 +26,23 @@ extends Node
 ##   4. A client meeting a server it cannot match fails with a sentence, immediately,
 ##      instead of waiting out a timeout that blames the network.
 ##
+## And one section for the pair that most recently changed the revision: a [DotNotice]
+## sent over the same real socket arrives whole, on the node the join used. It is here
+## rather than in `dedicated_server` because that suite has no client, and a message whose
+## only failure mode is "the two ends disagree about the RPC set" is not tested by a suite
+## that has one end.
+##
 ## Run:
 ## [codeblock]
 ## godot --headless --path . res://examples/signon_revision.tscn
 ## [/codeblock]
 
 const PORT := 27717
+
+## How many checks a clean run makes. A section that aborts part-way stops adding checks,
+## and the section counter cannot see that when the abort comes after the section
+## announced itself — so the total is asserted too.
+const CHECKS := 40
 
 var _entered := 0
 var _completed := 0
@@ -66,6 +77,7 @@ func _run() -> void:
 
 	if await _boot():
 		if await _test_a_real_join_carries_it():
+			await _test_a_notice_reaches_the_client()
 			_test_a_mismatch_is_refused_at_once()
 
 	_teardown()
@@ -75,6 +87,12 @@ func _run() -> void:
 		_completed == _entered,
 		"every section ran to its last line (%d of %d)" % [_completed, _entered],
 		"a section that aborted stops adding checks and the total cannot show it"
+	)
+
+	_check(
+		_passed + _failed + 1 == CHECKS,
+		"and made every check it has (%d of %d)" % [_passed + _failed + 1, CHECKS],
+		"a check that never ran is not a check that passed"
 	)
 
 	print("")
@@ -285,6 +303,94 @@ func _test_a_real_join_carries_it() -> bool:
 
 	_done()
 	return true
+
+
+# --- 3b. A notice ----------------------------------------------------------
+
+## [b]The pair that changed the revision, driven over the socket the join used.[/b]
+##
+## What can go wrong here is exactly what section 1 exists for — `_notice` on one side and
+## not the other — plus the one thing a dictionary on the wire adds: a field that goes out
+## and does not come back, because the decoder and the encoder disagree about its name or
+## its type. So every field is sent and every field is read back on the far side.
+func _test_a_notice_reaches_the_client() -> void:
+	_section("a notice reaches the client over the socket")
+
+	var received: Array[DotNotice] = []
+	var sent: Array[int] = []
+	_link.notice_received.connect(func(n: DotNotice) -> void: received.append(n))
+	_server.notice_sent.connect(func(_n: DotNotice, count: int) -> void: sent.append(count))
+
+	# [b]The client's `spawned` is not the server's.[/b] The client announces it has
+	# loaded and considers itself in; the server moves the session to SPAWNED when that
+	# announcement arrives, a poll later. A broadcast in between reaches nobody, correctly
+	# -- a notice goes to playing sessions -- and reads as a broken RPC.
+	await _until(func() -> bool: return _server.playing_sessions().size() == 1, 5.0)
+
+	var full := DotNotice.make(
+		&"vote_warning", "A vote for the next game starts in", 10.0, &"game_vote"
+	)
+	var reached := _server.broadcast_notice(full)
+
+	_check(reached == 1, "a broadcast reaches the one playing client (%d)" % reached)
+	_check(
+		sent.size() == 1 and sent[0] == 1,
+		"and the server says so (%s)" % str(sent),
+		"a host that mirrors notices into a log would hear nothing"
+	)
+
+	if not _check(
+		await _until(func() -> bool: return received.size() >= 1, 5.0),
+		"the client hears it",
+		"nothing arrived; if section 1 passed, the RPC is reaching a node without _notice"
+	):
+		_done()
+		return
+
+	var got: DotNotice = received[0]
+	_check(got.cue == &"vote_warning", "with its cue (%s)" % got.cue)
+	_check(
+		got.text == "A vote for the next game starts in",
+		"its text (%s)" % got.text
+	)
+	_check(is_equal_approx(got.seconds, 10.0), "its countdown (%s)" % got.seconds)
+	_check(got.topic == &"game_vote", "and its topic (%s)" % got.topic)
+	_check(_link.last_notice == got, "and the link keeps it for a HUD built afterwards")
+
+	# The two shapes that are not "everything": a cue and nothing else, which must come
+	# back with NO countdown rather than a countdown of zero -- a HUD told "0 seconds" draws
+	# a line that has already run out -- and a clear, which is a topic and nothing else.
+	var session: DotClientSession = _server.playing_sessions()[0]
+	_check(
+		_server.send_notice(session, DotNotice.make(&"vote_count")),
+		"a cue alone can be sent to one session"
+	)
+	_check(
+		_server.send_notice(session, DotNotice.clear(&"game_vote")),
+		"and so can a clear"
+	)
+
+	var both := await _until(func() -> bool: return received.size() >= 3, 5.0)
+
+	if _check(both, "both arrive (%d notices)" % received.size()):
+		var bare := received[1]
+		_check(
+			bare.cue == &"vote_count" and not bare.has_countdown() and bare.text == "",
+			"a bare cue has no countdown and no line (%s)" % str(bare.describe())
+		)
+		_check(
+			received[2].is_clear() and received[2].topic == &"game_vote",
+			"a clear arrives as a clear of its topic (%s)" % str(received[2].describe())
+		)
+
+	# Nothing on it is nothing sent: a HUD that has to decide what an empty notice means
+	# is a HUD with a case nobody wrote.
+	_check(
+		_server.broadcast_notice(DotNotice.new()) == 0,
+		"an empty notice is not sent at all"
+	)
+
+	_done()
 
 
 # --- 4. The mismatch -------------------------------------------------------

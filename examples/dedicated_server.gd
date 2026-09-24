@@ -136,6 +136,7 @@ func _run_selftest() -> void:
 	await _test_ban_source()
 	_test_events()
 	_test_chat_state()
+	_test_notices()
 	_test_chat_commands()
 	_test_guest_identity()
 	await _test_modules()
@@ -1045,6 +1046,94 @@ func _test_admins() -> void:
 
 	_check("admins listed", _run("admins").contains("backbone:alice"))
 	_check("admin_remove", admins.remove_admin("backbone:alice").ok)
+
+
+## [DotNotice]'s wire form, and the server's half with nobody to send to.
+##
+## The half with a client is in `signon_revision`, over a real socket. This is what a
+## socket cannot show: that the decoder survives a payload no server of this build sends —
+## an older one, a newer one, or garbage — because a client is not allowed to raise on a
+## message it did not expect.
+func _test_notices() -> void:
+	print("")
+	print("[notices]")
+
+	var full := DotNotice.make(&"vote_start", "Vote now", 30.0, &"game_vote")
+	var back := DotNotice.from_wire(full.to_wire())
+	_check(
+		"a notice survives its own wire form",
+		back.cue == full.cue and back.text == full.text
+			and is_equal_approx(back.seconds, full.seconds) and back.topic == full.topic
+	)
+
+	# A bare cue is one key. Absent and default decode the same, and a countdown of
+	# zero is NOT what "no countdown" means -- a HUD shows a line that has run out.
+	var bare := DotNotice.make(&"vote_count")
+	_check("a bare cue is one key on the wire", bare.to_wire().size() == 1)
+	_check(
+		"and comes back with no countdown",
+		not DotNotice.from_wire(bare.to_wire()).has_countdown()
+	)
+	_check(
+		"a countdown of zero is still a countdown",
+		DotNotice.make(&"", "go", 0.0).has_countdown()
+	)
+
+	_check("a topic and nothing else is a clear", DotNotice.clear(&"x").is_clear())
+	_check("and a clear is not empty", not DotNotice.clear(&"x").is_empty())
+	_check("a notice with nothing on it is empty", DotNotice.new().is_empty())
+
+	# Bounded, because this is drawn on a HUD: a newline pushes the next line off the
+	# panel and a thousand characters cover the game.
+	var long := DotNotice.make(&"", "line one\nline two" + "x".repeat(500))
+	_check("a line has no control characters", not long.text.contains("\n"))
+	_check("and is bounded", long.text.length() == DotNotice.MAX_TEXT)
+	_check(
+		"a countdown that could not be computed is none, not an hour",
+		not DotNotice.make(&"", "", NAN).has_countdown()
+	)
+	_check(
+		"and one past the ceiling is clamped to it",
+		is_equal_approx(DotNotice.make(&"", "", 1.0e9).seconds, DotNotice.MAX_SECONDS)
+	)
+
+	# The decoder's whole job: a Variant it did not choose. Every one of these must come
+	# back as a notice rather than as a runtime error in a client's RPC handler.
+	_check("a non-dictionary decodes to nothing", DotNotice.from_wire("x").is_empty())
+	_check("so does null", DotNotice.from_wire(null).is_empty())
+	var odd := DotNotice.from_wire({"cue": 7, "text": ["a"], "seconds": "10", "topic": &"t"})
+	_check(
+		"fields of the wrong type are dropped, the rest kept",
+		odd.cue == &"" and odd.text == "" and not odd.has_countdown() and odd.topic == &"t"
+	)
+	_check(
+		"an integer countdown is read as seconds",
+		is_equal_approx(DotNotice.from_wire({"seconds": 5}).seconds, 5.0)
+	)
+	_check(
+		"a field this build has never heard of is ignored",
+		DotNotice.from_wire({"cue": "a", "colour": "red"}).cue == &"a"
+	)
+
+	# The server half with nobody connected. Sent to nobody, and said so: a host mirroring
+	# notices into a log still hears the one it meant.
+	var heard: Array[int] = []
+	var on_sent := func(_n: DotNotice, count: int) -> void: heard.append(count)
+	server.notice_sent.connect(on_sent)
+
+	_check("a broadcast to nobody reaches nobody", server.broadcast_notice(full) == 0)
+	_check("and is still reported", heard.size() == 1 and heard[0] == 0)
+	_check("an empty notice is not even that", server.broadcast_notice(DotNotice.new()) == 0)
+	_check("and is not reported", heard.size() == 1)
+	_check("nothing is sent to no session", not server.send_notice(null, full))
+
+	# An adopted session has no peer. rpc_id at it is an engine error on a path that is
+	# otherwise working, which is how error output stops being read.
+	var adopted := DotClientSession.new()
+	adopted.local = true
+	_check("nor to one with no peer", not server.send_notice(adopted, full))
+
+	server.notice_sent.disconnect(on_sent)
 
 
 func _test_chat_state() -> void:

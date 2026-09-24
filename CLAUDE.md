@@ -120,6 +120,22 @@ An empty revision on either side is never a mismatch: a server older than this c
 
 **The ceiling is deliberately measured in minutes.** While the tab is hidden the server goes on sending to a client that is not reading, and those bytes queue — in a game's own per-peer send, and then in the socket. The longer the grace, the bigger the burst that lands when the player comes back, and the more a parked tab costs everybody still playing. A game that wants to make long graces cheap should gate its replication on `session.backgrounded`; dot-server does not do that for it, because only the game knows what is safe to stop sending.
 
+## Something for the HUD that is not chat: `DotNotice`
+
+`DotServer.broadcast_notice(notice)` and `send_notice(session, notice)` put a line, a countdown and a sound on a playing client's HUD; `DotClientLink.notice_received` is where the client hears it. A `DotNotice` is a cue id (a dot-audio id, typically), an optional line of text, an optional countdown in seconds that the client runs itself, and an optional topic that says which HUD line it replaces — so "10… 9… 8…" is one line changing rather than ten, and a notice carrying a topic and nothing else takes that line down.
+
+**It exists because the application had no way to be told anything but chat.** A client talks to a server over exactly two RPC sets, `DotClientLink`'s and `DotClientChat`'s, and until this the only thing either could carry that a player sees was a chat line. A game's own wire reaches the game, but a server-level vote for the next game is the server's: it outlives every game it changes to, the host running it names no game's classes, and the change it causes replaces the game's wire mid-sentence. So dot-server-deploy's game vote reached players as scrollback only — no countdown on screen, no sound when the ballot opened — and the reason written down beside it was that the fix is an `@rpc` pair here and a new signon revision.
+
+**Generic on purpose, because the next one costs the same.** A cue, seconds, text and a topic cover a restart warning, an operator's announcement and a map vote a game did not wire itself as well as the game vote. A vote-shaped message would be the second pair somebody adds the next time, and every pair added is a revision every shipped client has to be rebuilt for.
+
+**The payload is a dictionary and that is the protocol decision.** The engine's RPC checksum is over method names, so a field added to the dictionary later changes no revision and breaks no client, where a new argument or method breaks all of them. `DotNotice.from_wire` defaults, type-checks and bounds every field — a `Variant` off the wire compared against the wrong type is a runtime error in a client's RPC handler — and an unknown field is ignored rather than refused. A bare cue is one key; a countdown of zero is still a countdown, and "no countdown" is -1, because a HUD told "0 seconds" draws a line that has already run out.
+
+**Playing sessions only**, the same audience as `broadcast_message`, and the peer list is asked before `rpc_id` for the reason `DotChatManager._can_reach` gives: a session whose player just left, or an adopted one with no peer, is an engine error and a backtrace per notice, which at one a second is a log nobody reads again. A client in `DOWNLOADING` has no HUD; a host that wants a late joiner to see a line that is still true resends it from `client_spawned`, which is where it knows what is still true. `notice_sent(notice, recipients)` fires even for zero recipients, so a host mirroring notices into a log hears the one it meant.
+
+**It is on the event channel**, reliable and ordered like chat, and off the control channel so a HUD line never queues behind a content sync.
+
+**Adding it moved the signon revision from `c5c1f679edb5` to `b202b914834e`** (2026-09-24). Nothing was bumped by hand — `DotSignon` derives it — and `PROTOCOL` stays 1, because no existing message changed meaning. A client exported before this meets a server built after it (or the other way round) and is refused at the challenge with *"This server needs a different build of the game client"*; a shell posts `tmc.build.mismatch` to its page. A client older than `DotSignon` itself (before 2026-09-14) has no such check and times out in `AUTHENTICATING` the old way. Rebuild the web and native shells alongside the servers.
+
 ## Console design
 
 **Values are strings.** Every path a cvar value arrives through is textual (a `.cfg`
@@ -680,9 +696,13 @@ find . -name '*.gd' -not -path './.godot/*' | while read f; do
     godot --headless --path . --check-only --script "res://${f#./}"
 done
 
-# 262 checks. Exits non-zero on any failure. (Was 319 before the query
+# 284 checks. Exits non-zero on any failure. (Was 319 before the query
 # protocols and their 95 checks moved to dot-server-query.)
 godot --headless --path . res://examples/dedicated_server.tscn
+
+# 40 checks. The two RPC sets match, the revision is derived, a real join carries it,
+# a DotNotice crosses a real socket whole, and a mismatch is refused in words.
+godot --headless --path . res://examples/signon_revision.tscn
 
 # 41 checks. A real client, a real socket, and a game that is actually DELIVERED:
 # publish a signed pack, changelevel into it, back out, and in again.
@@ -727,6 +747,10 @@ addons/dot_server/
     dot_server.gd            Lifecycle, sessions, handshake RPCs, timeouts, tick.
   client/
     dot_client_link.gd       The client's half. RPC names must match the server.
+    dot_client_chat.gd       The client's chat node, mirroring DotChatManager.
+  net/
+    dot_signon.gd            The RPC set as twelve characters both ends compare.
+    dot_notice.gd            A HUD line, a countdown, a cue. The wire form is here.
   admin/
     dot_admin_flags.gd       Flags + immunity. Why flags, not roles.
     dot_admin_manager.gd     Resolution, merging, pluggable sources.
