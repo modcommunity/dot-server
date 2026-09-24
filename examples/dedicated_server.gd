@@ -27,7 +27,7 @@ const SECTIONS := 23
 ## Every check this suite runs, including the two at the end that compare the counts. The
 ## section counter cannot see a section that aborted after announcing itself — its remaining
 ## checks simply never run — and a total can. See docs/testing.md.
-const CHECKS := 286
+const CHECKS := 287
 
 var _entered := 0
 var _completed := 0
@@ -82,6 +82,14 @@ func _ready() -> void:
 	# Config execution is tested explicitly in _test_config_files().
 	config.startup_config = ""
 	config.autoexec_config = ""
+
+	# [b]A self-test starts from nothing in user://example.[/b] The ban list, the audit log
+	# and the admin file there are read back at boot, and they used to carry over: every
+	# run began with the previous run's permanent address ban already in place, and the
+	# audit log had grown past a quarter of a megabyte. Not when serving — an operator
+	# trying this scene out may want to keep what they did. See docs/testing.md.
+	if _should_selftest():
+		DotPaths.remove_tree("user://example")
 
 	server = DotServer.new()
 	server.name = "Server"
@@ -585,6 +593,8 @@ func _test_bans() -> void:
 	print("")
 	_section("[bans]")
 	var bans := server.bans
+
+	_check("the ban list starts empty, not with a previous run's", bans.count() == 0)
 
 	_check("duration: bare number is minutes", DotBanManager.parse_duration("30") == 1800)
 	_check("duration: 2h", DotBanManager.parse_duration("2h") == 7200)
