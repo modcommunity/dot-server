@@ -27,7 +27,7 @@ const SECTIONS := 23
 ## Every check this suite runs, including the two at the end that compare the counts. The
 ## section counter cannot see a section that aborted after announcing itself — its remaining
 ## checks simply never run — and a total can. See docs/testing.md.
-const CHECKS := 287
+const CHECKS := 290
 
 var _entered := 0
 var _completed := 0
@@ -1132,6 +1132,24 @@ func _test_notices() -> void:
 	var long := DotNotice.make(&"", "line one\nline two" + "x".repeat(500))
 	_check("a line has no control characters", not long.text.contains("\n"))
 	_check("and is bounded", long.text.length() == DotNotice.MAX_TEXT)
+	# The same list chat refuses, because the same client draws both. DEL, a zero-width
+	# space and joiner, a byte-order mark, a right-to-left override and an isolate: every
+	# one of them passed when this stripped only what is below 32.
+	var spoof := DotNotice.make(&"", "a\u007Fb\u200Bc\u200Dd\uFEFFe\u202Ef\u2066g\nh")
+	_check("and none of the characters chat refuses (%s)" % spoof.text.c_escape(), spoof.text == "abcdefg h")
+	# Whether the linear sanitiser is still strip, collapse, then cut — the definition it
+	# replaced — over inputs built to sit on every edge: spaces at the cut, runs that
+	# collapse across a refused character, all-refused text, and limits of 0, 1 and 2.
+	var mismatch := _sanitise_mismatch()
+	_check("the sanitiser is still strip, collapse, then cut%s" % ("" if mismatch == "" else ": " + mismatch),
+		mismatch == "")
+	# A megabyte from a caller that meant a line. Built by `+=` and cut at the end, this
+	# was a copy of the whole string per character kept.
+	var started := Time.get_ticks_msec()
+	var huge := DotNotice.make(&"", "word ".repeat(200000))
+	var took := Time.get_ticks_msec() - started
+	_check("a megabyte is read no further than the line it makes (%d ms)" % took,
+		took < 1000 and huge.text.length() == DotNotice.MAX_TEXT)
 	_check(
 		"a countdown that could not be computed is none, not an hour",
 		not DotNotice.make(&"", "", NAN).has_countdown()
@@ -1179,6 +1197,51 @@ func _test_notices() -> void:
 
 	server.notice_sent.disconnect(on_sent)
 	_done()
+
+
+## `DotChatManager.sanitise` against the definition it replaced, as written before it was
+## made linear: filter, collapse, strip, cut. Empty when every case agrees.
+func _sanitise_mismatch() -> String:
+	var alphabet := ["a", "b", " ", "\n", "\t", "\u007F", "\u200B", "\u202E", "\u0001", "é"]
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 7
+	var cases: Array[String] = ["", " ", "  a  ", "a \u200B b", "\u200B", "ab cd", "ab  ", " \n\t "]
+	for n in 400:
+		var one := PackedStringArray()
+		for k in rng.randi_range(0, 12):
+			one.append(alphabet[rng.randi_range(0, alphabet.size() - 1)])
+		cases.append("".join(one))
+	for raw in cases:
+		for limit in [0, 1, 2, 3, 5, 160]:
+			var got := DotChatManager.sanitise(raw, limit)
+			var want := _sanitise_reference(raw, limit)
+			if got != want:
+				return "%s at %d: got %s, want %s" % [raw.c_escape(), limit, got.c_escape(), want.c_escape()]
+	return ""
+
+
+func _sanitise_reference(raw: String, max_length: int) -> String:
+	var out := ""
+	for i in range(raw.length()):
+		var code := raw.unicode_at(i)
+		if code == 9 or code == 10 or code == 13:
+			out += " "
+			continue
+		if code < 32 or code == 127:
+			continue
+		if code == 0x200B or code == 0x200C or code == 0x200D or code == 0xFEFF:
+			continue
+		if code >= 0x202A and code <= 0x202E:
+			continue
+		if code >= 0x2066 and code <= 0x2069:
+			continue
+		out += raw[i]
+	while out.contains("  "):
+		out = out.replace("  ", " ")
+	out = out.strip_edges()
+	if max_length > 0 and out.length() > max_length:
+		out = out.substr(0, max_length)
+	return out
 
 
 func _test_chat_state() -> void:

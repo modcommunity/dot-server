@@ -215,6 +215,7 @@ error rather than a silent absence of permissions later.
 - **Chat is sanitised before anything else** — control characters, zero-width
   characters and bidirectional overrides are stripped, then whitespace collapsed,
   then truncated. Used to spoof names, hide text and reverse how a message renders.
+  A `DotNotice`'s text goes through the same `DotChatManager.sanitise`, because the same client draws it on the HUD; it stripped only what is below 32 until 2026-09-24, so DEL, the zero-width characters and the overrides refused as chat were drawn as a notice. The sanitiser is linear and stops one character past its limit — it was `+=` per character and cut at the end, quadratic in what a caller sent — and `dedicated_server` checks it against the old strip-collapse-cut definition over 2,448 inputs.
 - **`DotClientLink._resolve_scene` refuses absolute paths from the server** outside
   the content mount. Otherwise a malicious server could tell a client to load
   `res://addons/…` or any scene shipped in the build.
@@ -696,7 +697,7 @@ find . -name '*.gd' -not -path './.godot/*' | while read f; do
     godot --headless --path . --check-only --script "res://${f#./}"
 done
 
-# 287 checks. Exits non-zero on any failure. (Was 319 before the query
+# 290 checks. Exits non-zero on any failure. (Was 319 before the query
 # protocols and their 95 checks moved to dot-server-query.)
 godot --headless --path . res://examples/dedicated_server.tscn
 

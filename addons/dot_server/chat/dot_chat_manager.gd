@@ -459,8 +459,20 @@ func _receive_chat(_payload: Dictionary) -> void:
 ## break UI layout), collapses whitespace, and truncates. Done before length
 ## checking so a message padded with 4000 newlines does not pass a character count
 ## and then render as a wall.
+##
+## [DotNotice] uses it too, for a HUD line: a notice is drawn by the same client that
+## draws chat, and a zero-width or bidi-override character spoofs a line there exactly as
+## it spoofs one here — so there is one list of what is refused, not two that drift.
+##
+## [b]Linear, and it stops reading once it has enough.[/b] It built the result with `+=`
+## one character at a time, which copies the whole string on every append, and then
+## truncated at the end — so its cost grew with the square of what a caller sent rather
+## than with what it kept. The result is the same as strip, collapse, then cut: whitespace
+## collapses as it goes, leading spaces are never kept, and one character past the limit
+## is enough to know whether a trailing space would have survived the strip.
 static func sanitise(raw: String, max_length: int) -> String:
-	var out := ""
+	var out := PackedStringArray()
+	var last_space := true   # so a leading space is dropped, which is strip_edges' left half
 
 	for i in range(raw.length()):
 		var code := raw.unicode_at(i)
@@ -468,8 +480,7 @@ static func sanitise(raw: String, max_length: int) -> String:
 		# Tab and newline become spaces rather than being dropped, so words on
 		# either side do not run together.
 		if code == 9 or code == 10 or code == 13:
-			out += " "
-			continue
+			code = 32
 
 		if code < 32 or code == 127:
 			continue
@@ -483,17 +494,27 @@ static func sanitise(raw: String, max_length: int) -> String:
 		if code >= 0x2066 and code <= 0x2069:
 			continue
 
-		out += raw[i]
+		if code == 32:
+			if last_space:
+				continue
+			last_space = true
+			out.append(" ")
+		else:
+			last_space = false
+			out.append(raw[i])
 
-	while out.contains("  "):
-		out = out.replace("  ", " ")
+		# One past the limit: whatever comes next cannot change the first max_length.
+		if max_length > 0 and out.size() > max_length:
+			break
 
-	out = out.strip_edges()
+	if max_length > 0 and out.size() > max_length:
+		# Cut rather than stripped. A space at the cut is followed by something that is
+		# not one — collapsing guarantees it — so strip-then-cut would have kept it too.
+		out.resize(max_length)
+	elif not out.is_empty() and out[out.size() - 1] == " ":
+		out.resize(out.size() - 1)
 
-	if max_length > 0 and out.length() > max_length:
-		out = out.substr(0, max_length)
-
-	return out
+	return "".join(out)
 
 
 func describe() -> Dictionary:

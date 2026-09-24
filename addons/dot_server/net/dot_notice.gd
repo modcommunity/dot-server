@@ -170,15 +170,14 @@ static func _bounded_id(value: String) -> StringName:
 	return StringName(value.strip_edges().substr(0, MAX_ID))
 
 
-## Control characters are stripped because this is drawn, not logged: a newline in a HUD
-## line pushes the next one off the panel, and the other control characters are the ones
-## [DotChatManager] strips from chat for the same reason.
+## Cleaned by [method DotChatManager.sanitise], because this is drawn, not logged, and
+## drawn by the client that draws chat: a newline in a HUD line pushes the next one off the
+## panel, and a bidi override or a zero-width character spoofs a line on the HUD exactly as
+## it does in chat. This stripped only what is below 32, so DEL, the zero-width characters
+## and the overrides all reached the screen — the same line refused as chat was drawn as a
+## notice.
 static func _bounded_text(value: String) -> String:
-	var out := ""
-	for ch in value:
-		if ch.unicode_at(0) >= 32:
-			out += ch
-	return out.strip_edges().substr(0, MAX_TEXT)
+	return DotChatManager.sanitise(value, MAX_TEXT)
 
 
 ## NaN and infinity become "no countdown" rather than a clamped extreme. A countdown the
