@@ -182,7 +182,13 @@ func _exit_tree() -> void:
 	# -- so `wait_to_finish()` on it would hang the shutdown until somebody pressed
 	# enter, turning ctrl-c into a server that will not stop. Measured: leaving it
 	# costs one "Thread object is being destroyed" warning at exit and the process
-	# still exits 0, which is the better of the two.
+	# still exits 0, which is the better of the two — ON A TERMINAL OR /dev/null. On an
+	# open pipe that is never closed (`sleep 60 | godot ...`, a CI step, a parent that
+	# spawned this with `OS.execute_with_pipe`) it is not: the process prints everything,
+	# its leak report included, and then hangs inside its own exit (Godot 4.7.2). There
+	# is no fix from here, because nothing can cancel the read; a host whose stdin is such
+	# a pipe turns `stdin_console_enabled` off, which is what every game's `dedicated`
+	# suite does for its exit probe's copy.
 	if not _thread.is_alive():
 		_thread.wait_to_finish()
 
