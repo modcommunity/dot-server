@@ -66,6 +66,11 @@ const PORT := 27515
 ## client's content layer, not that anything downloads from it.
 const CONTENT_BASE := "https://content.invalid/content"
 
+## Every check this suite runs, including the one that compares against it. The section
+## counter cannot see a section that aborted after announcing itself — its remaining checks
+## simply never run — and a total can. See docs/testing.md.
+const CHECKS := 46
+
 var _passed := 0
 var _failed := 0
 var _failures := PackedStringArray()
@@ -118,6 +123,11 @@ func _run() -> void:
 		_completed == _entered,
 		"every section ran to its last line (%d of %d)" % [_completed, _entered],
 		"a section that aborted stops adding checks and the total cannot show it"
+	)
+	_check(
+		_passed + _failed + 1 == CHECKS,
+		"every check ran (%d of %d)" % [_passed + _failed + 1, CHECKS],
+		"a section that aborted part-way stops adding checks, and only a total can show it"
 	)
 
 	print("")

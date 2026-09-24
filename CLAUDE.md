@@ -704,7 +704,7 @@ godot --headless --path . res://examples/dedicated_server.tscn
 # a DotNotice crosses a real socket whole, and a mismatch is refused in words.
 godot --headless --path . res://examples/signon_revision.tscn
 
-# 41 checks. A real client, a real socket, and a game that is actually DELIVERED:
+# 46 checks, the last of which compares the total. A real client, a real socket, and a game that is actually DELIVERED:
 # publish a signed pack, changelevel into it, back out, and in again.
 godot --headless --path . res://examples/content_switch.tscn
 
