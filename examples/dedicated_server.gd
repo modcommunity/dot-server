@@ -22,12 +22,12 @@ var server: DotServer
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose.
-const SECTIONS := 23
+const SECTIONS := 24
 
 ## Every check this suite runs, including the two at the end that compare the counts. The
 ## section counter cannot see a section that aborted after announcing itself — its remaining
 ## checks simply never run — and a total can. See docs/testing.md.
-const CHECKS := 290
+const CHECKS := 298
 
 var _entered := 0
 var _completed := 0
@@ -142,6 +142,7 @@ func _run_selftest() -> void:
 	print("")
 
 	_test_console()
+	_test_stdin_console()
 	_test_console_source()
 	_test_argument_completion()
 	_test_cvar_flags()
@@ -249,6 +250,46 @@ class ProbeSource:
 		if line.contains("lines"):
 			return DotResult.success(PackedStringArray(["one", "two"]))
 		return DotResult.success("probe ran: %s" % line)
+
+
+## Which stdin the operator console reads. A reader on a pipe nobody closes cannot be
+## cancelled and keeps the process from exiting, so this very suite, run as `sleep 600 |
+## godot ...`, used to print its totals and then hang until the runner killed it. Only a
+## terminal and a file are read unless a host asks for pipes. The exit itself is checked
+## from outside -- run this scene with an open pipe on stdin and it must exit on its own.
+func _test_stdin_console() -> void:
+	_section("[stdin console]")
+
+	_check("a terminal is read", DotStdinConsole.should_read(OS.STD_HANDLE_CONSOLE, false))
+	_check("a file is read, because it ends",
+		DotStdinConsole.should_read(OS.STD_HANDLE_FILE, false))
+	_check("a pipe is not read by default",
+		not DotStdinConsole.should_read(OS.STD_HANDLE_PIPE, false))
+	_check("nor /dev/null or a socket (UNKNOWN)",
+		not DotStdinConsole.should_read(OS.STD_HANDLE_UNKNOWN, false))
+	_check("a pipe is read when asked",
+		DotStdinConsole.should_read(OS.STD_HANDLE_PIPE, true))
+	_check("no handle is never read, asked or not",
+		not DotStdinConsole.should_read(OS.STD_HANDLE_INVALID, true))
+	_check("pipes are off by default in the config",
+		DotServerConfig.new().stdin_console_pipes == false)
+
+	var console := server.stdin_console
+
+	if console == null:
+		_check("the server built a stdin console", false)
+		return
+
+	var kind := OS.get_stdin_type()
+	var reading: bool = console.describe().get("reading", false)
+
+	# A file may have been read to its end already, so only the refusing side is exact.
+	if DotStdinConsole.should_read(kind, server.config.stdin_console_pipes):
+		_check("this run's stdin (%d) is read or already ended" % kind, true)
+	else:
+		_check("this run's stdin (%d) started no reader" % kind, not reading)
+
+	_done()
 
 
 func _test_console_source() -> void:

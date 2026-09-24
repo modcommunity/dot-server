@@ -40,6 +40,24 @@ const BUFFER := 4096
 ## echoed it in the first place.
 @export var echo: bool = false
 
+## Also read stdin when it is a pipe, a socket or a device, rather than only a terminal
+## or a file.
+##
+## [b]Off, because a reader on a pipe nobody closes makes the process unable to exit.[/b]
+## The read cannot be cancelled (see [method _exit_tree]), and on a terminal or a file
+## that costs one warning at exit -- but on a pipe whose writer stays open (`sleep 600 |
+## godot ...`, a CI step, a supervisor that spawned this with `OS.execute_with_pipe`,
+## `docker run -i` without `-t`) Godot 4.7.2 prints everything, its leak report included,
+## and then hangs inside its own exit. Every suite in the family that booted a server
+## under a runner's pipe hung that way until each turned the whole console off by hand.
+##
+## A terminal is still read, which is the operator at the machine and a panel that
+## attaches one; a regular file is still read (`./server < commands.txt`), because it
+## ends. Turn this on for a supervisor that feeds commands down a pipe -- and close the
+## pipe to stop the server, because nothing else will wake the reader.
+## [member DotServerConfig.stdin_console_pipes] sets it.
+@export var read_pipes: bool = false
+
 var server: DotServer = null
 
 var _thread: Thread = null
@@ -70,6 +88,13 @@ func setup(p_server: DotServer) -> DotResult:
 		})
 		return DotResult.success(false)
 
+	if not should_read(kind, read_pipes):
+		DotLog.info(CHANNEL, "stdin is not a terminal or a file; console input is off", {
+			"stdin": kind,
+			"hint": "set stdin_console_pipes to read a pipe, and close it to stop"
+		})
+		return DotResult.success(false)
+
 	if not DotPlatform.has_threads():
 		# The browser, and any export built without threads. A server does not run
 		# there, but this class must not be the reason a build refuses to load.
@@ -92,6 +117,22 @@ func setup(p_server: DotServer) -> DotResult:
 	})
 
 	return DotResult.success(true)
+
+
+## Whether a stdin of this [method OS.get_stdin_type] is read at all.
+##
+## A terminal and a regular file are: the first is a person, the second ends. A pipe, and
+## UNKNOWN -- which is `/dev/null`, a socket, a character device -- only when asked,
+## because a blocked read on one that never closes keeps the process from exiting. See
+## [member read_pipes]. Static so a suite can check the rule for every kind of handle
+## without having to be started under each.
+static func should_read(kind: int, pipes: bool) -> bool:
+	match kind:
+		OS.STD_HANDLE_CONSOLE, OS.STD_HANDLE_FILE:
+			return true
+		OS.STD_HANDLE_PIPE, OS.STD_HANDLE_UNKNOWN:
+			return pipes
+	return false
 
 
 func _process(_delta: float) -> void:
@@ -182,13 +223,12 @@ func _exit_tree() -> void:
 	# -- so `wait_to_finish()` on it would hang the shutdown until somebody pressed
 	# enter, turning ctrl-c into a server that will not stop. Measured: leaving it
 	# costs one "Thread object is being destroyed" warning at exit and the process
-	# still exits 0, which is the better of the two — ON A TERMINAL OR /dev/null. On an
+	# still exits 0, which is the better of the two — ON A TERMINAL OR A FILE. On an
 	# open pipe that is never closed (`sleep 60 | godot ...`, a CI step, a parent that
 	# spawned this with `OS.execute_with_pipe`) it is not: the process prints everything,
-	# its leak report included, and then hangs inside its own exit (Godot 4.7.2). There
-	# is no fix from here, because nothing can cancel the read; a host whose stdin is such
-	# a pipe turns `stdin_console_enabled` off, which is what every game's `dedicated`
-	# suite does for its exit probe's copy.
+	# its leak report included, and then hangs inside its own exit (Godot 4.7.2). Nothing
+	# here can cancel the read, so [method setup] does not START one on a pipe unless
+	# [member read_pipes] says to -- and whoever says so owns closing the pipe.
 	if not _thread.is_alive():
 		_thread.wait_to_finish()
 
@@ -199,6 +239,7 @@ func describe() -> Dictionary:
 	return {
 		"reading": _thread != null and _thread.is_alive(),
 		"stdin_type": OS.get_stdin_type(),
+		"read_pipes": read_pipes,
 		"queued": _pending.size(),
 		"source": source,
 	}

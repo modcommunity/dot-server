@@ -559,6 +559,7 @@ func _resolve_subsystems() -> void:
 			stdin_ref = DotNodeRef.of_created(&"StdinConsole", DotStdinConsole)
 		stdin_console = _resolve(stdin_ref, "stdin_console") as DotStdinConsole
 		if stdin_console != null:
+			stdin_console.read_pipes = config.stdin_console_pipes
 			var reading := stdin_console.setup(self)
 			if not reading.ok:
 				DotLog.warn(CHANNEL, "the stdin console did not start", {
