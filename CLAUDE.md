@@ -215,7 +215,7 @@ error rather than a silent absence of permissions later.
 - **Chat is sanitised before anything else** — control characters, zero-width
   characters and bidirectional overrides are stripped, then whitespace collapsed,
   then truncated. Used to spoof names, hide text and reverse how a message renders.
-  A `DotNotice`'s text goes through the same `DotChatManager.sanitise`, because the same client draws it on the HUD; it stripped only what is below 32 until 2026-09-24, so DEL, the zero-width characters and the overrides refused as chat were drawn as a notice. The sanitiser is linear and stops one character past its limit — it was `+=` per character and cut at the end, quadratic in what a caller sent — and `dedicated_server` checks it against the old strip-collapse-cut definition over 2,448 inputs.
+  A `DotNotice`'s text goes through the same `DotChatManager.sanitise`, because the same client draws it on the HUD; it stripped only what is below 32 until 2026-09-24, so DEL, the zero-width characters and the overrides refused as chat were drawn as a notice. The sanitiser is linear and stops one character past its limit — it was `+=` per character and cut at the end, quadratic in what a caller sent — and `dedicated_server` checks it against the old strip-collapse-cut definition over 2,448 inputs. **It refuses dot-chat's whole list now (2026-09-24, nightly):** `DotChatManager.is_refused` and `INVISIBLE` are a copy of `DotChatFilter`'s — C1 controls and all twenty-nine invisible code points, where this matched C0 and eleven of them, so the soft hyphen, both directional marks, the word joiner and U+206A-F still reached a HUD line and this server's chat. A copy, because dot-server names no addon; `dedicated_server` writes the list out rather than reading the constant, so the constant shrinking is seen. `DotNotice.to_wire` bounds every field again, because a host that builds a notice with `new()` and assigns `text` skipped `make()`. **BBCode is not escaped on the wire**, deliberately: the shell draws a notice in a plain `Label`, where `[lb]` would be drawn literally; `DotNotice.bbcode_text()` is the one-pass escape for a client that draws it as rich text. Armed: the old list and an unbounded `to_wire` fired three checks.
 - **`DotClientLink._resolve_scene` refuses absolute paths from the server** outside
   the content mount. Otherwise a malicious server could tell a client to load
   `res://addons/…` or any scene shipped in the build.
@@ -697,7 +697,7 @@ find . -name '*.gd' -not -path './.godot/*' | while read f; do
     godot --headless --path . --check-only --script "res://${f#./}"
 done
 
-# 290 checks. Exits non-zero on any failure. (Was 319 before the query
+# 301 checks. Exits non-zero on any failure. (Was 319 before the query
 # protocols and their 95 checks moved to dot-server-query.)
 godot --headless --path . res://examples/dedicated_server.tscn
 

@@ -110,17 +110,46 @@ func is_empty() -> bool:
 ##
 ## Fields at their defaults are left out: the common case — a cue with nothing else — is
 ## then one key, and a field that is absent and a field that is default decode the same.
+##
+## [b]Bounded again here, not only in [method make].[/b] The fields are public, so a host
+## that builds a notice with [code]new()[/code] and assigns [member text] itself skipped
+## every rule — the receiving client cleaned it, but a client is not where the server gets
+## to decide what it sends, and a shell built before a rule was added cleans nothing.
 func to_wire() -> Dictionary:
 	var out := {}
-	if cue != &"":
-		out["cue"] = String(cue)
-	if text != "":
-		out["text"] = text
-	if has_countdown():
-		out["seconds"] = seconds
-	if topic != &"":
-		out["topic"] = String(topic)
+	var c := _bounded_id(String(cue))
+	if c != &"":
+		out["cue"] = String(c)
+	var t := _bounded_text(text)
+	if t != "":
+		out["text"] = t
+	var s := _bounded_seconds(seconds)
+	if s >= 0.0:
+		out["seconds"] = s
+	var p := _bounded_id(String(topic))
+	if p != &"":
+		out["topic"] = String(p)
 	return out
+
+
+## [member text] for a [RichTextLabel] with BBCode on: both brackets escaped in one pass.
+##
+## The wire carries plain text, and the shell draws it in a plain [Label], where an escape
+## would be drawn literally as [code][lb][/code]. A client that draws a notice as rich text
+## is the one that has to escape it, or a server's line — a player's name in a vote line,
+## say — draws its own markup. One pass, not two replaces: `[` to `[lb]` inserts a `]` a
+## second pass would then rewrite, which is dot-chat's [code]escape_bbcode[/code] finding.
+func bbcode_text() -> String:
+	var out := PackedStringArray()
+	for i in text.length():
+		var ch := text[i]
+		if ch == "[":
+			out.append("[lb]")
+		elif ch == "]":
+			out.append("[rb]")
+		else:
+			out.append(ch)
+	return "".join(out)
 
 
 ## Reads a payload, whatever sent it.

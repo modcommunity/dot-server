@@ -25,6 +25,19 @@ const SERVICE := &"dot_chat_manager"
 
 const CHANNEL_EVENT := DotTransport.Channel.EVENT
 
+## Code points [method sanitise] removes outright: zero-width and formatting characters, the
+## directional marks, overrides and isolates, and the byte-order mark. The same list as
+## dot-chat's [code]DotChatFilter.INVISIBLE[/code] — see [method is_refused] for why.
+const INVISIBLE: Array[int] = [
+	0x00AD, 0x061C, 0x180E,
+	0x200B, 0x200C, 0x200D, 0x200E, 0x200F,
+	0x202A, 0x202B, 0x202C, 0x202D, 0x202E,
+	0x2060, 0x2061, 0x2062, 0x2063, 0x2064,
+	0x2066, 0x2067, 0x2068, 0x2069,
+	0x206A, 0x206B, 0x206C, 0x206D, 0x206E, 0x206F,
+	0xFEFF,
+]
+
 ## Emitted after a message is accepted and broadcast.
 signal message_sent(session: DotClientSession, text: String, team_only: bool)
 
@@ -456,7 +469,10 @@ func _receive_chat(_payload: Dictionary) -> void:
 ## Cleans untrusted chat text.
 ##
 ## Strips control characters (which can corrupt a terminal reading the log, and
-## break UI layout), collapses whitespace, and truncates. Done before length
+## break UI layout) and the invisible ones ([method is_refused]), collapses whitespace,
+## and truncates. It does NOT escape BBCode: this text is plain, and the shell draws it in
+## a plain [Label]. Anything that puts it in a [RichTextLabel] with BBCode on escapes it
+## there — [method DotNotice.bbcode_text] is that for a notice. Done before length
 ## checking so a message padded with 4000 newlines does not pass a character count
 ## and then render as a wall.
 ##
@@ -482,16 +498,7 @@ static func sanitise(raw: String, max_length: int) -> String:
 		if code == 9 or code == 10 or code == 13:
 			code = 32
 
-		if code < 32 or code == 127:
-			continue
-
-		# Zero-width and bidirectional-override characters: used to spoof names,
-		# hide text, and reverse how a message renders.
-		if code == 0x200B or code == 0x200C or code == 0x200D or code == 0xFEFF:
-			continue
-		if code >= 0x202A and code <= 0x202E:
-			continue
-		if code >= 0x2066 and code <= 0x2069:
+		if is_refused(code):
 			continue
 
 		if code == 32:
@@ -515,6 +522,25 @@ static func sanitise(raw: String, max_length: int) -> String:
 		out.resize(out.size() - 1)
 
 	return "".join(out)
+
+
+## Whether [method sanitise] drops [param code] outright.
+##
+## C0 and C1 controls and DEL (a NUL or an ESC in a log, a console or a terminal; C1 is a
+## second set of the same, and a single U+0085 is a line break to some renderers), and
+## every code point in [constant INVISIBLE].
+##
+## [b]The same list as dot-chat's [code]DotChatFilter[/code], on purpose.[/b] A client that
+## runs dot-chat draws its lines and this server's notices on one screen, so a character
+## that one refuses and the other passes is a spoof with a choice of route. This refused
+## only the C0 set and eleven of the twenty-nine invisible characters until 2026-09-24 —
+## the soft hyphen, the left-to-right and right-to-left marks, the word joiner and the
+## deprecated format characters all reached a HUD line. Copied rather than imported
+## because dot-server names no other addon; keep the two equal.
+static func is_refused(code: int) -> bool:
+	if code < 32 or code == 127 or (code >= 0x80 and code <= 0x9F):
+		return true
+	return code in INVISIBLE
 
 
 func describe() -> Dictionary:

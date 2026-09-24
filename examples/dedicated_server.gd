@@ -27,7 +27,7 @@ const SECTIONS := 24
 ## Every check this suite runs, including the two at the end that compare the counts. The
 ## section counter cannot see a section that aborted after announcing itself — its remaining
 ## checks simply never run — and a total can. See docs/testing.md.
-const CHECKS := 298
+const CHECKS := 301
 
 var _entered := 0
 var _completed := 0
@@ -1178,6 +1178,41 @@ func _test_notices() -> void:
 	# one of them passed when this stripped only what is below 32.
 	var spoof := DotNotice.make(&"", "a\u007Fb\u200Bc\u200Dd\uFEFFe\u202Ef\u2066g\nh")
 	_check("and none of the characters chat refuses (%s)" % spoof.text.c_escape(), spoof.text == "abcdefg h")
+	# And every one dot-chat's filter refuses, written out here rather than read from the
+	# constant, so that the constant shrinking is something this can see. The C1 controls,
+	# the soft hyphen, both directional marks, the word joiner and the deprecated format
+	# characters all reached a HUD line while this matched only eleven of them.
+	var refused := PackedStringArray()
+	for code in [0x00AD, 0x061C, 0x180E, 0x200B, 0x200C, 0x200D, 0x200E, 0x200F,
+			0x202A, 0x202B, 0x202C, 0x202D, 0x202E, 0x2060, 0x2061, 0x2062, 0x2063, 0x2064,
+			0x2066, 0x2067, 0x2068, 0x2069, 0x206A, 0x206B, 0x206C, 0x206D, 0x206E, 0x206F,
+			0xFEFF]:
+		refused.append(String.chr(code))
+	for code in range(0x80, 0xA0):
+		refused.append(String.chr(code))
+	var every := DotNotice.make(&"", "a" + "".join(refused) + "b")
+	_check("nor any character dot-chat's filter refuses (%s)" % every.text.c_escape(), every.text == "ab")
+	# A host that fills the fields itself skipped make(); the wire form bounds them again,
+	# because what the server sends is the server's to decide, not the receiving client's.
+	var by_hand := DotNotice.new()
+	by_hand.text = "a\u202Eb\u200Fc\nd" + "x".repeat(500)
+	by_hand.topic = StringName("t".repeat(200))
+	by_hand.seconds = INF
+	var sent := by_hand.to_wire()
+	_check(
+		"a notice built by hand is bounded on its way out, not only on its way in",
+		str(sent.get("text", "")).begins_with("abc d") \
+			and str(sent.get("text", "")).length() == DotNotice.MAX_TEXT \
+			and str(sent.get("topic", "")).length() == DotNotice.MAX_ID \
+			and not sent.has("seconds")
+	)
+	# The wire is plain text, drawn by a plain Label; a rich-text client escapes it itself,
+	# and in one pass, or "[a]" comes out as "[lb[rb]a[rb]".
+	var marked := DotNotice.make(&"", "[b]x[/b]")
+	_check(
+		"a line's markup stays text on the wire, and escapes whole for rich text (%s)" % marked.bbcode_text(),
+		marked.text == "[b]x[/b]" and marked.bbcode_text() == "[lb]b[rb]x[lb]/b[rb]"
+	)
 	# Whether the linear sanitiser is still strip, collapse, then cut — the definition it
 	# replaced — over inputs built to sit on every edge: spaces at the cut, runs that
 	# collapse across a refused character, all-refused text, and limits of 0, 1 and 2.
@@ -1243,7 +1278,8 @@ func _test_notices() -> void:
 ## `DotChatManager.sanitise` against the definition it replaced, as written before it was
 ## made linear: filter, collapse, strip, cut. Empty when every case agrees.
 func _sanitise_mismatch() -> String:
-	var alphabet := ["a", "b", " ", "\n", "\t", "\u007F", "\u200B", "\u202E", "\u0001", "é"]
+	var alphabet := ["a", "b", " ", "\n", "\t", "\u007F", "\u200B", "\u202E", "\u0001", "é",
+		"\u0085", "\u200E", "\u00AD", "\u2060"]
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 7
 	var cases: Array[String] = ["", " ", "  a  ", "a \u200B b", "\u200B", "ab cd", "ab  ", " \n\t "]
@@ -1268,13 +1304,13 @@ func _sanitise_reference(raw: String, max_length: int) -> String:
 		if code == 9 or code == 10 or code == 13:
 			out += " "
 			continue
-		if code < 32 or code == 127:
+		if code < 32 or code == 127 or (code >= 0x80 and code <= 0x9F):
 			continue
-		if code == 0x200B or code == 0x200C or code == 0x200D or code == 0xFEFF:
+		if code in [0x00AD, 0x061C, 0x180E, 0xFEFF]:
 			continue
-		if code >= 0x202A and code <= 0x202E:
+		if (code >= 0x200B and code <= 0x200F) or (code >= 0x202A and code <= 0x202E):
 			continue
-		if code >= 0x2066 and code <= 0x2069:
+		if (code >= 0x2060 and code <= 0x2064) or (code >= 0x2066 and code <= 0x206F):
 			continue
 		out += raw[i]
 	while out.contains("  "):
