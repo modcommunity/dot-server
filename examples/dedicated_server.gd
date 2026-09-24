@@ -19,6 +19,18 @@ extends Node
 const SELFTEST_ARG := "--selftest"
 
 var server: DotServer
+## Sections entered against sections that ran to their last line, and against this. A
+## runtime error inside a section aborts that function and nothing says so; a section that
+## bailed out early after a failed guard is counted as not finished on purpose.
+const SECTIONS := 23
+
+## Every check this suite runs, including the two at the end that compare the counts. The
+## section counter cannot see a section that aborted after announcing itself — its remaining
+## checks simply never run — and a total can. See docs/testing.md.
+const CHECKS := 286
+
+var _entered := 0
+var _completed := 0
 var _passed := 0
 var _failed := 0
 
@@ -146,6 +158,15 @@ func _run_selftest() -> void:
 	await _test_rcon_websocket()
 
 	print("")
+	# The two guards, as the last two checks. See docs/testing.md.
+	_check(
+		"every section ran to its last line (%d of %d)" % [_completed, SECTIONS],
+		_completed == _entered and _entered == SECTIONS
+	)
+	_check(
+		"every check ran (%d of %d)" % [_passed + _failed + 1, CHECKS],
+		_passed + _failed + 1 == CHECKS
+	)
 	print("%d passed, %d failed" % [_passed, _failed])
 
 	server.shutdown("self-test complete")
@@ -153,7 +174,7 @@ func _run_selftest() -> void:
 
 
 func _test_console() -> void:
-	print("[console]")
+	_section("[console]")
 	var console := server.console
 
 	_check("status runs", _run("status").contains("hostname:"))
@@ -176,6 +197,7 @@ func _test_console() -> void:
 
 	console.set_alias("mystatus", "status")
 	_check("alias resolves", _run("mystatus").contains("hostname:"))
+	_done()
 
 
 ## A command object of the duck-typed shape, for [method DotConsole.add_source].
@@ -223,7 +245,7 @@ class ProbeSource:
 
 func _test_console_source() -> void:
 	print("")
-	print("[a duck-typed console source]")
+	_section("[a duck-typed console source]")
 	var console := server.console
 
 	var source := ProbeSource.new()
@@ -270,11 +292,12 @@ func _test_console_source() -> void:
 	console.remove_source(source)
 	_check("remove_source unregisters every name",
 		console.find_command("probe") == null and console.find_command("probe2") == null)
+	_done()
 
 
 func _test_argument_completion() -> void:
 	print("")
-	print("[argument completion]")
+	_section("[argument completion]")
 	var console := server.console
 
 	# `DotConCommand.completer` was set by seven builtins and read by nothing: the only
@@ -322,11 +345,12 @@ func _test_argument_completion() -> void:
 
 	console.unregister_command("probe_args")
 	console.remove_alias("pa")
+	_done()
 
 
 func _test_cvar_flags() -> void:
 	print("")
-	print("[cvar flags]")
+	_section("[cvar flags]")
 	var console := server.console
 
 	_check("cvar reads", _run("sv_maxplayers").contains("sv_maxplayers = 16"))
@@ -397,11 +421,12 @@ func _test_cvar_flags() -> void:
 	_check("bool accepts 'true'", cheat.get_bool())
 	cheat.force_set("off")
 	_check("bool accepts 'off'", not cheat.get_bool())
+	_done()
 
 
 func _test_permissions() -> void:
 	print("")
-	print("[permissions]")
+	_section("[permissions]")
 	var console := server.console
 
 	# A caller with no flags must not reach a permissioned command.
@@ -479,11 +504,12 @@ func _test_permissions() -> void:
 			console.execute("whoami", chat_ctx).ok
 		)
 		chat_cvar.set_value("1", {"has_permission": true, "cheats_enabled": true})
+	_done()
 
 
 func _test_config_files() -> void:
 	print("")
-	print("[config files]")
+	_section("[config files]")
 	var console := server.console
 
 	DotPaths.write_text(
@@ -523,11 +549,12 @@ func _test_config_files() -> void:
 		)
 
 	server.console.execute("hostname \"dot-server example\"")
+	_done()
 
 
 func _test_command_buffer() -> void:
 	print("")
-	print("[command buffer]")
+	_section("[command buffer]")
 	var console := server.console
 
 	console.execute("hostname \"before\"")
@@ -551,11 +578,12 @@ func _test_command_buffer() -> void:
 	_check("buffer resumes after wait", console.get_string("hostname") == "waited")
 
 	console.execute("hostname \"dot-server example\"")
+	_done()
 
 
 func _test_bans() -> void:
 	print("")
-	print("[bans]")
+	_section("[bans]")
 	var bans := server.bans
 
 	_check("duration: bare number is minutes", DotBanManager.parse_duration("30") == 1800)
@@ -598,11 +626,12 @@ func _test_bans() -> void:
 	_check("unban unknown reported", not missing.ok)
 
 	_check("banlist runs", _run("banlist").length() > 0)
+	_done()
 
 
 func _test_connection_limits() -> void:
 	print("")
-	print("[per-address connection limit]")
+	_section("[per-address connection limit]")
 
 	var guard := DotAddressGuard.new(2)
 	var in_use := PackedStringArray(["203.0.113.7:51000", "203.0.113.7:51001"])
@@ -683,6 +712,7 @@ func _test_connection_limits() -> void:
 	server.release_session(two.peer_id)
 	server.address_guard.limit = before
 	_run("sv_max_connections_per_ip %d" % before)
+	_done()
 
 
 ## The flags column of a `status` line, or "" when it is empty.
@@ -699,7 +729,7 @@ func _status_flags(session: DotClientSession) -> String:
 
 func _test_background_grace() -> void:
 	print("")
-	print("[background grace]")
+	_section("[background grace]")
 
 	var console := server.console
 	var session := _adopt(9100, "10.0.0.9", "Backgrounder")
@@ -762,11 +792,12 @@ func _test_background_grace() -> void:
 
 	console.execute("sv_background_grace 300")
 	server.release_session(session.peer_id)
+	_done()
 
 
 func _test_targeting() -> void:
 	print("")
-	print("[targeting a player]")
+	_section("[targeting a player]")
 
 	var alpha := _adopt(911, "203.0.113.30:1", "Alpha")
 	var alphabet := _adopt(912, "203.0.113.31:1", "Alphabet")
@@ -825,11 +856,12 @@ func _test_targeting() -> void:
 	server.release_session(alpha.peer_id)
 	server.release_session(alphabet.peer_id)
 	server.release_session(bob.peer_id)
+	_done()
 
 
 func _test_ban_source() -> void:
 	print("")
-	print("[an external ban list: dot-moderation]")
+	_section("[an external ban list: dot-moderation]")
 
 	# Loaded by path and called by duck typing, never by class name: naming
 	# DotModerationManager here would make this whole example fail to parse in a
@@ -948,6 +980,7 @@ func _test_ban_source() -> void:
 	broken.queue_free()
 
 	server.release_session(good.peer_id)
+	_done()
 
 
 ## A session the server did not get from a socket, for tests that need players.
@@ -975,7 +1008,7 @@ func _named(session: DotClientSession, uid: String, username: String) -> void:
 
 func _test_admins() -> void:
 	print("")
-	print("[admins]")
+	_section("[admins]")
 	var admins := server.admins
 
 	_check(
@@ -1046,6 +1079,7 @@ func _test_admins() -> void:
 
 	_check("admins listed", _run("admins").contains("backbone:alice"))
 	_check("admin_remove", admins.remove_admin("backbone:alice").ok)
+	_done()
 
 
 ## [DotNotice]'s wire form, and the server's half with nobody to send to.
@@ -1056,7 +1090,7 @@ func _test_admins() -> void:
 ## message it did not expect.
 func _test_notices() -> void:
 	print("")
-	print("[notices]")
+	_section("[notices]")
 
 	var full := DotNotice.make(&"vote_start", "Vote now", 30.0, &"game_vote")
 	var back := DotNotice.from_wire(full.to_wire())
@@ -1134,11 +1168,12 @@ func _test_notices() -> void:
 	_check("nor to one with no peer", not server.send_notice(adopted, full))
 
 	server.notice_sent.disconnect(on_sent)
+	_done()
 
 
 func _test_chat_state() -> void:
 	print("")
-	print("[chat state]")
+	_section("[chat state]")
 	var chat := server.chat
 
 	_check("a server nobody told carries chat nowhere else", not chat.is_relayed())
@@ -1177,11 +1212,12 @@ func _test_chat_state() -> void:
 
 	chat.watch_relay(null)
 	_check("and clearing it goes back to no", not chat.is_relayed())
+	_done()
 
 
 func _test_events() -> void:
 	print("")
-	print("[events]")
+	_section("[events]")
 	var events := server.events
 
 	var fired := [0]
@@ -1210,6 +1246,7 @@ func _test_events() -> void:
 	_check("get_float coerces an int", is_equal_approx(typed.get_float("f"), 1.0))
 	_check("get_bool coerces 'yes'", typed.get_bool("b"))
 	_check("missing key returns default", typed.get_int("absent", 7) == 7)
+	_done()
 
 
 ## The identity used when dot-auth is absent.
@@ -1219,7 +1256,7 @@ func _test_events() -> void:
 ## only for the people running the simplest setup.
 func _test_guest_identity() -> void:
 	print("")
-	print("[guest identity]")
+	_section("[guest identity]")
 
 	var guest := DotGuestIdentity.from_device("device-abc", "Ada")
 
@@ -1255,11 +1292,12 @@ func _test_guest_identity() -> void:
 	# A guest must never receive admin permissions.
 	server.admins.resolve(session)
 	_check("guest gets no permissions", session.permissions.is_empty())
+	_done()
 
 
 func _test_modules() -> void:
 	print("")
-	print("[modules]")
+	_section("[modules]")
 
 	var module_source := """
 extends DotModule
@@ -1323,11 +1361,12 @@ func _on_spawn(_e: DotEvent) -> void:
 		"non-module script refused",
 		not (await server.modules.load_module("user://example/bad_module.gd")).ok
 	)
+	_done()
 
 
 func _test_audit() -> void:
 	print("")
-	print("[audit]")
+	_section("[audit]")
 	var audit := server.audit
 
 	audit.record("test_action", "tester", "target", {"detail": "value"})
@@ -1352,6 +1391,7 @@ func _test_audit() -> void:
 	_check("permissioned command audited", audit.recent(200).size() > before)
 
 	_check("audit command runs", _run("audit 5").length() > 0)
+	_done()
 
 
 # --- Query -----------------------------------------------------------------
@@ -1384,7 +1424,7 @@ func _run(line: String) -> String:
 ## precisely in the gap between those two, and no assertion in this suite could see it.
 func _test_chat_commands() -> void:
 	print("")
-	print("[chat commands]")
+	_section("[chat commands]")
 
 	var chat := server.chat
 	var console := server.console
@@ -1438,6 +1478,7 @@ func _test_chat_commands() -> void:
 	_check("and nothing ran", ran.is_empty())
 
 	console.command_executed.disconnect(on_run)
+	_done()
 
 
 func _client_context(permissions: PackedStringArray) -> DotCmdContext:
@@ -1451,7 +1492,7 @@ func _client_context(permissions: PackedStringArray) -> DotCmdContext:
 
 
 func _test_rcon_allow_list() -> void:
-	print("[rcon allow-list]")
+	_section("[rcon allow-list]")
 
 	# The allow-list is the control that survives a leaked RCON password, and it
 	# had no executed coverage at all. Driven through the static entry point so
@@ -1524,6 +1565,17 @@ func _test_rcon_allow_list() -> void:
 		rcon._address_allowed("127.0.0.1"))
 	_check("the running RCON server refuses anything else",
 		not rcon._address_allowed("203.0.113.9"))
+	_done()
+
+
+func _section(title: String) -> void:
+	_entered += 1
+	print(title)
+
+
+## A section reached its last line. See [constant SECTIONS].
+func _done() -> void:
+	_completed += 1
 
 
 func _check(what: String, passed: bool) -> void:
@@ -1621,7 +1673,7 @@ func _rcon_auth(peer: StreamPeerTCP, password: String, id: int = 7) -> Array:
 
 func _test_rcon_socket() -> void:
 	print("")
-	print("[rcon over a socket]")
+	_section("[rcon over a socket]")
 
 	var password := server.config.rcon_password
 
@@ -1710,6 +1762,7 @@ func _test_rcon_socket() -> void:
 	await _test_rcon_long_responses(peer)
 
 	peer.disconnect_from_host()
+	_done()
 
 
 ## Long output has to survive being split into several packets.
@@ -1787,7 +1840,7 @@ func _test_rcon_long_responses(peer: StreamPeerTCP) -> void:
 ## covered by nothing at all.
 func _test_rcon_websocket() -> void:
 	print("")
-	print("[rcon over websocket]")
+	_section("[rcon over websocket]")
 
 	var port := server.config.effective_rcon_websocket_port()
 	_check("the websocket port is distinct from the rcon port", port != server.config.effective_rcon_port())
@@ -1885,6 +1938,7 @@ func _test_rcon_websocket() -> void:
 		plain.disconnect_from_host()
 
 	_check("no websocket client is left open", server.rcon.client_count() == 0)
+	_done()
 
 
 ## Opens a WebSocket to the RCON port and pumps frames until it is open.
