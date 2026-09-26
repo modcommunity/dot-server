@@ -13,7 +13,9 @@ extends RefCounted
 ## [code]cvarlist[/code]), because operators already know them and a gratuitously
 ## different name is a lookup every time.
 
-const CHANNEL := "console"
+# No `const CHANNEL`. Each command replies to whoever typed it, and the things an operator
+# wants in a log (a kick, a ban, a map change) are logged by the server and the ban
+# manager these commands call, where every other path to them is logged as well.
 
 
 static func register_all(server: DotServer, console: DotConsole) -> void:
