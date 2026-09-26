@@ -23,8 +23,8 @@ extends Object
 ## This class is that fact, made checkable:
 ##
 ## [codeblock]
-## var rev := DotSignon.revision([DotServer, DotChatManager])       # on the server
-## var rev := DotSignon.revision([DotClientLink, DotClientChat])    # on the client
+## var rev := DotSignon.revision([DotServer])       # on the server
+## var rev := DotSignon.revision([DotClientLink])    # on the client
 ## [/codeblock]
 ##
 ## The two sides run different scripts and must produce the SAME string, because what
@@ -44,6 +44,12 @@ extends Object
 ## so only the names decide. Hashing the modes as well would report an incompatibility
 ## the engine does not have, and send a player to an older build for no reason.
 ##
+## [b]Since 2026-09-26 the revision is the hash of six names that do not change.[/b]
+## Every message is a kind inside [constant ENVELOPE]'s six RPCs, so a feature added on
+## one end moves nothing here; what two builds disagree about is settled by the kinds each
+## advertises -- see [DotEnvelope]. This class is still what catches a build whose
+## ENVELOPE differs, and there should never be another.
+##
 ## [b]The challenge still arrives when the checksum has already failed, which is what
 ## makes this work at all.[/b] The first call to a node goes out by full path; the
 ## checksum failure kills the path CACHE confirmation, not that first call. So a server
@@ -61,7 +67,25 @@ extends Object
 ## a change in what a message MEANS while its name stays put -- a field that changes
 ## type, a challenge that starts requiring something. Nothing has needed it yet, and the
 ## right number of times to have bumped it is zero.
-const PROTOCOL := 1
+##
+## [b]2 since 2026-09-26[/b], when every RPC but six became a kind on [DotEnvelope]. That
+## change moved the revision too, and is the last one that should: the envelope's names
+## are what is hashed now, and a feature is a kind rather than a method. A client that
+## predates it meets a server that sends kinds on RPCs it never declared, and ends at its
+## own signon watchdog ("said nothing") -- the old build's words, which is the best a
+## build that old can do.
+const PROTOCOL := 2
+
+## The six RPC names both ends declare, and the only six. See [DotEnvelope].
+##
+## Written down, unlike everything else here, because it is the one thing that must NOT
+## move: `signon_revision` asserts that [DotServer] and [DotClientLink] declare exactly
+## these, so the commit that adds a seventh fails there rather than locking every shipped
+## client out of every server built after it.
+const ENVELOPE: Array[String] = [
+	"_dot_down", "_dot_down_event", "_dot_down_unreliable",
+	"_dot_up", "_dot_up_event", "_dot_up_unreliable",
+]
 
 ## How much of the hash is shown. Twelve hex characters, matching dot-net's schema hash,
 ## which is the other half of this handshake and is printed beside it.
@@ -70,9 +94,8 @@ const REVISION_LENGTH := 12
 
 ## The signon revision of one side of the connection.
 ##
-## Pass the scripts that carry this side's [code]@rpc[/code] methods -- [DotServer] and
-## [DotChatManager] on a server, [DotClientLink] and [DotClientChat] on a client. Order
-## does not matter; the names are sorted.
+## Pass the scripts that carry this side's [code]@rpc[/code] methods -- [DotServer] on a
+## server, [DotClientLink] on a client. Order does not matter; the names are sorted.
 ##
 ## [b]Scripts rather than nodes, and passed in rather than preloaded.[/b] Preloading
 ## [DotServer] from here would make this file part of a cycle the moment [DotServer]
@@ -144,6 +167,16 @@ static func explain(ours: String, theirs: String) -> DotError:
 		% [theirs, ours]
 		+ "against different versions of dot-server, and Godot will not complete a "
 		+ "join between them"
+	)
+
+
+## The same refusal for a [constant PROTOCOL] that differs: a kind that kept its name and
+## changed its meaning, so the revision alone cannot see it.
+static func explain_protocol(ours: int, theirs: int) -> DotError:
+	return DotError.make(
+		DotError.CODE_UNSUPPORTED,
+		"This server needs a different build of the game client.",
+		"the server speaks signon protocol %d and this client %d" % [theirs, ours]
 	)
 
 

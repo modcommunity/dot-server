@@ -26,6 +26,14 @@ extends Node
 ##   4. A client meeting a server it cannot match fails with a sentence, immediately,
 ##      instead of waiting out a timeout that blames the network.
 ##
+## And, since the RPCs became an envelope (see [DotEnvelope]): the surface is exactly the
+## six names in [constant DotSignon.ENVELOPE], so adding a seventh fails here; and two
+## builds that know different KINDS play together over a real socket -- an older client
+## on a newer server, a newer client on an older server, each ignoring what it has never
+## heard of -- while a kind one end REQUIRES and the other lacks refuses the join in words,
+## in seconds, rather than as a timeout. "Older" is a link or a server with fewer kinds
+## registered, which is exactly what an older build is.
+##
 ## And one section for the pair that most recently changed the revision: a [DotNotice]
 ## sent over the same real socket arrives whole, on the node the join used. It is here
 ## rather than in `dedicated_server` because that suite has no client, and a message whose
@@ -42,7 +50,7 @@ const PORT := 27717
 ## How many checks a clean run makes. A section that aborts part-way stops adding checks,
 ## and the section counter cannot see that when the abort comes after the section
 ## announced itself — so the total is asserted too.
-const CHECKS := 40
+const CHECKS := 68
 
 var _entered := 0
 var _completed := 0
@@ -79,6 +87,10 @@ func _run() -> void:
 		if await _test_a_real_join_carries_it():
 			await _test_a_notice_reaches_the_client()
 			_test_a_mismatch_is_refused_at_once()
+		await _test_an_older_client_on_a_newer_server()
+		await _test_a_newer_client_on_an_older_server()
+		await _test_a_required_kind_the_server_lacks()
+		await _test_a_required_kind_the_client_lacks()
 
 	_teardown()
 
@@ -119,6 +131,26 @@ func _test_the_two_sides_agree() -> void:
 	var server_names := DotSignon.rpc_method_names([DotServer, DotChatManager])
 	var client_names := DotSignon.rpc_method_names([DotClientLink, DotClientChat])
 
+	# [b]The surface is frozen, and this is the check that holds it.[/b] Exactly the six
+	# envelope names on each end, and none at all on the chat pair that used to carry
+	# two of their own: a feature is a kind now, and a seventh method is the protocol
+	# break the envelope exists to end.
+	var frozen := PackedStringArray(DotSignon.ENVELOPE)
+	_check(
+		server_names == frozen,
+		"the server declares exactly the six envelope rpcs",
+		"it declares: %s -- add a kind to DotServer.envelope, not an @rpc" % ", ".join(server_names)
+	)
+	_check(
+		client_names == frozen,
+		"and so does the client",
+		"it declares: %s" % ", ".join(client_names)
+	)
+	_check(
+		DotSignon.rpc_method_names([DotChatManager, DotClientChat]).is_empty(),
+		"and the chat nodes declare none: chat is two kinds now"
+	)
+
 	_check(
 		not server_names.is_empty(),
 		"the server side declares rpc methods (%d)" % server_names.size()
@@ -144,8 +176,7 @@ func _test_the_two_sides_agree() -> void:
 
 	# The consequence, stated as the thing a deployment actually depends on.
 	_check(
-		DotSignon.revision([DotServer, DotChatManager])
-			== DotSignon.revision([DotClientLink, DotClientChat]),
+		DotSignon.revision([DotServer]) == DotSignon.revision([DotClientLink]),
 		"so a client built from this tree can join a server built from it"
 	)
 
@@ -296,9 +327,14 @@ func _test_a_real_join_carries_it() -> bool:
 		return false
 
 	_check(
-		_link.server_signon == DotSignon.revision([DotServer, DotChatManager]),
+		_link.server_signon == DotSignon.revision([DotServer]),
 		"and kept the server's revision (%s)" % _link.server_signon,
 		"the challenge did not carry one, so no browser can read it either"
+	)
+	_check(
+		_link.envelope.knows_peer(1) and _server.envelope.knows_peer(_first_peer()),
+		"and each end has the other's kinds",
+		"the adverts did not ride the challenge and the credentials"
 	)
 
 	_done()
@@ -406,7 +442,7 @@ func _test_a_mismatch_is_refused_at_once() -> void:
 
 	_refused[0] = ""
 
-	_link._request_credentials({
+	_link._on_challenge(1, {
 		"protocol": DotSignon.PROTOCOL,
 		"hostname": "Somewhere Else",
 		"server_id": "",
@@ -441,10 +477,277 @@ func _test_a_mismatch_is_refused_at_once() -> void:
 		"a page cannot offer the right build if the client discarded its name"
 	)
 
+	# The one change names cannot express: the same revision, a different PROTOCOL.
+	var protocol_link := DotClientLink.new()
+	add_child(protocol_link)
+	protocol_link._on_challenge(1, {
+		"protocol": DotSignon.PROTOCOL + 1,
+		"hostname": "Elsewhere",
+		"signon": DotSignon.revision([DotClientLink]),
+	})
+	_check(
+		protocol_link.phase == DotClientLink.Phase.FAILED
+			and protocol_link.last_error != null
+			and protocol_link.last_error.code == DotError.CODE_UNSUPPORTED,
+		"a server on another signon protocol is refused the same way"
+	)
+	protocol_link.queue_free()
+
+	_done()
+
+
+# --- 5. Two builds that know different kinds -------------------------------
+
+## [b]An older client meets a newer server.[/b] The client has never heard of notices or
+## chat lines -- an older build that predates them -- and the server has a kind of its own
+## the client has never heard of. The join must complete, the server must not send what the
+## client does not know, and what arrives anyway must be dropped rather than break
+## anything.
+func _test_an_older_client_on_a_newer_server() -> void:
+	_section("an older client joins a newer server")
+
+	_server.envelope.register(&"skew.server_news")
+
+	var old := _new_link("OldClient", func(link: DotClientLink) -> void:
+		link.envelope.unregister(DotEnvelope.NOTICE)
+		link.envelope.unregister(DotEnvelope.CHAT_LINE)
+	)
+
+	var joined := await _join(old)
+	if not _check(joined == "", "it joins and plays", joined):
+		_server.envelope.unregister(&"skew.server_news")
+		_done()
+		return
+
+	var peer := _peer_of("OldClient")
+	var session: DotClientSession = _server.session_of(peer)
+
+	_check(
+		not _server.envelope.peer_knows(peer, DotEnvelope.NOTICE),
+		"the server knows this client has no notices"
+	)
+	var skipped := _server.envelope.skipped_sends
+	_check(
+		not _server.send_notice(session, DotNotice.make(&"cue", "not for you")),
+		"so a notice to it is not sent"
+	)
+	_check(
+		not _server.send_kind(peer, &"skew.server_news", {"x": 1}, DotEnvelope.Lane.EVENT),
+		"and nor is the newer server's own kind"
+	)
+	_check(
+		_server.envelope.skipped_sends == skipped + 2,
+		"and both are counted as not sent (%d)" % (_server.envelope.skipped_sends - skipped)
+	)
+
+	# Put an unknown kind on the wire anyway, as a server that did not filter would.
+	var dropped := old.envelope.dropped_arrivals
+	_server._dot_down_event.rpc_id(peer, "skew.server_news", {"x": 1})
+	_server._dot_down.rpc_id(peer, String(DotEnvelope.NOTICE), {"cue": "raw"})
+	var ignored := await _until(func() -> bool: return old.envelope.dropped_arrivals >= dropped + 2, 5.0)
+	_check(ignored, "what it has never heard of is dropped on arrival (%d)" % (old.envelope.dropped_arrivals - dropped))
+
+	# And it is still in the game: its heartbeat still reaches the server.
+	old._send_heartbeat()
+	var alive := await _until(func() -> bool: return old.ping_ms() >= 0, 5.0)
+	_check(alive and old.is_playing(), "and it goes on playing (ping %d ms)" % old.ping_ms())
+	_check(
+		session != null and session.is_playing(),
+		"without the server having dropped it"
+	)
+
+	_drop_link(old)
+	_server.envelope.unregister(&"skew.server_news")
+	_done()
+
+
+## [b]A newer client meets an older server.[/b] The client has a kind of its own the server
+## has never heard of, and sends it; the server has no notices (an older build). The join
+## completes and the newer kind is ignored.
+func _test_a_newer_client_on_an_older_server() -> void:
+	_section("a newer client joins an older server")
+
+	_server.envelope.unregister(DotEnvelope.NOTICE)
+
+	var heard := [0]
+	var newer := _new_link("NewClient", func(link: DotClientLink) -> void:
+		link.envelope.register(&"skew.client_news")
+		link.envelope.register(&"skew.server_only_reply", func(_p: int, _d: Dictionary) -> void: heard[0] += 1)
+	)
+
+	var joined := await _join(newer)
+	if not _check(joined == "", "it joins and plays", joined):
+		_server.envelope.register(DotEnvelope.NOTICE)
+		_done()
+		return
+
+	_check(
+		not newer.send_kind(&"skew.client_news", {"hello": true}),
+		"the client does not send the server what it does not know"
+	)
+
+	var dropped := _server.envelope.dropped_arrivals
+	newer._dot_up.rpc_id(1, "skew.client_news", {"hello": true})
+	var ignored := await _until(func() -> bool: return _server.envelope.dropped_arrivals > dropped, 5.0)
+	_check(ignored, "and one that arrives anyway is dropped by the server")
+
+	var session: DotClientSession = _server.session_of(_peer_of("NewClient"))
+	_check(
+		session != null and session.is_playing(),
+		"which goes on serving it"
+	)
+	_check(
+		not newer.envelope.peer_knows(1, DotEnvelope.NOTICE),
+		"and the client knows this server has no notices"
+	)
+
+	_drop_link(newer)
+	_server.envelope.register(DotEnvelope.NOTICE)
+	_done()
+
+
+## [b]A newer client REQUIRES a kind the server does not have.[/b] Refused by the server in
+## words, and quickly -- not left to the auth timeout.
+func _test_a_required_kind_the_server_lacks() -> void:
+	_section("a client that requires a kind this server lacks is refused in words")
+
+	var strict := _new_link("StrictClient", func(link: DotClientLink) -> void:
+		link.envelope.register(&"skew.vital", Callable(), true)
+	)
+
+	var started := Time.get_ticks_msec()
+	var outcome := await _join(strict)
+	var took := (Time.get_ticks_msec() - started) / 1000.0
+
+	_check(outcome != "", "it does not join")
+	_check(
+		strict.phase == DotClientLink.Phase.FAILED,
+		"its phase says it failed (%s)" % DotClientLink.phase_name(strict.phase)
+	)
+	_check(
+		strict.last_error != null and strict.last_error.code == DotError.CODE_VERSION,
+		"as a version problem, not a kick",
+		str(strict.last_error)
+	)
+	_check(
+		outcome == "This server is older than this game client and cannot host it.",
+		"with a sentence a player can act on",
+		outcome
+	)
+	_check(
+		strict.last_error != null and strict.last_error.detail.contains("skew.vital"),
+		"naming the kind where an operator reads it"
+	)
+	_check(took < 5.0, "in %.1f s, not an auth timeout" % took)
+
+	_drop_link(strict)
+	_done()
+
+
+## [b]The server REQUIRES a kind an older client does not have.[/b]
+func _test_a_required_kind_the_client_lacks() -> void:
+	_section("a server that requires a kind this client lacks refuses it in words")
+
+	_server.envelope.register(&"skew.must", Callable(), true)
+
+	var older := _new_link("OlderClient", Callable())
+
+	var started := Time.get_ticks_msec()
+	var outcome := await _join(older)
+	var took := (Time.get_ticks_msec() - started) / 1000.0
+
+	_check(
+		outcome == "This server needs a newer game client.",
+		"refused with a sentence a player can act on",
+		outcome
+	)
+	_check(
+		older.last_error != null and older.last_error.code == DotError.CODE_VERSION
+			and older.last_error.detail.contains("skew.must"),
+		"as a version problem naming the kind",
+		str(older.last_error)
+	)
+	_check(took < 5.0, "in %.1f s" % took)
+	_check(
+		_server.sessions().size() == _playing_before_refusals,
+		"and the server holds no slot for it"
+	)
+
+	_drop_link(older)
+	_server.envelope.unregister(&"skew.must")
 	_done()
 
 
 # --- Harness ---------------------------------------------------------------
+
+var _links: Dictionary = {}
+var _outcomes: Dictionary = {}
+var _playing_before_refusals: int = 0
+
+
+## A client in a subtree of its own, with its own MultiplayerAPI: one socket per link, as
+## one process per client would have. [param configure] edits its envelope before it
+## connects -- that is how it stands in for an older or a newer build.
+func _new_link(label: String, configure: Callable) -> DotClientLink:
+	var root := Node.new()
+	root.name = label
+	add_child(root)
+	get_tree().set_multiplayer(MultiplayerAPI.create_default_interface(), root.get_path())
+
+	var link := DotClientLink.new()
+	link.name = "Server"
+	link.player_name = label
+	root.add_child(link)
+
+	if configure.is_valid():
+		configure.call(link)
+
+	_links[label] = link
+	_outcomes[label] = [false, ""]
+	var outcome: Array = _outcomes[label]
+	link.spawned.connect(func() -> void: outcome[0] = true)
+	link.disconnected.connect(func(reason: String) -> void: outcome[1] = reason)
+	return link
+
+
+## Connects and waits for either end of the join. "" when it spawned; the reason when not.
+func _join(link: DotClientLink) -> String:
+	var outcome: Array = _outcomes[link.player_name]
+	_playing_before_refusals = _server.sessions().size()
+	var connecting: DotResult = await link.connect_to_server("127.0.0.1:%d" % PORT)
+	if not connecting.ok:
+		return "could not connect: %s" % str(connecting.error)
+	var ended := await _until(func() -> bool: return outcome[0] or outcome[1] != "", 8.0)
+	if not ended:
+		return "timed out in %s" % DotClientLink.phase_name(link.phase)
+	if outcome[0]:
+		# The client's `spawned` is not the server's; wait for the server to agree.
+		await _until(func() -> bool: return _server.playing_sessions().size() > _playing_before_refusals - 1, 3.0)
+		return ""
+	return str(outcome[1])
+
+
+func _peer_of(label: String) -> int:
+	for session in _server.sessions():
+		if session.display_name == label:
+			return session.peer_id
+	return 0
+
+
+func _first_peer() -> int:
+	for session in _server.sessions():
+		return session.peer_id
+	return 0
+
+
+func _drop_link(link: DotClientLink) -> void:
+	if link == null:
+		return
+	link.disconnect_from_server()
+	var root := link.get_parent()
+	if root != null:
+		root.queue_free()
+	await get_tree().process_frame
 
 func _missing_from(these: PackedStringArray, those: PackedStringArray) -> PackedStringArray:
 	var out := PackedStringArray()
@@ -485,6 +788,10 @@ func _until(predicate: Callable, seconds: float = 10.0) -> bool:
 
 
 func _teardown() -> void:
+	for label in _links:
+		var l: Variant = _links[label]
+		if is_instance_valid(l):
+			(l as DotClientLink).disconnect_from_server()
 	if _link != null:
 		_link.disconnect_from_server()
 	if _server != null:

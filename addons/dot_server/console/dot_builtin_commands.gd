@@ -154,15 +154,23 @@ static func _register_status(server: DotServer, console: DotConsole) -> void:
 	console.command(
 		"signon",
 		func(ctx: DotCmdContext) -> void:
-			var d := DotSignon.describe([DotServer, DotChatManager])
+			var d := DotSignon.describe([DotServer])
 			ctx.reply("revision   %s" % str(d.get("revision", "")))
 			ctx.reply("protocol   %d" % int(d.get("protocol", 0)))
 			ctx.reply("methods    %d" % int(d.get("rpc_methods", 0)))
 			# The names, because a revision that differs says only THAT it differs, and
 			# the next question is always which method moved.
 			for name in d.get("names", []):
-				ctx.reply("           %s" % str(name)),
-		"Show the signon revision a client has to match."
+				ctx.reply("           %s" % str(name))
+			# And the kinds, which are what actually changes between builds now: which
+			# this server knows, which a client must know, and what it has dropped.
+			var env := server.envelope.describe()
+			ctx.reply("kinds      %d (%d required), %d not sent, %d dropped" % [
+				int(env["kinds"]), int(env["required"]),
+				int(env["skipped_sends"]), int(env["dropped_arrivals"]),
+			])
+			ctx.reply_lines(server.envelope.describe_lines()),
+		"Show the signon revision and the kinds a client has to match."
 	)
 
 	console.command(

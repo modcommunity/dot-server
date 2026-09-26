@@ -104,9 +104,11 @@ Three things about it are load-bearing and none of them errors:
 
 Any heartbeat clears the flag, whatever the client last announced: a heartbeat is proof that the loop is running, and a session left flagged would keep a grace it no longer needs.
 
+**Adding an `@rpc` to this pair WAS a protocol break, and that is why there are six and there will never be a seventh** — see *The RPC surface is frozen* below. What follows is the history that forced it.
+
 **Adding an `@rpc` to this pair is a protocol break, and it announces itself badly.** Godot checksums a node's RPC methods and refuses to confirm a path when the two ends disagree, so a client built before `client_visibility` existed meets a server built after it with *"The rpc node checksum failed. Make sure to have the same methods on both nodes."* — and then sits in `AUTHENTICATING` until it is timed out, because the path it needs to reply on was never confirmed. Neither end says "version mismatch"; the server reports a client that would not answer its challenge. Observed while testing this change against a stale exported client. `DotServer` and `DotClientLink` must gain and lose RPC methods **together**, and every shipped client has to be rebuilt alongside the servers it will meet — which for this platform means re-exporting the web shell and the native builds, not only restarting the servers.
 
-**`DotSignon` is that break made checkable, and none of it is written down by hand.** `DotSignon.revision([DotServer, DotChatManager])` on a server and `DotSignon.revision([DotClientLink, DotClientChat])` on a client hash the sorted `@rpc` method names out of `Script.get_rpc_config()` — the same declaration Godot itself checksums, so the answer cannot drift from the engine's. The two sides run different scripts and must produce the **same** twelve characters; `examples/signon_revision.tscn` asserts exactly that, which is the check that fails on the commit rather than on the deployment.
+**`DotSignon` is that break made checkable, and none of it is written down by hand.** `DotSignon.revision([DotServer])` on a server and `DotSignon.revision([DotClientLink])` on a client hash the sorted `@rpc` method names out of `Script.get_rpc_config()` — the same declaration Godot itself checksums, so the answer cannot drift from the engine's. The two sides run different scripts and must produce the **same** twelve characters; `examples/signon_revision.tscn` asserts exactly that, which is the check that fails on the commit rather than on the deployment.
 
 Three things carry it, and each answers a different person's question:
 
@@ -119,6 +121,22 @@ An empty revision on either side is never a mismatch: a server older than this c
 **What is hashed is method names and nothing else.** Two nodes whose methods differ only in transfer mode or channel talk perfectly — the RPC id is an index into the sorted names — so hashing the modes would report an incompatibility the engine does not have and send a player to an older build for nothing.
 
 **The ceiling is deliberately measured in minutes.** While the tab is hidden the server goes on sending to a client that is not reading, and those bytes queue — in a game's own per-peer send, and then in the socket. The longer the grace, the bigger the burst that lands when the player comes back, and the more a parked tab costs everybody still playing. A game that wants to make long graces cheap should gate its replication on `session.backgrounded`; dot-server does not do that for it, because only the game knows what is safe to stop sending.
+
+## The RPC surface is frozen: `DotEnvelope`
+
+**Since 2026-09-26 `DotServer` and `DotClientLink` declare exactly six `@rpc` methods and nothing else in this addon declares any** — `_dot_down`, `_dot_down_unreliable`, `_dot_down_event` from the server, `_dot_up*` from the client, one per lane (reliable control, unreliable control, reliable event). Each carries a **kind** (a string) and a Dictionary. Everything that used to be a method is a kind: `signon.challenge`, `signon.credentials`, `signon.disconnect`, `content.sync`, `content.progress`, `content.ready`, `game.load`, `game.loaded`, `heartbeat`, `heartbeat.ack`, `ping`, `visibility`, `notice`, `chat.line`, `chat.submit`. `DotChatManager` and `DotClientChat` declare none; chat is the last two.
+
+**Why.** The engine refuses every RPC between two nodes whose method-name sets differ, so every feature this addon grew as an RPC pair locked every shipped client out of every server built after it — `_notice` did exactly that two days before this change. A server one release ahead of its clients could host none of them, and the goal is the opposite: *servers should be able to run mismatched versions of the dot addons, assuming the API is the same.* The six names are what Godot checksums and what `DotSignon` hashes, so the revision now moves only if the envelope itself changes. `DotSignon.ENVELOPE` writes the six down — the one list in this addon that is written by hand, because it is the one thing that must not move — and `signon_revision` fails on the commit that adds a seventh, naming it and saying "add a kind".
+
+**Each end advertises what it knows, and the server decides.** The challenge carries `kinds: {kinds, required}`; the credentials answer with the client's. A kind is *known* if an end handles it or sends it. A kind the peer does not know is **not sent** (`send_kind` returns false, counted in `skipped_sends`, one DEBUG line per peer and kind); one that arrives with no handler is **dropped** (`dropped_arrivals`, same). A kind either end marks **required** that the other lacks refuses the join **at the credentials, before the password is looked at**, with `DotEnvelope.explain`'s sentence — *"This server needs a newer game client."* or *"This server is older than this game client and cannot host it."* — as `CODE_VERSION`, carried in the `signon.disconnect` payload with its detail so a shell can tell it from a kick. The server decides rather than the client because it is the end that admits people and the end whose log an operator reads; a client that refused on its own would leave the server with a socket that closed and no reason. The core kinds needed to complete a join are required (`DotEnvelope.CORE_REQUIRED`); every feature — notices, chat, ping, visibility, progress — is optional, so an older peer loses the feature and keeps the game.
+
+**Adding a feature is `server.envelope.register(&"mything", handler, required)` plus `server.send_kind(peer, &"mything", {...}, lane)`, and the same on `link.envelope` / `link.send_kind`.** Payloads are Dictionaries and change only by adding a field; every handler reads through `DotEnvelope.number` / `text` / `flag`, which default a field an older peer did not send and ignore a type a newer one changed. A change that cannot be an addition is a new kind.
+
+**This was the last coordinated protocol break.** `DotSignon.PROTOCOL` is 2 and the revision moved once more. A client exported before it meets a server built after it and is sent kinds on RPCs it never declared, so it ends at its own signon watchdog — "said nothing" — which is the best words a build that old has. Every web and native shell has to be re-exported once, alongside the servers; after that, neither should need to be for a new dot-server feature. `PROTOCOL` stays for the one change names cannot express: a kind that keeps its name and changes its meaning, which the client refuses in the same words as a revision mismatch.
+
+**A reason reaches the client whoever sends it.** `_disconnect_peer` used to defer the close by one call, which delivered a reason sent from inside an RPC handler and lost one sent from anywhere else — a module's kick, a game's netcode refusing a client — because the client read the data and the close in one poll and a closing connection drops what it has not handed up. `_close_peer` now flushes and closes `CLOSE_GRACE_SEC` (0.25 s) later; the session is gone by then, so nothing the peer sends meanwhile is handled. Found by dot-server-deploy's `smash_client`; `kick` also takes the `DotError` it is for now, so a client dropped for a mismatch reads `CODE_VERSION` rather than a moderator's kick.
+
+`signon_revision` proves it over a real socket: an older client (no notices, no chat lines) on a newer server with a kind of its own, joining, playing and dropping what it never heard of; a newer client on an older server (no notices); and a kind each end requires and the other lacks, refused in words in well under a second. Every check armed: a seventh `@rpc`, an `adopt` that never refuses, and a `should_send` that never filters each fail it.
 
 ## Something for the HUD that is not chat: `DotNotice`
 
@@ -134,7 +152,7 @@ An empty revision on either side is never a mismatch: a server older than this c
 
 **It is on the event channel**, reliable and ordered like chat, and off the control channel so a HUD line never queues behind a content sync.
 
-**Adding it moved the signon revision from `c5c1f679edb5` to `b202b914834e`** (2026-09-24). Nothing was bumped by hand — `DotSignon` derives it — and `PROTOCOL` stays 1, because no existing message changed meaning. A client exported before this meets a server built after it (or the other way round) and is refused at the challenge with *"This server needs a different build of the game client"*; a shell posts `tmc.build.mismatch` to its page. A client older than `DotSignon` itself (before 2026-09-14) has no such check and times out in `AUTHENTICATING` the old way. Rebuild the web and native shells alongside the servers.
+**Adding it moved the signon revision from `c5c1f679edb5` to `b202b914834e`** (2026-09-24) — the last feature that ever will: it is the `notice` kind now, optional, and a client without it is simply not sent one. Nothing was bumped by hand — `DotSignon` derives it — and `PROTOCOL` stays 1, because no existing message changed meaning. A client exported before this meets a server built after it (or the other way round) and is refused at the challenge with *"This server needs a different build of the game client"*; a shell posts `tmc.build.mismatch` to its page. A client older than `DotSignon` itself (before 2026-09-14) has no such check and times out in `AUTHENTICATING` the old way. Rebuild the web and native shells alongside the servers.
 
 ## Console design
 
@@ -701,8 +719,10 @@ done
 # protocols and their 95 checks moved to dot-server-query.)
 godot --headless --path . res://examples/dedicated_server.tscn
 
-# 40 checks. The two RPC sets match, the revision is derived, a real join carries it,
-# a DotNotice crosses a real socket whole, and a mismatch is refused in words.
+# 68 checks. The surface is exactly the six envelope RPCs, the revision is derived, a real
+# join carries it and both adverts, a DotNotice crosses a real socket whole, a mismatch is
+# refused in words, and two builds that know different kinds play together -- or are
+# refused in words when one lacks a kind the other requires.
 godot --headless --path . res://examples/signon_revision.tscn
 
 # 46 checks, the last of which compares the total. A real client, a real socket, and a game that is actually DELIVERED:
@@ -735,6 +755,7 @@ caught.
 
 ```
 addons/dot_server/
+  dot_server_api.gd          API level; see dot-core's DotAddonApi.
   console/
     dot_convar.gd            Values as strings; flags enforced here.
     dot_concommand.gd        Permission, arg bounds, rcon/chat opt-in.
@@ -745,12 +766,13 @@ addons/dot_server/
     dot_server_config.gd     Boot config. validate() enforces the invariants.
     dot_client_session.gd    The signon state machine. Read this one.
     dot_guest_identity.gd    Stand-in identity when dot-auth is absent.
-    dot_server.gd            Lifecycle, sessions, handshake RPCs, timeouts, tick.
+    dot_server.gd            Lifecycle, sessions, the six envelope RPCs, timeouts, tick.
   client/
-    dot_client_link.gd       The client's half. RPC names must match the server.
-    dot_client_chat.gd       The client's chat node, mirroring DotChatManager.
+    dot_client_link.gd       The client's half. The same six RPCs, the other ends' kinds.
+    dot_client_chat.gd       The client's chat node. Sends `chat.submit`; declares no RPC.
   net/
-    dot_signon.gd            The RPC set as twelve characters both ends compare.
+    dot_envelope.gd          Kinds, adverts, required/optional, and the refusal sentence.
+    dot_signon.gd            The six RPC names as twelve characters both ends compare.
     dot_notice.gd            A HUD line, a countdown, a cue. The wire form is here.
   admin/
     dot_admin_flags.gd       Flags + immunity. Why flags, not roles.

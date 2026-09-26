@@ -50,6 +50,10 @@ const CHANNEL_CONTROL := DotTransport.Channel.CONTROL
 ## control channel so a HUD line never waits behind a content sync.
 const CHANNEL_EVENT := DotTransport.Channel.EVENT
 
+## Seconds between telling a peer why it is being disconnected and closing its socket. See
+## [method _close_peer].
+const CLOSE_GRACE_SEC := 0.25
+
 enum State {
 	IDLE,
 	BOOTING,
@@ -200,6 +204,15 @@ var _warned_about_ban_source: bool = false
 var address_guard: DotAddressGuard = null
 
 var _sweep_accum: float = 0.0
+
+## The kinds this server knows, and what each client it has heard from knows. See
+## [DotEnvelope] for why every message is a kind on six fixed RPCs.
+##
+## [b]A game or a module adds a kind here[/b] rather than an [code]@rpc[/code]: an
+## [code]@rpc[/code] on this node would move the signon revision and lock out every client
+## built before it, where a kind reaches the clients that know it and is not sent to the
+## ones that do not.
+var envelope: DotEnvelope = _make_envelope()
 
 
 func _ready() -> void:
@@ -747,10 +760,11 @@ func _on_peer_connected(peer_id: int) -> void:
 
 	# Ask the client to identify itself. Everything from here is driven by the
 	# client's reply or by the auth timeout.
-	_request_credentials.rpc_id(peer_id, _handshake_challenge(session))
+	send_kind(peer_id, DotEnvelope.CHALLENGE, _handshake_challenge(session))
 
 
 func _on_peer_disconnected(peer_id: int) -> void:
+	envelope.forget(peer_id)
 	var session: DotClientSession = _sessions.get(peer_id)
 	if session == null:
 		return
@@ -1182,6 +1196,83 @@ func resolve_target(
 	return DotResult.success(session)
 
 
+# --- The envelope ---------------------------------------------------------
+
+func _make_envelope() -> DotEnvelope:
+	var env := DotEnvelope.new()
+	env.register_core()
+	env.handle(DotEnvelope.CREDENTIALS, _on_credentials)
+	env.handle(DotEnvelope.CONTENT_PROGRESS, _on_content_progress)
+	env.handle(DotEnvelope.CONTENT_READY, _on_content_ready)
+	env.handle(DotEnvelope.LOADED, _on_loaded)
+	env.handle(DotEnvelope.HEARTBEAT, _on_heartbeat)
+	env.handle(DotEnvelope.PING, _on_ping)
+	env.handle(DotEnvelope.VISIBILITY, _on_visibility)
+	env.handle(DotEnvelope.CHAT_SUBMIT, _on_chat_submit)
+	return env
+
+
+## Sends a kind to one client. False when it was not sent: no peer, or a client that does
+## not know the kind -- which is not an error, it is what an older client looks like.
+##
+## [b]The only way anything in dot-server reaches a client.[/b] Six RPCs carry everything,
+## and choosing among them is choosing a [enum DotEnvelope.Lane]; see [DotEnvelope].
+func send_kind(
+	peer_id: int,
+	kind: StringName,
+	payload: Dictionary = {},
+	lane: DotEnvelope.Lane = DotEnvelope.Lane.CONTROL
+) -> bool:
+	if peer_id <= 0 or multiplayer == null or multiplayer.multiplayer_peer == null:
+		return false
+	if not envelope.should_send(peer_id, kind):
+		return false
+
+	match lane:
+		DotEnvelope.Lane.UNRELIABLE:
+			_dot_down_unreliable.rpc_id(peer_id, String(kind), payload)
+		DotEnvelope.Lane.EVENT:
+			_dot_down_event.rpc_id(peer_id, String(kind), payload)
+		_:
+			_dot_down.rpc_id(peer_id, String(kind), payload)
+	return true
+
+
+## [b]The six RPCs, and the only six this node will ever declare.[/b] Server to client on
+## the `_dot_down` three, client to server on the `_dot_up` three; one per lane. Their
+## NAMES are what Godot checksums and [DotSignon] hashes. Adding a seventh is a protocol
+## break for every shipped client -- add a kind to [member envelope] instead.
+## `signon_revision` fails on the commit that adds one.
+@rpc("authority", "reliable", "call_remote", CHANNEL_CONTROL)
+func _dot_down(_kind: Variant, _payload: Variant) -> void:
+	pass
+
+
+@rpc("authority", "unreliable", "call_remote", CHANNEL_CONTROL)
+func _dot_down_unreliable(_kind: Variant, _payload: Variant) -> void:
+	pass
+
+
+@rpc("authority", "reliable", "call_remote", CHANNEL_EVENT)
+func _dot_down_event(_kind: Variant, _payload: Variant) -> void:
+	pass
+
+
+@rpc("any_peer", "reliable", "call_remote", CHANNEL_CONTROL)
+func _dot_up(kind: Variant, payload: Variant) -> void:
+	envelope.dispatch(multiplayer.get_remote_sender_id(), kind, payload)
+
+
+@rpc("any_peer", "unreliable", "call_remote", CHANNEL_CONTROL)
+func _dot_up_unreliable(kind: Variant, payload: Variant) -> void:
+	envelope.dispatch(multiplayer.get_remote_sender_id(), kind, payload)
+
+
+@rpc("any_peer", "reliable", "call_remote", CHANNEL_EVENT)
+func _dot_up_event(kind: Variant, payload: Variant) -> void:
+	envelope.dispatch(multiplayer.get_remote_sender_id(), kind, payload)
+
+
 # --- Handshake -------------------------------------------------------------
 
 func _handshake_challenge(session: DotClientSession) -> Dictionary:
@@ -1197,7 +1288,11 @@ func _handshake_challenge(session: DotClientSession) -> Dictionary:
 		# It rides on the challenge because the challenge is the one message that still
 		# arrives after the checksum has failed: the first call to a node goes by full
 		# path, and it is the path CACHE that the checksum refuses to confirm.
-		"signon": DotSignon.revision([DotServer, DotChatManager]),
+		"signon": DotSignon.revision([DotServer]),
+		# [b]Everything this server can say and hear, and which of it a client must know.[/b]
+		# The client answers with its own; the server compares them when the answer arrives
+		# and refuses a pair that cannot play, with a sentence. See [DotEnvelope].
+		"kinds": envelope.advert(),
 		"hostname": _cv_hostname.get_string(),
 		"server_id": config.server_id,
 		"needs_password": _cv_password.get_string() != "",
@@ -1217,23 +1312,13 @@ func _auth_strategy_name() -> String:
 	return "unknown"
 
 
-## Asks a client to identify itself.
-@rpc("authority", "reliable", "call_remote", CHANNEL_CONTROL)
-func _request_credentials(_challenge: Dictionary) -> void:
-	# Server-side stub. The implementation lives on the client; declaring it here
-	# is what lets Godot's RPC layer route the call.
-	pass
-
-
 ## A client's answer to the challenge.
 ##
 ## The one unauthenticated entry point, so everything it touches is bounded: the
 ## payload is validated field by field, the password comparison is constant-time,
 ## and a failure closes the connection rather than allowing another attempt on the
 ## same peer.
-@rpc("any_peer", "reliable", "call_remote", CHANNEL_CONTROL)
-func submit_credentials(payload: Dictionary) -> void:
-	var peer_id := multiplayer.get_remote_sender_id()
+func _on_credentials(peer_id: int, payload: Dictionary) -> void:
 	var session: DotClientSession = _sessions.get(peer_id)
 
 	if session == null:
@@ -1247,6 +1332,21 @@ func submit_credentials(payload: Dictionary) -> void:
 			"credentials submitted in the wrong state",
 			{"userid": session.userid, "state": session.state_name()}
 		)
+		return
+
+	# [b]First, before a password or a ticket is looked at.[/b] A client that cannot play
+	# with this server should be told so in words, and told before it is asked for anything
+	# else -- a player who typed the right password into a client one release too old
+	# should read "needs a newer game client", not wait out an auth timeout.
+	var compatible := envelope.adopt(peer_id, payload.get("kinds"), true)
+	if not compatible.ok:
+		DotLog.info(CHANNEL, "client refused: it cannot speak this server's protocol", {
+			"userid": session.userid,
+			"from": session.address,
+			"why": compatible.error.message,
+			"detail": compatible.error.detail,
+		})
+		_reject_session(session, compatible.error.message, compatible.error)
 		return
 
 	var requested_name := str(payload.get("name", "")).strip_edges()
@@ -1420,7 +1520,7 @@ func _advance_to_content(session: DotClientSession) -> void:
 	session.content_progress = 0.0
 	client_state_changed.emit(session)
 
-	_begin_content_sync.rpc_id(session.peer_id, content_sync_info(
+	send_kind(session.peer_id, DotEnvelope.CONTENT_SYNC, content_sync_info(
 		manifest_url,
 		# Documented on the descriptor since the first version and sent by nothing,
 		# so a game that named optional groups had every client fetch only the
@@ -1459,34 +1559,24 @@ func content_sync_info(
 	}
 
 
-@rpc("authority", "reliable", "call_remote", CHANNEL_CONTROL)
-func _begin_content_sync(_info: Dictionary) -> void:
-	pass
-
-
 ## A client reporting content-sync progress.
 ##
 ## Progress is advisory — it drives `status` output and nothing else — so it is
 ## clamped rather than validated. A client that lies about it only lies about a
 ## number an admin sees.
-@rpc("any_peer", "reliable", "call_remote", CHANNEL_CONTROL)
-func report_content_progress(fraction: float) -> void:
-	var session: DotClientSession = _sessions.get(
-		multiplayer.get_remote_sender_id()
-	)
+func _on_content_progress(peer_id: int, payload: Dictionary) -> void:
+	var session: DotClientSession = _sessions.get(peer_id)
 	if session == null:
 		return
 
 	session.touch()
-	session.content_progress = clampf(fraction, 0.0, 1.0)
+	session.content_progress = clampf(DotEnvelope.number(payload, "fraction", 0.0), 0.0, 1.0)
 
 
 ## A client reporting that content is ready.
-@rpc("any_peer", "reliable", "call_remote", CHANNEL_CONTROL)
-func report_content_ready(content_key: String) -> void:
-	var session: DotClientSession = _sessions.get(
-		multiplayer.get_remote_sender_id()
-	)
+func _on_content_ready(peer_id: int, payload: Dictionary) -> void:
+	var content_key := DotEnvelope.text(payload, "content_key")
+	var session: DotClientSession = _sessions.get(peer_id)
 	if session == null:
 		return
 
@@ -1560,20 +1650,12 @@ func _send_load_game(session: DotClientSession) -> void:
 	if games != null:
 		info = games.load_info()
 
-	_load_game.rpc_id(session.peer_id, info)
-
-
-@rpc("authority", "reliable", "call_remote", CHANNEL_CONTROL)
-func _load_game(_info: Dictionary) -> void:
-	pass
+	send_kind(session.peer_id, DotEnvelope.LOAD_GAME, info)
 
 
 ## A client reporting that it has finished loading and is ready to play.
-@rpc("any_peer", "reliable", "call_remote", CHANNEL_CONTROL)
-func report_loaded() -> void:
-	var session: DotClientSession = _sessions.get(
-		multiplayer.get_remote_sender_id()
-	)
+func _on_loaded(peer_id: int, _payload: Dictionary) -> void:
+	var session: DotClientSession = _sessions.get(peer_id)
 	if session == null:
 		return
 
@@ -1608,9 +1690,8 @@ func report_loaded() -> void:
 
 
 ## A client's keepalive and ping sample.
-@rpc("any_peer", "unreliable", "call_remote", CHANNEL_CONTROL)
-func heartbeat(client_time_ms: int) -> void:
-	var peer_id := multiplayer.get_remote_sender_id()
+func _on_heartbeat(peer_id: int, payload: Dictionary) -> void:
+	var client_time_ms := int(DotEnvelope.number(payload, "t", 0))
 	var session: DotClientSession = _sessions.get(peer_id)
 	if session == null:
 		return
@@ -1626,24 +1707,16 @@ func heartbeat(client_time_ms: int) -> void:
 		session.backgrounded = false
 		session.background_grace_sec = 0.0
 
-	_heartbeat_ack.rpc_id(peer_id, client_time_ms)
-
-
-@rpc("authority", "unreliable", "call_remote", CHANNEL_CONTROL)
-func _heartbeat_ack(_client_time_ms: int) -> void:
-	pass
+	send_kind(peer_id, DotEnvelope.HEARTBEAT_ACK, {"t": client_time_ms}, DotEnvelope.Lane.UNRELIABLE)
 
 
 ## A client reporting its measured round-trip time.
-@rpc("any_peer", "unreliable", "call_remote", CHANNEL_CONTROL)
-func report_ping(ping_ms: int) -> void:
-	var session: DotClientSession = _sessions.get(
-		multiplayer.get_remote_sender_id()
-	)
+func _on_ping(peer_id: int, payload: Dictionary) -> void:
+	var session: DotClientSession = _sessions.get(peer_id)
 	if session == null:
 		return
 	session.touch()
-	session.ping_ms = clampi(ping_ms, 0, 60_000)
+	session.ping_ms = clampi(int(DotEnvelope.number(payload, "ms", 0)), 0, 60_000)
 
 
 ## A client announcing that its page went into, or came back from, the background.
@@ -1657,16 +1730,33 @@ func report_ping(ping_ms: int) -> void:
 ## [code]sv_background_grace[/code], because a number a client chose for itself is a way
 ## to hold a slot on a full server for as long as it likes. 0 asks for whatever the
 ## server allows.
-@rpc("any_peer", "reliable", "call_remote", CHANNEL_CONTROL)
-func client_visibility(visible: bool, requested_grace_sec: float) -> void:
-	var session: DotClientSession = _sessions.get(
-		multiplayer.get_remote_sender_id()
-	)
+func _on_visibility(peer_id: int, payload: Dictionary) -> void:
+	var session: DotClientSession = _sessions.get(peer_id)
 	if session == null:
 		return
 
 	session.touch()
-	set_session_background(session, not visible, requested_grace_sec)
+	set_session_background(
+		session,
+		not DotEnvelope.flag(payload, "visible", true),
+		DotEnvelope.number(payload, "grace", 0.0)
+	)
+
+
+## A client sending chat. Handled by [DotChatManager], which is where every rule about
+## chat lives; this only finds the session.
+func _on_chat_submit(peer_id: int, payload: Dictionary) -> void:
+	if chat == null:
+		return
+	var session: DotClientSession = _sessions.get(peer_id)
+	if session == null:
+		return
+	session.touch()
+	chat.handle_message(
+		session,
+		DotEnvelope.text(payload, "text"),
+		DotEnvelope.flag(payload, "team", false)
+	)
 
 
 ## Records that a session has gone into, or come back from, the background.
@@ -1719,7 +1809,11 @@ func silence_budget(session: DotClientSession) -> float:
 # --- Kicking ---------------------------------------------------------------
 
 ## Disconnects a client with a reason they will see.
-func kick(session: DotClientSession, reason: String = "Kicked") -> DotResult:
+##
+## [param why] rides along to the client when there is one, so a client dropped for a
+## version mismatch reads it as that rather than as a moderator's kick -- see
+## [method DotClientLink.last_error].
+func kick(session: DotClientSession, reason: String = "Kicked", why: DotError = null) -> DotResult:
 	if session == null or not session.is_active():
 		return DotResult.fail(DotError.CODE_INVALID, "No such player.")
 
@@ -1727,12 +1821,13 @@ func kick(session: DotClientSession, reason: String = "Kicked") -> DotResult:
 		CHANNEL, "kicked", {"user": session.label(), "reason": reason}
 	)
 
-	_notify_disconnect(session, reason)
+	_notify_peer_disconnect(session.peer_id, reason, why)
 
 	session.transition_to(DotClientSession.State.DISCONNECTED)
 	_disconnect_peer(session.peer_id)
 
 	_sessions.erase(session.peer_id)
+	envelope.forget(session.peer_id)
 	_by_userid.erase(session.userid)
 
 	client_disconnected.emit(session, reason)
@@ -1747,14 +1842,15 @@ func kick(session: DotClientSession, reason: String = "Kicked") -> DotResult:
 	return DotResult.success(session)
 
 
-func _reject_session(session: DotClientSession, reason: String) -> void:
+func _reject_session(session: DotClientSession, reason: String, why: DotError = null) -> void:
 	session.reject(reason)
 	client_state_changed.emit(session)
 
-	_notify_disconnect(session, reason)
+	_notify_peer_disconnect(session.peer_id, reason, why)
 	_disconnect_peer(session.peer_id)
 
 	_sessions.erase(session.peer_id)
+	envelope.forget(session.peer_id)
 	_by_userid.erase(session.userid)
 
 
@@ -1767,7 +1863,7 @@ func _notify_disconnect(session: DotClientSession, reason: String) -> void:
 	_notify_peer_disconnect(session.peer_id, reason)
 
 
-func _notify_peer_disconnect(peer_id: int, reason: String) -> void:
+func _notify_peer_disconnect(peer_id: int, reason: String, why: DotError = null) -> void:
 	if multiplayer.multiplayer_peer == null:
 		return
 
@@ -1779,12 +1875,14 @@ func _notify_peer_disconnect(peer_id: int, reason: String) -> void:
 		return
 	# Sent before closing so the client can show why. Reliable, but the close
 	# follows on a deferred call to give the packet a frame to leave.
-	_disconnected.rpc_id(peer_id, reason)
-
-
-@rpc("authority", "reliable", "call_remote", CHANNEL_CONTROL)
-func _disconnected(_reason: String) -> void:
-	pass
+	#
+	# The code and the detail ride along when there are some, so a client refused for a
+	# protocol mismatch can tell it from a kick -- a shell answers the two differently.
+	var payload := {"reason": reason}
+	if why != null:
+		payload["code"] = why.code
+		payload["detail"] = why.detail
+	send_kind(peer_id, DotEnvelope.DISCONNECT, payload)
 
 
 func _disconnect_peer(peer_id: int) -> void:
@@ -1796,7 +1894,34 @@ func _disconnect_peer(peer_id: int) -> void:
 		return
 	# Deferred so a rejection message sent in the same frame actually goes out;
 	# closing immediately drops it.
-	multiplayer.multiplayer_peer.disconnect_peer.call_deferred(peer_id)
+	_close_peer.call_deferred(peer_id)
+
+
+## Flushes what is queued for a peer, then closes it a moment later.
+##
+## [b]Deferring the close was not enough.[/b] The reason is sent and the socket closed in
+## the same frame, so the client's next poll reads the data frame and the close together --
+## and a client connection that closes drops what it has not yet handed to the multiplayer
+## layer. The reason was lost and the player read "Connection to the server was lost."
+## It worked from inside an RPC handler only by the accident of which poll ran when; found
+## by dot-server-deploy's `smash_client`, whose refusal of an incompatible client is the
+## first kick anything drove over a real socket from outside a handler.
+##
+## So: `poll()` sends what is queued now, and the close follows [constant CLOSE_GRACE_SEC]
+## later, which is a frame's worth of time on any link that is going to deliver the reason
+## at all. The session is already gone by then, so nothing the peer sends in between is
+## handled.
+func _close_peer(peer_id: int) -> void:
+	var peer := multiplayer.multiplayer_peer if multiplayer != null else null
+	if peer == null:
+		return
+	peer.poll()
+	if is_inside_tree():
+		await get_tree().create_timer(CLOSE_GRACE_SEC, true, false, true).timeout
+	peer = multiplayer.multiplayer_peer if multiplayer != null else null
+	if peer == null or peer.get_connection_status() == MultiplayerPeer.CONNECTION_DISCONNECTED:
+		return
+	peer.disconnect_peer(peer_id)
 
 
 # --- Broadcast -------------------------------------------------------------
@@ -1866,18 +1991,9 @@ func _put_notice(session: DotClientSession, payload: Dictionary) -> bool:
 	if session.peer_id <= 0 or not Array(multiplayer.get_peers()).has(session.peer_id):
 		return false
 
-	_notice.rpc_id(session.peer_id, payload)
-	return true
-
-
-## [b]Adding this pair changed the signon revision.[/b] Godot refuses every RPC between two
-## nodes whose `@rpc` method names differ, so a client built before this existed cannot
-## join a server built after it — and says so, through [DotSignon], rather than timing out.
-## That cost is paid once for a message that carries a dictionary: see [DotNotice] for why
-## no later field needs another.
-@rpc("authority", "reliable", "call_remote", CHANNEL_EVENT)
-func _notice(_payload: Dictionary) -> void:
-	pass
+	# False for a client that does not know notices -- an older one. Not an error: it
+	# keeps its game and loses the HUD line.
+	return send_kind(session.peer_id, DotEnvelope.NOTICE, payload, DotEnvelope.Lane.EVENT)
 
 
 ## Sends a message to clients holding a permission flag.

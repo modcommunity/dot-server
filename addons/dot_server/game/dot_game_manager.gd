@@ -372,7 +372,7 @@ func _sync_clients(descriptor: DotGameDescriptor) -> DotResult:
 		# `status` listing showed the right state because it reads the field directly;
 		# anything that reacted to the signal never saw a game change happen.
 		server.client_state_changed.emit(session)
-		server._begin_content_sync.rpc_id(session.peer_id, info)
+		server.send_kind(session.peer_id, DotEnvelope.CONTENT_SYNC, info)
 		expected += 1
 
 	if expected == 0:

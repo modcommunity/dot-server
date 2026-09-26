@@ -249,7 +249,7 @@ func _broadcast_chat(
 			continue
 		if not _can_reach(other):
 			continue
-		_receive_chat.rpc_id(other.peer_id, payload)
+		server.send_kind(other.peer_id, DotEnvelope.CHAT_LINE, payload, DotEnvelope.Lane.EVENT)
 
 
 ## Whether two sessions are on the same team.
@@ -329,7 +329,7 @@ func greet(session: DotClientSession) -> void:
 	if not _can_reach(session):
 		return
 
-	_receive_chat.rpc_id(session.peer_id, chat_state())
+	server.send_kind(session.peer_id, DotEnvelope.CHAT_LINE, chat_state(), DotEnvelope.Lane.EVENT)
 
 
 ## Tells everybody, for a relay that came up or went down mid-match.
@@ -341,7 +341,7 @@ func announce_state() -> void:
 
 	for session in server.playing_sessions():
 		if _can_reach(session):
-			_receive_chat.rpc_id(session.peer_id, payload)
+			server.send_kind(session.peer_id, DotEnvelope.CHAT_LINE, payload, DotEnvelope.Lane.EVENT)
 
 	DotLog.info(CHANNEL, "chat state", payload)
 
@@ -356,7 +356,7 @@ func broadcast_system(text: String) -> void:
 
 	for session in server.playing_sessions():
 		if _can_reach(session):
-			_receive_chat.rpc_id(session.peer_id, payload)
+			server.send_kind(session.peer_id, DotEnvelope.CHAT_LINE, payload, DotEnvelope.Lane.EVENT)
 
 	DotLog.info(CHANNEL, "system message", {"text": text})
 
@@ -390,11 +390,11 @@ func send_system_to(session: DotClientSession, text: String) -> void:
 	if not _can_reach(session):
 		return
 
-	_receive_chat.rpc_id(session.peer_id, {
+	server.send_kind(session.peer_id, DotEnvelope.CHAT_LINE, {
 		"kind": "system",
 		"name": system_prefix,
 		"text": text,
-	})
+	}, DotEnvelope.Lane.EVENT)
 
 
 ## Sends admin chat to everyone holding [constant DotAdminFlags.CHAT].
@@ -411,7 +411,7 @@ func broadcast_admin(from: String, text: String) -> void:
 	var recipients := 0
 	for session in server.playing_sessions():
 		if session.has_permission(DotAdminFlags.CHAT) and _can_reach(session):
-			_receive_chat.rpc_id(session.peer_id, payload)
+			server.send_kind(session.peer_id, DotEnvelope.CHAT_LINE, payload, DotEnvelope.Lane.EVENT)
 			recipients += 1
 
 	DotLog.info(
@@ -443,25 +443,12 @@ func announce_leave(session: DotClientSession) -> void:
 	broadcast_system("%s left the game." % session.display_name)
 
 
-# --- RPC -------------------------------------------------------------------
-
-## A client sending chat.
-@rpc("any_peer", "reliable", "call_remote", CHANNEL_EVENT)
-func submit_chat(text: String, team_only: bool) -> void:
-	var session: DotClientSession = server.session_of(
-		multiplayer.get_remote_sender_id()
-	)
-	if session == null:
-		return
-
-	session.touch()
-	handle_message(session, text, team_only)
-
-
-## Server to client. Implemented on the client side.
-@rpc("authority", "reliable", "call_remote", CHANNEL_EVENT)
-func _receive_chat(_payload: Dictionary) -> void:
-	pass
+# --- The wire ------------------------------------------------------------
+#
+# No RPCs here any more. A line a client types arrives as the envelope's `chat.submit`
+# kind, which [DotServer] hands to [method handle_message], and a line out goes as
+# `chat.line` through [method DotServer.send_kind]. Declaring RPCs on this node made it a
+# second RPC surface a client had to match exactly -- see [DotEnvelope].
 
 
 # --- Sanitising -----------------------------------------------------------
