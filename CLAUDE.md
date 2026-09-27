@@ -715,7 +715,7 @@ find . -name '*.gd' -not -path './.godot/*' | while read f; do
     godot --headless --path . --check-only --script "res://${f#./}"
 done
 
-# 301 checks. Exits non-zero on any failure. (Was 319 before the query
+# 302 checks. Exits non-zero on any failure. (Was 319 before the query
 # protocols and their 95 checks moved to dot-server-query.)
 godot --headless --path . res://examples/dedicated_server.tscn
 

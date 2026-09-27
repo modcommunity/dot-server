@@ -102,6 +102,18 @@ func load_module(path: String) -> DotResult:
 			DotError.CODE_INVALID, "Not a GDScript file.", path
 		)
 
+	# [b]A script that did not compile still loads.[/b] `load()` hands back a GDScript
+	# whatever its parse said — a module extending a class nobody registered (an addon
+	# that was never linked) is one — and `.new()` on it is a script error that aborts
+	# this coroutine. Every caller then awaited null instead of a result, read `.ok` off
+	# it, and aborted too, so a failed module load was never reported as one.
+	if not (script as GDScript).can_instantiate():
+		return DotResult.fail(
+			DotError.CODE_INVALID,
+			"Module script did not compile; the parse error is in the log above.",
+			path
+		)
+
 	var instance: Variant = (script as GDScript).new()
 
 	if not (instance is DotModule):

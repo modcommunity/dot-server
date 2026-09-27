@@ -27,7 +27,7 @@ const SECTIONS := 24
 ## Every check this suite runs, including the two at the end that compare the counts. The
 ## section counter cannot see a section that aborted after announcing itself — its remaining
 ## checks simply never run — and a total can. See docs/testing.md.
-const CHECKS := 301
+const CHECKS := 302
 
 var _entered := 0
 var _completed := 0
@@ -1510,6 +1510,21 @@ func _on_spawn(_e: DotEvent) -> void:
 	_check(
 		"non-module script refused",
 		not (await server.modules.load_module("user://example/bad_module.gd")).ok
+	)
+
+	# And one that does not compile -- a module whose base class is an addon that was
+	# never linked -- must come back as a failed result, not abort the coroutine and hand
+	# every awaiting caller null. The engine logs the parse error; that is expected here.
+	DotPaths.write_text(
+		"user://example/unlinked_module.gd",
+		"extends DotNoSuchModuleBase\n"
+	)
+	var unlinked: Variant = await server.modules.load_module(
+		"user://example/unlinked_module.gd"
+	)
+	_check(
+		"uncompilable module refused with a result",
+		unlinked is DotResult and not (unlinked as DotResult).ok
 	)
 	_done()
 
