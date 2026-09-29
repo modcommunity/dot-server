@@ -1514,11 +1514,22 @@ func _on_spawn(_e: DotEvent) -> void:
 
 	# And one that does not compile -- a module whose base class is an addon that was
 	# never linked -- must come back as a failed result, not abort the coroutine and hand
-	# every awaiting caller null. The engine logs the parse error; that is expected here.
+	# every awaiting caller null.
+	#
+	# [b]The script is put in the resource cache uncompiled rather than parsed from disk[/b],
+	# because parsing it prints `SCRIPT ERROR: Parse Error`, and dot-ci fails any suite
+	# whose output carries one -- the rule that catches a test aborted by a real script
+	# error cannot tell it from one provoked on purpose. load_module's plain load() takes
+	# the cached script, which is exactly what a failed parse leaves: a GDScript whose
+	# can_instantiate() is false. Still armed: with the guard removed, .new() on it is the
+	# same aborting script error the guard was written for.
 	DotPaths.write_text(
 		"user://example/unlinked_module.gd",
 		"extends DotNoSuchModuleBase\n"
 	)
+	var uncompiled := GDScript.new()
+	uncompiled.source_code = "extends DotNoSuchModuleBase\n"
+	uncompiled.take_over_path("user://example/unlinked_module.gd")
 	var unlinked: Variant = await server.modules.load_module(
 		"user://example/unlinked_module.gd"
 	)
