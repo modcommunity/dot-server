@@ -38,6 +38,21 @@ extends Resource
 ## Optional content groups to fetch. Empty fetches only required content.
 @export var content_groups: PackedStringArray = PackedStringArray()
 
+## Other packs this game needs mounted beside its own, as `<owner>/<name>@<version>`:
+## a map pack, a shared asset pack, somebody's library written without `class_name`.
+##
+## [b]Fetched by the server before the change and by every client in the same sync.[/b]
+## They travel as `content_extra` in the one `content.sync` a client already gets, so a
+## player joining mid-game and a player on the server through a game change both fetch
+## the same set, and a dependency the server cannot get abandons the change before
+## anybody is disturbed -- the rule the game's own pack already follows.
+##
+## [b]A concrete version, always.[/b] `@latest` is resolved by whatever installs the game
+## (dot-server-deploy's install-games), never here: a server that resolved it per join
+## would hand two players two different packs under one game, and the whole point of a
+## version in the key is that everybody mounts the same bytes.
+@export var dependencies: PackedStringArray = PackedStringArray()
+
 @export_group("Scenes")
 
 ## Scene the server instantiates.
@@ -101,7 +116,25 @@ func validate() -> DotResult:
 		if not safe.ok:
 			return safe.wrap("'%s' has an unsafe scene path." % game_id)
 
+	for key in dependencies:
+		var parts := split_key(key)
+		if parts[0] == "" or parts[1] == "" or not parts[0].contains("/"):
+			return DotResult.fail(
+				DotError.CODE_INVALID,
+				"'%s' has a dependency that is not <owner>/<name>@<version>." % game_id,
+				"got '%s'; @latest is resolved when the game is installed, not here" % key
+			)
+
 	return DotResult.success(true)
+
+
+## `<id>@<version>` taken apart from the right, as `[id, version]`. The same split the
+## client does on a content key: an id never ends in `@`, a version never holds one.
+static func split_key(key: String) -> PackedStringArray:
+	var at := key.strip_edges().rfind("@")
+	if at <= 0:
+		return PackedStringArray([key.strip_edges(), ""])
+	return PackedStringArray([key.substr(0, at).strip_edges(), key.substr(at + 1).strip_edges()])
 
 
 ## Whether this game's files have to be fetched and mounted before it can load.
@@ -208,6 +241,7 @@ func describe() -> Dictionary:
 		"version": version,
 		"content_key": content_key(),
 		"bundled": not needs_delivered_content(),
+		"dependencies": Array(dependencies),
 		"scene": resolve_scene_path(),
 		"client_scene": client_scene_or_scene(),
 	}

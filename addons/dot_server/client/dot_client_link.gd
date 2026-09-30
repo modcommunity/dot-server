@@ -743,6 +743,36 @@ func _on_content_sync(_peer_id: int, info: Dictionary) -> void:
 		_fail(err)
 		return
 
+	# The packs the game needs beside its own -- a map pack, shared assets -- fetched
+	# the same way and by the same rule: by id and version, so a manifest answering to
+	# anything else is refused rather than mounted. Before `content.ready`, because
+	# "ready" is the promise that everything the game will load is here.
+	for extra in info.get("content_extra", []):
+		var key := str(extra)
+		var at := key.rfind("@")
+		var dep_id := key.substr(0, at) if at > 0 else key
+		var dep_version := key.substr(at + 1) if at > 0 else ""
+
+		if dep_id == "" or dep_version == "":
+			_fail(DotError.make(
+				DotError.CODE_INVALID,
+				"This server named a dependency without a version: %s" % key
+			))
+			return
+
+		var got: Variant = await cloud.call("ensure", dep_id, dep_version)
+
+		if not (got is DotResult) or not (got as DotResult).ok:
+			var why := (got as DotResult).error if got is DotResult else DotError.make(
+				DotError.CODE_INTERNAL, "Content download failed."
+			)
+			_fail(DotError.make(
+				why.code,
+				"This game needs %s, which could not be downloaded." % key,
+				str(why)
+			))
+			return
+
 	send_kind(DotEnvelope.CONTENT_READY, {"content_key": content_key})
 
 

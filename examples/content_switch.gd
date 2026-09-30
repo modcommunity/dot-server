@@ -56,6 +56,10 @@ const CACHE_CLIENT := DATA + "/cache_client"
 const PACK_ID := "delivered_arena"
 const PACK_VERSION := "1.0.0"
 const PACK_SCENE := "world.tscn"
+# A dependency is always an owner/name pack, the shape the site publishes.
+const DEP_ID := "test/shared-assets"
+const DEP_VERSION := "1.0.0"
+const DEP_SOURCE := DATA + "/dep_src"
 
 ## A fixed port, because [DotServer] does not report the one an ephemeral bind chose
 ## and the client half of this test has to be told where to connect.
@@ -69,7 +73,7 @@ const CONTENT_BASE := "https://content.invalid/content"
 ## Every check this suite runs, including the one that compares against it. The section
 ## counter cannot see a section that aborted after announcing itself — its remaining checks
 ## simply never run — and a total can. See docs/testing.md.
-const CHECKS := 46
+const CHECKS := 49
 
 var _passed := 0
 var _failed := 0
@@ -245,6 +249,19 @@ func _publish_content() -> bool:
 
 	_manifest_url = out.path_join("manifest.json")
 
+	# A second pack the game names as a DEPENDENCY: a map or asset pack that has to be
+	# mounted beside the game's own, on the server and on every client, before anyone
+	# is told the change is ready.
+	DotPaths.write_text(DEP_SOURCE.path_join("shared.txt"), "shared assets\n")
+	var dep := DotCloudPublisher.new()
+	dep.content_id = DEP_ID
+	dep.version = DEP_VERSION
+	dep.display_name = "Shared Assets"
+	dep.signing_key_pem = str(pair["private"])
+	dep.signing_key_id = "test"
+	var dep_published := dep.publish(DEP_SOURCE, "%s/%s/%s" % [DIST, DEP_ID, DEP_VERSION])
+	_check(dep_published.ok, "a dependency pack publishes beside it", str(dep_published.error))
+
 	_check(
 		FileAccess.file_exists(_manifest_url),
 		"a signed manifest is on disk",
@@ -289,7 +306,10 @@ func _make_cloud(cache: String, public_key: String, scope: StringName) -> Node:
 	# Empty so a file left by another run cannot change what this test asserts.
 	cloud.config_file = ""
 	cloud.local_search_dirs = PackedStringArray([
-		"%s/%s/%s" % [DIST, PACK_ID, PACK_VERSION]
+		"%s/%s/%s" % [DIST, PACK_ID, PACK_VERSION],
+		# The dependency is found BY ID, through `{base}/{id}/{version}/manifest.json`,
+		# so its base is the root the packs are published under, not a pack's folder.
+		DIST,
 	])
 	cloud.service_scope = scope
 	return cloud
@@ -389,6 +409,7 @@ func _boot() -> bool:
 	# ask a client to load any scene in its build.
 	delivered.scene = PACK_SCENE
 	delivered.client_scene = PACK_SCENE
+	delivered.dependencies = PackedStringArray(["%s@%s" % [DEP_ID, DEP_VERSION]])
 
 	_check(delivered.validate().ok, "the delivered descriptor validates")
 	_check(
@@ -580,6 +601,18 @@ func _test_switch_to_delivered() -> void:
 	_check(
 		bool(_client_cloud.call("is_mounted", PACK_ID, PACK_VERSION)),
 		"the client mounted the pack it was sent to fetch"
+	)
+	# One process holds both ends here and the game manager fetches through the
+	# registry's `dot_cloud_client`, so which CLIENT object mounted it cannot tell the
+	# server from the client. A mount is process-wide, though, and the file being
+	# readable at the dependency's own prefix is what the game will actually rely on.
+	_check(
+		FileAccess.file_exists("res://dot_cloud/%s/%s/shared.txt" % [DEP_ID, DEP_VERSION]),
+		"the game's dependency is readable at its own mount prefix"
+	)
+	_check(
+		bool(_client_cloud.call("is_mounted", DEP_ID, DEP_VERSION)),
+		"and the client mounted it too, from the same content.sync"
 	)
 	# [b]One subscription, not one per change.[/b] The link connects a handler to the
 	# cloud client's `progress_changed` every time a sync begins, guarded by

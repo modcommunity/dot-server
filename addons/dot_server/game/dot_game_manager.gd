@@ -307,6 +307,22 @@ func _acquire_content(descriptor: DotGameDescriptor) -> DotResult:
 			return typed.wrap(
 				"Could not get %s's content." % descriptor.game_id
 			)
+
+		# The packs the game says it needs beside its own, fetched and mounted here for
+		# the reason the game's pack is: a dependency this server cannot get abandons the
+		# change while nobody has been disturbed, instead of every client downloading it
+		# and the game then failing to find it on the one machine that runs it.
+		for key in descriptor.dependencies:
+			var parts := DotGameDescriptor.split_key(key)
+			var dep: Variant = await cloud.call("ensure", parts[0], parts[1])
+			if not (dep is DotResult) or not (dep as DotResult).ok:
+				var why := (dep as DotResult) if dep is DotResult else DotResult.fail(
+					DotError.CODE_INTERNAL, "The cloud client returned no result."
+				)
+				return why.wrap(
+					"Could not get %s, which %s needs." % [key, descriptor.game_id]
+				)
+
 		return typed
 
 	return DotResult.fail(
@@ -327,7 +343,8 @@ func _sync_clients(descriptor: DotGameDescriptor) -> DotResult:
 	var info := server.content_sync_info(
 		descriptor.manifest_url,
 		Array(descriptor.content_groups),
-		descriptor.content_key()
+		descriptor.content_key(),
+		descriptor.dependencies
 	)
 
 	var expected := 0
@@ -756,6 +773,11 @@ func current_needs_content() -> bool:
 ## The optional content groups the running game asks clients to fetch.
 func current_content_groups() -> Array:
 	return Array(_current.content_groups) if _current != null else []
+
+
+## The packs the running game needs beside its own, as `<id>@<version>` keys.
+func current_dependencies() -> PackedStringArray:
+	return _current.dependencies if _current != null else PackedStringArray()
 
 
 ## What a joining client is told to load.

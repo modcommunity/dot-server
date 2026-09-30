@@ -1526,7 +1526,8 @@ func _advance_to_content(session: DotClientSession) -> void:
 		# so a game that named optional groups had every client fetch only the
 		# required set and then miss the assets the groups held.
 		games.current_content_groups() if games != null else [],
-		games.current_content_key() if games != null else ""
+		games.current_content_key() if games != null else "",
+		games.current_dependencies() if games != null else PackedStringArray()
 	))
 
 
@@ -1543,12 +1544,19 @@ func _advance_to_content(session: DotClientSession) -> void:
 ##
 ## Two copies of one list is this family's most repeated bug. There is one copy.
 func content_sync_info(
-	manifest_url: String, content_groups: Array, content_key: String
+	manifest_url: String,
+	content_groups: Array,
+	content_key: String,
+	dependencies: PackedStringArray = PackedStringArray()
 ) -> Dictionary:
 	return {
 		"manifest_url": manifest_url,
 		"content_groups": content_groups,
 		"content_key": content_key,
+		# The game's other packs, `<id>@<version>` each. A payload field rather than an
+		# RPC, so the signon revision does not move: a shell from before this ignores
+		# it and still joins a game that has no dependencies.
+		"content_extra": Array(dependencies),
 		"allow_netchan": config.allow_netchan_content,
 		"chunk_bytes": config.netchan_chunk_bytes,
 		# Where the maps come from. Sent with every sync rather than once at the
