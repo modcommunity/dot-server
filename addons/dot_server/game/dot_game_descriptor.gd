@@ -97,13 +97,24 @@ func validate() -> DotResult:
 			DotError.CODE_INVALID, "A game descriptor needs a game_id."
 		)
 
-	var slug := DotPaths.slugify(game_id)
-	if slug != game_id:
+	# A game built into a server is one name (`lobby`); a published one is its
+	# publisher's and is `<owner>/<name>` (`gamemann/game-arena`), so forks and
+	# same-named games from two people are two ids. Each half is a slug.
+	var halves := game_id.split("/")
+	if halves.size() > 2:
 		return DotResult.fail(
 			DotError.CODE_INVALID,
-			"game_id must be lowercase alphanumeric with - or _.",
-			"got '%s', try '%s'" % [game_id, slug]
+			"game_id is a name or <owner>/<name>, with one slash at most.",
+			"got '%s'" % game_id
 		)
+	for half in halves:
+		var slug := DotPaths.slugify(half)
+		if half == "" or slug != half:
+			return DotResult.fail(
+				DotError.CODE_INVALID,
+				"game_id must be lowercase alphanumeric with - or _, as a name or <owner>/<name>.",
+				"got '%s', try '%s'" % [game_id, "/".join(Array(halves).map(func(h): return DotPaths.slugify(h)))]
+			)
 
 	if scene.strip_edges() == "" and client_scene.strip_edges() == "":
 		return DotResult.fail(

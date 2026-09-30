@@ -115,11 +115,55 @@ func _exit_tree() -> void:
 
 # --- Descriptors -----------------------------------------------------------
 
+## The game an id names: exactly, or by its NAME half when that is unambiguous.
+##
+## [b]A published game's id is `<owner>/<name>`, so a fork and its original, or two
+## people's games that happen to share a name, are two games.[/b] Typing the owner every
+## time is not something to ask of an operator at a console, so `changelevel arena`
+## still works while one installed game is called `arena`; the moment a second owner's
+## `arena` is installed beside it, the short name stops resolving and
+## [method resolve_game] says which two there are.
 func find_game(game_id: String) -> DotGameDescriptor:
 	for descriptor in games:
 		if descriptor != null and descriptor.game_id == game_id:
 			return descriptor
-	return null
+
+	var matches := _by_short_name(game_id)
+	return matches[0] if matches.size() == 1 else null
+
+
+## [method find_game], with the reason when it finds nothing.
+func resolve_game(game_id: String) -> DotResult:
+	var found := find_game(game_id)
+	if found != null:
+		return DotResult.success(found)
+
+	var matches := _by_short_name(game_id)
+	if matches.size() > 1:
+		var ids := PackedStringArray()
+		for d in matches:
+			ids.append(d.game_id)
+		return DotResult.fail(
+			DotError.CODE_INVALID,
+			"'%s' is more than one game here; say whose." % game_id,
+			"one of: %s" % ", ".join(ids)
+		)
+
+	return DotResult.fail(
+		DotError.CODE_INVALID,
+		"No game with id '%s'." % game_id,
+		"known: %s" % ", ".join(Array(game_ids()))
+	)
+
+
+func _by_short_name(name: String) -> Array[DotGameDescriptor]:
+	var out: Array[DotGameDescriptor] = []
+	if name == "" or name.contains("/"):
+		return out
+	for descriptor in games:
+		if descriptor != null and descriptor.game_id.ends_with("/" + name):
+			out.append(descriptor)
+	return out
 
 
 func game_ids() -> PackedStringArray:
@@ -137,7 +181,9 @@ func add_game(descriptor: DotGameDescriptor) -> DotResult:
 			DotError.CODE_INVALID, "A game descriptor needs a game_id."
 		)
 
-	if find_game(descriptor.game_id) != null:
+	# Exact, not find_game: a built-in `arena` beside a published `alice/arena` is two
+	# games, and the short-name alias must not make one look like a duplicate.
+	if game_ids().has(descriptor.game_id):
 		return DotResult.fail(
 			DotError.CODE_STATE,
 			"A game with id '%s' is already registered." % descriptor.game_id
@@ -161,13 +207,13 @@ func change_game(game_id: String, by: String = "console") -> DotResult:
 			_pending.game_id if _pending != null else ""
 		)
 
-	var descriptor := find_game(game_id)
-	if descriptor == null:
-		return DotResult.fail(
-			DotError.CODE_INVALID,
-			"No game with id '%s'." % game_id,
-			"known: %s" % ", ".join(Array(game_ids()))
-		)
+	var resolved := resolve_game(game_id)
+	if not resolved.ok:
+		return resolved
+
+	var descriptor := resolved.value as DotGameDescriptor
+	# The canonical id from here on, whichever spelling was typed.
+	game_id = descriptor.game_id
 
 	if _current != null and _current.game_id == game_id:
 		return DotResult.fail(

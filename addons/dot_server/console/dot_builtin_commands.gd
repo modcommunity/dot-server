@@ -819,11 +819,13 @@ static func _register_votes(server: DotServer, console: DotConsole) -> void:
 	console.command(
 		"votemap",
 		func(ctx: DotCmdContext) -> void:
-			var game_id := ctx.arg(0)
+			var resolved := server.games.resolve_game(ctx.arg(0))
 
-			if server.games.find_game(game_id) == null:
-				ctx.reply("No game with id '%s'." % game_id)
+			if not resolved.ok:
+				ctx.reply("%s %s" % [resolved.error.message, resolved.error.detail])
 				return
+
+			var game_id := (resolved.value as DotGameDescriptor).game_id
 
 			var res := server.votes.start(
 				"changelevel",

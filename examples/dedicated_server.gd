@@ -22,12 +22,12 @@ var server: DotServer
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose.
-const SECTIONS := 25
+const SECTIONS := 26
 
 ## Every check this suite runs, including the two at the end that compare the counts. The
 ## section counter cannot see a section that aborted after announcing itself — its remaining
 ## checks simply never run — and a total can. See docs/testing.md.
-const CHECKS := 309
+const CHECKS := 317
 
 var _entered := 0
 var _completed := 0
@@ -154,6 +154,7 @@ func _run_selftest() -> void:
 	_test_connection_limits()
 	_test_background_grace()
 	_test_platforms()
+	_test_game_ids()
 	_test_targeting()
 	await _test_ban_source()
 	_test_events()
@@ -777,6 +778,43 @@ func _status_flags(session: DotClientSession) -> String:
 	var fields := session.status_line().split(" ", false)
 	# "# userid name state time ping [flags] addr"
 	return fields[6] if fields.size() >= 8 else ""
+
+
+func _test_game_ids() -> void:
+	print("")
+	_section("[game ids]")
+
+	var d := func(id: String) -> DotGameDescriptor:
+		var g := DotGameDescriptor.new()
+		g.game_id = id
+		g.scene = "res://x.tscn"
+		return g
+
+	_check("an owner/name id validates", (d.call("gamemann/game-arena") as DotGameDescriptor).validate().ok)
+	_check("so does a built-in's bare name", (d.call("lobby") as DotGameDescriptor).validate().ok)
+	_check("two slashes or capitals do not",
+		not (d.call("a/b/c") as DotGameDescriptor).validate().ok
+		and not (d.call("Gamemann/Arena") as DotGameDescriptor).validate().ok)
+
+	var manager := DotGameManager.new()
+	for id in ["alice/arena", "bob/arena", "gamemann/game-g2gfast", "lobby"]:
+		manager.add_game(d.call(id))
+
+	_check("a short name that is unique finds its game",
+		manager.find_game("game-g2gfast") != null
+		and manager.find_game("game-g2gfast").game_id == "gamemann/game-g2gfast")
+	var ambiguous := manager.resolve_game("arena")
+	_check("a short name two owners share finds nothing, and says whose",
+		manager.find_game("arena") == null and not ambiguous.ok
+		and ambiguous.error.detail.contains("alice/arena") and ambiguous.error.detail.contains("bob/arena"))
+	_check("the full id always finds exactly that fork",
+		manager.find_game("bob/arena") != null and manager.find_game("bob/arena").game_id == "bob/arena")
+	_check("a built-in with the same short name is not a duplicate of a fork",
+		manager.add_game(d.call("arena")).ok)
+	_check("and once it exists the bare name means the built-in",
+		manager.find_game("arena") != null and manager.find_game("arena").game_id == "arena")
+	manager.free()
+	_done()
 
 
 func _test_platforms() -> void:
