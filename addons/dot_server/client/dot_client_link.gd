@@ -560,6 +560,10 @@ func _on_challenge(_peer_id: int, challenge: Dictionary) -> void:
 		# What this client can say and hear. The server decides from it whether the two
 		# can play; see [DotEnvelope].
 		"kinds": envelope.advert(),
+		# What kind of client this is, so a server whose owner has turned a platform
+		# off can say so in a sentence. A payload field, not an RPC: the signon
+		# revision does not move, and a server from before this ignores it.
+		"platform": platform_kind(),
 	}
 
 	if bool(challenge.get("needs_password", false)):
@@ -569,6 +573,17 @@ func _on_challenge(_peer_id: int, challenge: Dictionary) -> void:
 	await _attach_credential(payload, strategy)
 
 	send_kind(DotEnvelope.CREDENTIALS, payload)
+
+
+## `web`, `mobile` or `desktop`: the class of client, which is a policy fact an owner
+## chooses by, not a capability -- so it is the one place the family asks about the
+## platform itself rather than about what it can do.
+static func platform_kind() -> String:
+	if OS.has_feature("web"):
+		return "web"
+	if OS.has_feature("mobile"):
+		return "mobile"
+	return "desktop"
 
 
 ## Adds whatever credential the server's strategy asks for.

@@ -22,12 +22,12 @@ var server: DotServer
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose.
-const SECTIONS := 24
+const SECTIONS := 25
 
 ## Every check this suite runs, including the two at the end that compare the counts. The
 ## section counter cannot see a section that aborted after announcing itself — its remaining
 ## checks simply never run — and a total can. See docs/testing.md.
-const CHECKS := 302
+const CHECKS := 309
 
 var _entered := 0
 var _completed := 0
@@ -153,6 +153,7 @@ func _run_selftest() -> void:
 	_test_admins()
 	_test_connection_limits()
 	_test_background_grace()
+	_test_platforms()
 	_test_targeting()
 	await _test_ban_source()
 	_test_events()
@@ -776,6 +777,29 @@ func _status_flags(session: DotClientSession) -> String:
 	var fields := session.status_line().split(" ", false)
 	# "# userid name state time ping [flags] addr"
 	return fields[6] if fields.size() >= 8 else ""
+
+
+func _test_platforms() -> void:
+	print("")
+	_section("[platforms]")
+
+	var console := server.console
+	_check("every platform is admitted by default",
+		server.allowed_platforms() == PackedStringArray(["web", "desktop", "mobile"]))
+	_check("a browser is admitted by default", server.platform_refusal_for("web") == "")
+
+	console.execute("sv_allow_web 0")
+	_check("with sv_allow_web 0 a browser is refused in a sentence that names it",
+		server.platform_refusal_for("web").contains("web browser"))
+	_check("and a desktop client is still admitted", server.platform_refusal_for("desktop") == "")
+	_check("a client from before the field existed is admitted",
+		server.platform_refusal_for("") == "" and server.platform_refusal_for("toaster") == "")
+	_check("the allowed list says so",
+		server.allowed_platforms() == PackedStringArray(["desktop", "mobile"]))
+
+	console.execute("sv_allow_web 1")
+	_check("and turning it back on restores it", server.platform_refusal_for("web") == "")
+	_done()
 
 
 func _test_background_grace() -> void:

@@ -66,6 +66,10 @@ var display_name: String = "unnamed"
 
 var address: String = ""
 
+## What kind of client this is -- `web`, `desktop` or `mobile` -- as it said at signon.
+## Empty for a shell exported before clients said. See [method DotServer.platform_refusal_for].
+var platform: String = ""
+
 ## Admin permission flags, resolved once at authentication.
 ##
 ## Cached rather than re-resolved per command: a permission lookup can hit a file
@@ -413,6 +417,7 @@ func describe() -> Dictionary:
 		"uid": uid(),
 		"state": state_name(),
 		"address": address,
+		"platform": platform,
 		"connected": connected_seconds(),
 		"ping": ping_ms,
 		"admin": is_admin(),

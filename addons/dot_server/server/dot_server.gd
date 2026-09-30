@@ -191,6 +191,9 @@ var _started_at: int = 0
 ## Cvars this node owns and reads on hot paths.
 var _cv_hostname: DotConVar
 var _cv_password: DotConVar
+var _cv_allow_web: DotConVar
+var _cv_allow_desktop: DotConVar
+var _cv_allow_mobile: DotConVar
 var _cv_maxplayers: DotConVar
 var _cv_cheats: DotConVar
 var _cv_tickrate: DotConVar
@@ -1353,6 +1356,19 @@ func _on_credentials(peer_id: int, payload: Dictionary) -> void:
 	if requested_name != "":
 		session.display_name = requested_name.substr(0, 32)
 
+	# Before the password and before authentication: a platform this server does not
+	# take is refused with the reason, rather than after a sign-in round trip.
+	session.platform = str(payload.get("platform", "")).strip_edges().to_lower()
+	var platform_refusal := platform_refusal_for(session.platform)
+	if platform_refusal != "":
+		DotLog.info(CHANNEL, "client refused: this server does not take its platform", {
+			"userid": session.userid,
+			"from": session.address,
+			"platform": session.platform,
+		})
+		_reject_session(session, platform_refusal)
+		return
+
 	var server_password := _cv_password.get_string()
 	if server_password != "":
 		var supplied := str(payload.get("password", ""))
@@ -1414,6 +1430,36 @@ func _on_credentials(peer_id: int, payload: Dictionary) -> void:
 ## Runs dot-auth if it is present, or admits everyone as a guest if it is not.
 ##
 ## Returns null after rejecting the session, so the caller stops.
+## The sentence a client of [param platform] is refused with, or "" to admit it.
+##
+## [b]A client that names no platform is admitted.[/b] Every shell exported before the
+## field existed sends none, and refusing them would turn a server's opt-out of one
+## platform into an opt-out of every old build on all of them. An unrecognised name is
+## admitted for the same reason: this is a switch an owner flips, not a whitelist.
+func platform_refusal_for(platform: String) -> String:
+	match platform:
+		"web":
+			if _cv_allow_web != null and not _cv_allow_web.get_bool():
+				return "This server does not take players in a web browser. Join it from the TMC desktop app."
+		"desktop":
+			if _cv_allow_desktop != null and not _cv_allow_desktop.get_bool():
+				return "This server does not take players on the desktop client. Join it from the website."
+		"mobile":
+			if _cv_allow_mobile != null and not _cv_allow_mobile.get_bool():
+				return "This server does not take players on a phone or tablet."
+	return ""
+
+
+## The platforms this server admits right now, for a query answer or a listing.
+func allowed_platforms() -> PackedStringArray:
+	var out := PackedStringArray()
+	for pair in [["web", _cv_allow_web], ["desktop", _cv_allow_desktop], ["mobile", _cv_allow_mobile]]:
+		var cv: DotConVar = pair[1]
+		if cv == null or cv.get_bool():
+			out.append(pair[0])
+	return out
+
+
 func _authenticate(
 	session: DotClientSession,
 	payload: Dictionary
@@ -2162,6 +2208,27 @@ func _register_cvars() -> void:
 		config.password,
 		"Password required to join. Empty for none.",
 		DotConVar.FLAG_PROTECTED | DotConVar.FLAG_ARCHIVE
+	)
+
+	# [b]Which kinds of client may join, all on by default.[/b] Cross-play is the
+	# platform's default and these are an owner's opt-out, not an opt-in: every client
+	# speaks the same WebSocket protocol, so nothing about a desktop or a browser
+	# player needs turning on. REPLICATED so the query answer and a listing can say
+	# which are open before anybody tries to join.
+	_cv_allow_web = console.cvar(
+		"sv_allow_web", "1",
+		"Admit players in a web browser.",
+		DotConVar.FLAG_ARCHIVE | DotConVar.FLAG_NOTIFY | DotConVar.FLAG_REPLICATED
+	)
+	_cv_allow_desktop = console.cvar(
+		"sv_allow_desktop", "1",
+		"Admit players on the desktop client (Windows, macOS, Linux).",
+		DotConVar.FLAG_ARCHIVE | DotConVar.FLAG_NOTIFY | DotConVar.FLAG_REPLICATED
+	)
+	_cv_allow_mobile = console.cvar(
+		"sv_allow_mobile", "1",
+		"Admit players on a phone or tablet.",
+		DotConVar.FLAG_ARCHIVE | DotConVar.FLAG_NOTIFY | DotConVar.FLAG_REPLICATED
 	)
 
 	_cv_maxplayers = console.cvar(
