@@ -2141,8 +2141,15 @@ func _apply_tickrate() -> void:
 	# A dedicated server has no frames to draw, so an unbounded max_fps spins a
 	# core for nothing. Matching it to the tickrate is what keeps an idle server
 	# near zero CPU.
+	#
+	# Except while hibernating, where the frame rate is the SOCKET rate: every listener
+	# is read once a frame, and 5 frames a second made an empty server answer each
+	# query up to 200 ms late. See DotServerConfig.hibernate_frame_rate.
 	if DotPlatform.is_headless():
-		Engine.max_fps = maxi(1, rate)
+		var frames := rate
+		if state == State.HIBERNATING:
+			frames = maxi(rate, config.hibernate_frame_rate)
+		Engine.max_fps = maxi(1, frames)
 
 	DotLog.debug(CHANNEL, "tickrate applied", {"rate": rate})
 

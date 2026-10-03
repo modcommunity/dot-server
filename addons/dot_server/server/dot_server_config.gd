@@ -114,6 +114,19 @@ extends DotConfig
 ## Ticks per second while hibernating.
 @export_range(1, 60, 1) var hibernate_tickrate: int = 5
 
+## Frames per second while hibernating, on a headless server. NOT the tickrate.
+##
+## Every socket this server owns -- the query and A2S listeners, the game transport, RCON
+## -- is read once per frame, so the frame rate is how long a packet waits to be seen.
+## Frames used to follow [member hibernate_tickrate], and at 5 an empty server answered a
+## query up to 200 ms late on every round trip: a server browser, which asks for a
+## challenge and then the info, measured a 40 ms server at 270-540 ms. A browser lists by
+## that number, so the servers nobody had joined yet looked like the worst ones to join.
+## The saving was mostly in the ticks, which stay at the hibernate rate. Measured on an
+## empty dot-server-deploy lobby, hibernating: 0.1% of one core at 5 frames, 0.5% at 60,
+## for queries answered in 3 ms instead of up to 200.
+@export_range(1, 240, 1) var hibernate_frame_rate: int = 60
+
 @export_group("RCON")
 
 ## Password for remote console. Empty disables RCON entirely.

@@ -22,12 +22,12 @@ var server: DotServer
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose.
-const SECTIONS := 26
+const SECTIONS := 27
 
 ## Every check this suite runs, including the two at the end that compare the counts. The
 ## section counter cannot see a section that aborted after announcing itself — its remaining
 ## checks simply never run — and a total can. See docs/testing.md.
-const CHECKS := 317
+const CHECKS := 321
 
 var _entered := 0
 var _completed := 0
@@ -154,6 +154,7 @@ func _run_selftest() -> void:
 	_test_connection_limits()
 	_test_background_grace()
 	_test_platforms()
+	_test_hibernation()
 	_test_game_ids()
 	_test_targeting()
 	await _test_ban_source()
@@ -814,6 +815,27 @@ func _test_game_ids() -> void:
 	_check("and once it exists the bare name means the built-in",
 		manager.find_game("arena") != null and manager.find_game("arena").game_id == "arena")
 	manager.free()
+	_done()
+
+
+func _test_hibernation() -> void:
+	print("")
+	_section("[hibernation]")
+
+	# The frame rate is the socket rate: every listener is read once a frame. At the old
+	# 5 frames an empty server answered each query up to 200 ms late.
+	var tickrate := server.console.get_int("sv_tickrate")
+	server._set_state(DotServer.State.HIBERNATING)
+	server._apply_tickrate()
+	_check("hibernating drops physics to the hibernate tickrate",
+		Engine.physics_ticks_per_second == server.config.hibernate_tickrate)
+	_check("but keeps frames, and so the sockets, at hibernate_frame_rate (%d)" % Engine.max_fps,
+		Engine.max_fps == maxi(server.config.hibernate_tickrate, server.config.hibernate_frame_rate))
+
+	server._set_state(DotServer.State.RUNNING)
+	server._apply_tickrate()
+	_check("waking restores the tickrate", Engine.physics_ticks_per_second == tickrate)
+	_check("and frames follow it again", Engine.max_fps == tickrate)
 	_done()
 
 
