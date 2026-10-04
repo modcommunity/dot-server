@@ -50,7 +50,7 @@ const PORT := 27717
 ## How many checks a clean run makes. A section that aborts part-way stops adding checks,
 ## and the section counter cannot see that when the abort comes after the section
 ## announced itself — so the total is asserted too.
-const CHECKS := 68
+const CHECKS := 72
 
 var _entered := 0
 var _completed := 0
@@ -418,6 +418,30 @@ func _test_a_notice_reaches_the_client() -> void:
 			received[2].is_clear() and received[2].topic == &"game_vote",
 			"a clear arrives as a clear of its topic (%s)" % str(received[2].describe())
 		)
+
+	# Structured content rides the same dictionary, which is why it changes no revision: a
+	# ballot goes out with its options and its voters and comes back whole.
+	var ballot := {"open": true, "options": [{"id": "a", "label": "Alpha", "votes": 1.0}], "voters": {"u1": 0}}
+	_check(
+		_server.send_notice(session, DotNotice.make(&"", "", 20.0, &"game_ballot", ballot)),
+		"a notice can carry data"
+	)
+	var carried := await _until(func() -> bool: return received.size() >= 4, 5.0)
+
+	if _check(carried, "and it arrives (%d notices)" % received.size()):
+		var tree: Dictionary = received[3].data
+		_check(
+			tree.get("options", [{}])[0].get("label", "") == "Alpha"
+				and int(tree.get("voters", {}).get("u1", -1)) == 0
+				and not received[3].is_clear(),
+			"with its tree intact, and not mistaken for a clear (%s)" % str(tree)
+		)
+
+	_check(
+		DotNotice.make(&"", "", -1.0, &"x", {"bad": RefCounted.new()}).data.is_empty()
+			and DotNotice.make(&"", "", -1.0, &"x", {"big": "x".repeat(DotNotice.MAX_DATA_BYTES)}).data.is_empty(),
+		"data that is not plain, or too big, is dropped whole"
+	)
 
 	# Nothing on it is nothing sent: a HUD that has to decide what an empty notice means
 	# is a HUD with a case nobody wrote.

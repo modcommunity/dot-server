@@ -41,6 +41,13 @@ extends RefCounted
 ##   line that changed, which is how "10… 9… 8…" stays one line rather than ten. A notice
 ##   with a topic and nothing else ([method is_clear]) takes that line down.
 ##
+## - [member data]: structured content for a client that knows the [member topic], and
+##   nothing to one that does not. A ballot to draw as a menu is the first: the text line
+##   says how to vote by typing, and a shell that can draw [code]data[/code] draws the menu.
+##   [b]Not cleaned the way [member text] is[/b] — it is a tree, and only its reader knows
+##   which leaves are drawn — so a client draws every string in it as plain text, never as
+##   markup, through [method sanitised_string].
+##
 ## A pure value object. It logs nothing.
 
 ## Longest [member text] a client is asked to draw. A HUD line, not a message of the day:
@@ -54,6 +61,12 @@ const MAX_ID := 64
 ## is for, and a value past it is far more likely to be milliseconds sent as seconds.
 const MAX_SECONDS := 3600.0
 
+## Largest [member data], encoded. A ballot of six options with sixty-four named voters is
+## about four kilobytes; past this it is not a HUD's content any more and is dropped whole
+## rather than cut, because half a tree is a tree a reader has to check for every missing
+## branch.
+const MAX_DATA_BYTES := 8192
+
 ## A sound id. Empty is silence.
 var cue: StringName = &""
 
@@ -66,19 +79,24 @@ var seconds: float = -1.0
 ## Which HUD line this is. Empty is a line of its own.
 var topic: StringName = &""
 
+## Structured content for a client that knows [member topic]. See the class notes.
+var data: Dictionary = {}
+
 
 ## A notice. Every argument but [param cue] is optional, and [param cue] may be empty.
 static func make(
 	p_cue: StringName,
 	p_text: String = "",
 	p_seconds: float = -1.0,
-	p_topic: StringName = &""
+	p_topic: StringName = &"",
+	p_data: Dictionary = {}
 ) -> DotNotice:
 	var n := DotNotice.new()
 	n.cue = _bounded_id(String(p_cue))
 	n.text = _bounded_text(p_text)
 	n.seconds = _bounded_seconds(p_seconds)
 	n.topic = _bounded_id(String(p_topic))
+	n.data = _bounded_data(p_data)
 	return n
 
 
@@ -98,12 +116,12 @@ func has_countdown() -> bool:
 
 ## Whether this only takes a topic's line down.
 func is_clear() -> bool:
-	return topic != &"" and cue == &"" and text == "" and not has_countdown()
+	return topic != &"" and cue == &"" and text == "" and not has_countdown() and data.is_empty()
 
 
 ## Whether a client has anything to do with this at all.
 func is_empty() -> bool:
-	return cue == &"" and text == "" and not has_countdown() and topic == &""
+	return cue == &"" and text == "" and not has_countdown() and topic == &"" and data.is_empty()
 
 
 ## The payload the RPC carries. See the class notes for why it is a dictionary.
@@ -129,6 +147,9 @@ func to_wire() -> Dictionary:
 	var p := _bounded_id(String(topic))
 	if p != &"":
 		out["topic"] = String(p)
+	var extra := _bounded_data(data)
+	if not extra.is_empty():
+		out["data"] = extra
 	return out
 
 
@@ -183,6 +204,8 @@ static func from_wire(payload: Variant) -> DotNotice:
 	if p is String or p is StringName:
 		n.topic = _bounded_id(String(p))
 
+	n.data = _bounded_data(d.get("data", {}))
+
 	return n
 
 
@@ -192,7 +215,15 @@ func describe() -> Dictionary:
 		"text": text,
 		"seconds": seconds,
 		"topic": String(topic),
+		"data": data.size(),
 	}
+
+
+## A string out of [member data], cleaned as [member text] is, for a client about to draw it.
+static func sanitised_string(value: Variant, max_length: int = MAX_TEXT) -> String:
+	if not (value is String or value is StringName):
+		return ""
+	return DotChatManager.sanitise(String(value), max_length)
 
 
 static func _bounded_id(value: String) -> StringName:
@@ -207,6 +238,43 @@ static func _bounded_id(value: String) -> StringName:
 ## notice.
 static func _bounded_text(value: String) -> String:
 	return DotChatManager.sanitise(value, MAX_TEXT)
+
+
+## A dictionary of plain values within [constant MAX_DATA_BYTES], or an empty one.
+##
+## Only what JSON could carry survives: a nested [Object] or [Callable] is not content, and
+## the engine would refuse to encode the first anyway — at the RPC, as an error, rather
+## than here as an empty tree.
+static func _bounded_data(value: Variant) -> Dictionary:
+	if not (value is Dictionary) or (value as Dictionary).is_empty():
+		return {}
+	if not _is_plain(value, 0):
+		return {}
+	if var_to_bytes(value).size() > MAX_DATA_BYTES:
+		return {}
+	return (value as Dictionary).duplicate(true)
+
+
+static func _is_plain(value: Variant, depth: int) -> bool:
+	if depth > 8:
+		return false
+	match typeof(value):
+		TYPE_NIL, TYPE_BOOL, TYPE_INT, TYPE_FLOAT, TYPE_STRING, TYPE_STRING_NAME:
+			return true
+		TYPE_ARRAY:
+			for item: Variant in value:
+				if not _is_plain(item, depth + 1):
+					return false
+			return true
+		TYPE_DICTIONARY:
+			for key: Variant in value:
+				if not (key is String or key is StringName or key is int):
+					return false
+				if not _is_plain((value as Dictionary)[key], depth + 1):
+					return false
+			return true
+		_:
+			return false
 
 
 ## NaN and infinity become "no countdown" rather than a clamped extreme. A countdown the
