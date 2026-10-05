@@ -70,7 +70,9 @@ The client downloads whatever content the current game needs (via dot-cloud), lo
 
 **A limit on how many clients one address may hold.** `sv_max_connections_per_ip`, off by default. Neither a ban nor a connect rate limiter covers this: connections that arrive slowly, from nobody banned, still let one machine take every slot on a small server. Loopback is never limited, so it cannot lock you out of your own server.
 
-**Games that swap under live players.** Announce, wait for everyone to download the new content, swap, re-spawn. A failed change restores the previous game rather than leaving the server empty.
+**Games that swap under live players.** Announce, wait for everyone to download the new content, swap, re-spawn. A failed change restores the previous game rather than leaving the server empty. A game's `DotGameDescriptor` can name `dependencies` (packs the server and every client mount with it), `server_dependencies` (mounted on the server only, never sent to a client) and `maps` (its delivered maps as pinned `<owner>/<map>@<version>` keys, fetched when the server changes to one rather than at load); read them back with `current_server_dependencies()` and `current_maps()` on `DotGameManager`.
+
+**The game says which map it is on.** A game calls `DotGameManager.set_current_map("surf_mesa")` whenever its map changes, and `reported_map()` is what A2S, the dot query protocol and the backbone report list as the map: the game's own map when it named one, else the game's display name. It is cleared when the game unloads, and reporting one drops the query cache so a listing does not show the previous map.
 
 **Server plugins.** Subclass `DotModule`, register commands and event hooks through its helpers, and `module_unload` cleanly undoes all of it. Events have cancellable pre-hooks, so a plugin can actually stop a map change or filter a message.
 
