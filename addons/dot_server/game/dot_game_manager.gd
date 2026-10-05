@@ -87,6 +87,7 @@ var _scene_instance: Node = null
 var _game_root: Node = null
 var _sync_deadline: int = 0
 var _rotation_index: int = 0
+var _current_map: String = ""
 
 
 func setup(p_server: DotServer) -> void:
@@ -727,6 +728,11 @@ func _unload_current() -> void:
 
 	_scene_instance = null
 
+	# The map belonged to the game that just went. Cleared here rather than when the
+	# next one loads, because the next game's module is what sets it again and it does
+	# so from `game_loaded`, after this.
+	_current_map = ""
+
 	# Release the old content's cache references so dot-cloud may evict it. The
 	# pack's file table stays mounted — the engine offers no way to remove it — but
 	# nothing points at those paths any more.
@@ -806,6 +812,48 @@ func current_content_id() -> String:
 	return _current.game_id if _current != null else ""
 
 
+## The map the running game says it is on, or "" when it has said nothing.
+##
+## [b]Set by the game, because only the game knows.[/b] dot-server runs a GAME, and what
+## a game calls a map — a course from a catalogue, an arena from a rotation, a mode's
+## preset — is a concept it has no type for. Before this the query's `map` field was
+## the game's content id, so every listing printed `gamemann/mg-smash-copter` where a
+## browser expects `surf_mesa`, including for the games that knew their map perfectly
+## well and only said so inside their own section of the response.
+func current_map() -> String:
+	return _current_map
+
+
+## Called by the running game whenever its map changes. "" clears it.
+##
+## The query cache is dropped too (duck-typed: the query source is dot-server-query's,
+## which this project may not have), so a listing does not go on printing the previous
+## map for a rebuild interval after a change it was told about.
+func set_current_map(map_id: String) -> void:
+	if map_id == _current_map:
+		return
+
+	_current_map = map_id
+	DotLog.debug(CHANNEL, "map reported", {"map": map_id, "game": current_content_id()})
+
+	if server != null and is_instance_valid(server.query_source) \
+		and server.query_source.has_method("invalidate"):
+		server.query_source.call("invalidate")
+
+
+## What a listing should print as the map: the game's own map when it named one, and
+## the game itself when it did not.
+##
+## The game by its display name rather than its content id. A game with no maps (a
+## lobby, a single-arena minigame) is a server "on" that game as far as a reader is
+## concerned, and `Smash Copter` says so where `gamemann/mg-smash-copter` reads like a
+## path that leaked.
+func reported_map() -> String:
+	if _current_map != "":
+		return _current_map
+	return _current.display_name_or_id() if _current != null else ""
+
+
 func current_manifest_url() -> String:
 	return _current.manifest_url if _current != null else ""
 
@@ -880,6 +928,7 @@ func describe_lines() -> PackedStringArray:
 	var out := PackedStringArray()
 
 	out.append("current   %s" % describe_current())
+	out.append("map       %s" % (_current_map if _current_map != "" else "(none reported)"))
 	out.append("phase     %s" % Phase.keys()[phase].to_lower())
 
 	if phase == Phase.SYNCING:

@@ -2498,8 +2498,11 @@ func _bot_count() -> int:
 
 
 ## The shape [code]DotBackboneClient.report_users[/code] expects.
+##
+## The game's own map when it reported one, else the game — see
+## [method DotGameManager.reported_map].
 func _report_map() -> Variant:
-	var id := games.current_content_id() if games != null else ""
+	var id := games.reported_map() if games != null else ""
 	return id if id != "" else null
 
 
