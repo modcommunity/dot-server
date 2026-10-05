@@ -53,6 +53,28 @@ extends Resource
 ## version in the key is that everybody mounts the same bytes.
 @export var dependencies: PackedStringArray = PackedStringArray()
 
+## Packs only the SERVER needs: mounted with the game's own, never sent to a client.
+##
+## For what runs on the server and nowhere else -- bot navigation, a ruleset, a large
+## lookup table, a recording a replay bot plays. [member dependencies] would make every
+## player download them for nothing; leaving them out of the descriptor would make the
+## game fetch them itself, which is how a game came to carry its own content-fetching
+## code. Same key rule: `<owner>/<name>@<version>`, a concrete version, pinned by the
+## installer.
+@export var server_dependencies: PackedStringArray = PackedStringArray()
+
+## The maps this game offers, as delivered packs: `<owner>/<map id>@<version>`.
+##
+## [b]Not mounted at load.[/b] A map is fetched when the server changes to it and a
+## client fetches the one being played, so a server offering twenty-six courses does not
+## make a player download twenty-six. The game turns these into [code]DotMapDef[/code]s
+## (dot-map's [code]DotMapCatalogue.add_delivered[/code]); the server only carries them,
+## because which scene in a map pack to load and what a map's id means are the game's.
+## The installer pins each version and checks each pack exists, is signed, and asks for
+## no addon this server lacks -- so a typo or an unpublished map fails at startup, not
+## when somebody votes for it.
+@export var maps: PackedStringArray = PackedStringArray()
+
 @export_group("Scenes")
 
 ## Scene the server instantiates.
@@ -127,14 +149,19 @@ func validate() -> DotResult:
 		if not safe.ok:
 			return safe.wrap("'%s' has an unsafe scene path." % game_id)
 
-	for key in dependencies:
-		var parts := split_key(key)
-		if parts[0] == "" or parts[1] == "" or not parts[0].contains("/"):
-			return DotResult.fail(
-				DotError.CODE_INVALID,
-				"'%s' has a dependency that is not <owner>/<name>@<version>." % game_id,
-				"got '%s'; @latest is resolved when the game is installed, not here" % key
-			)
+	for list: Array in [
+		[dependencies, "dependency"],
+		[server_dependencies, "server dependency"],
+		[maps, "map"],
+	]:
+		for key in (list[0] as PackedStringArray):
+			var parts := split_key(key)
+			if parts[0] == "" or parts[1] == "" or not parts[0].contains("/"):
+				return DotResult.fail(
+					DotError.CODE_INVALID,
+					"'%s' has a %s that is not <owner>/<name>@<version>." % [game_id, list[1]],
+					"got '%s'; @latest is resolved when the game is installed, not here" % key
+				)
 
 	return DotResult.success(true)
 
@@ -253,6 +280,8 @@ func describe() -> Dictionary:
 		"content_key": content_key(),
 		"bundled": not needs_delivered_content(),
 		"dependencies": Array(dependencies),
+		"server_dependencies": Array(server_dependencies),
+		"maps": Array(maps),
 		"scene": resolve_scene_path(),
 		"client_scene": client_scene_or_scene(),
 	}

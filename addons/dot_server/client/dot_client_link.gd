@@ -186,6 +186,13 @@ var server_game_name: String = ""
 ## of this distinction behaves exactly as it did.
 var server_content_id: String = ""
 
+## The packs beside the game's own the server last told this client to fetch
+## (`content_extra`, `<id>@<version>` keys). What the client was ASKED for, which is the
+## only honest answer in a process that holds a server too: a mount is process-wide, so
+## "is it mounted" cannot say which side wanted it. A game's server-only packs never
+## appear here.
+var content_extra: PackedStringArray = PackedStringArray()
+
 var last_error: DotError = null
 
 ## The last [DotNotice] the server sent, for [method describe] and for a HUD built after
@@ -762,6 +769,10 @@ func _on_content_sync(_peer_id: int, info: Dictionary) -> void:
 	# the same way and by the same rule: by id and version, so a manifest answering to
 	# anything else is refused rather than mounted. Before `content.ready`, because
 	# "ready" is the promise that everything the game will load is here.
+	content_extra = PackedStringArray()
+	for extra in info.get("content_extra", []):
+		content_extra.append(str(extra))
+
 	for extra in info.get("content_extra", []):
 		var key := str(extra)
 		var at := key.rfind("@")

@@ -358,7 +358,9 @@ func _acquire_content(descriptor: DotGameDescriptor) -> DotResult:
 		# the reason the game's pack is: a dependency this server cannot get abandons the
 		# change while nobody has been disturbed, instead of every client downloading it
 		# and the game then failing to find it on the one machine that runs it.
-		for key in descriptor.dependencies:
+		# The server-only packs too, in the same pass and for the same reason. They are
+		# simply never put in the content.sync a client gets (see _sync_clients).
+		for key in descriptor.dependencies + descriptor.server_dependencies:
 			var parts := DotGameDescriptor.split_key(key)
 			var dep: Variant = await cloud.call("ensure", parts[0], parts[1])
 			if not (dep is DotResult) or not (dep as DotResult).ok:
@@ -824,6 +826,18 @@ func current_content_groups() -> Array:
 ## The packs the running game needs beside its own, as `<id>@<version>` keys.
 func current_dependencies() -> PackedStringArray:
 	return _current.dependencies if _current != null else PackedStringArray()
+
+
+## The packs only the server mounts for the running game. Never sent to a client.
+func current_server_dependencies() -> PackedStringArray:
+	return _current.server_dependencies if _current != null else PackedStringArray()
+
+
+## The running game's delivered maps, as `<owner>/<map id>@<version>` keys, for the game
+## to turn into map definitions (dot-map's DotMapCatalogue.add_delivered). Empty for a
+## game whose descriptor names none.
+func current_maps() -> PackedStringArray:
+	return _current.maps if _current != null else PackedStringArray()
 
 
 ## What a joining client is told to load.

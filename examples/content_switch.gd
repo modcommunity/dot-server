@@ -61,6 +61,12 @@ const DEP_ID := "test/shared-assets"
 const DEP_VERSION := "1.0.0"
 const DEP_SOURCE := DATA + "/dep_src"
 
+# A pack only the server mounts, and a map the game offers but does not load up front.
+const SRV_ID := "test/server-only"
+const SRV_VERSION := "1.0.0"
+const SRV_SOURCE := DATA + "/srv_src"
+const MAP_KEY := "test/map_a@1.0.0"
+
 ## A fixed port, because [DotServer] does not report the one an ephemeral bind chose
 ## and the client half of this test has to be told where to connect.
 const PORT := 27515
@@ -73,7 +79,7 @@ const CONTENT_BASE := "https://content.invalid/content"
 ## Every check this suite runs, including the one that compares against it. The section
 ## counter cannot see a section that aborted after announcing itself — its remaining checks
 ## simply never run — and a total can. See docs/testing.md.
-const CHECKS := 49
+const CHECKS := 55
 
 var _passed := 0
 var _failed := 0
@@ -262,6 +268,17 @@ func _publish_content() -> bool:
 	var dep_published := dep.publish(DEP_SOURCE, "%s/%s/%s" % [DIST, DEP_ID, DEP_VERSION])
 	_check(dep_published.ok, "a dependency pack publishes beside it", str(dep_published.error))
 
+	# And one the game needs on the SERVER only: never in a client's content.sync.
+	DotPaths.write_text(SRV_SOURCE.path_join("server.txt"), "server only\n")
+	var srv := DotCloudPublisher.new()
+	srv.content_id = SRV_ID
+	srv.version = SRV_VERSION
+	srv.display_name = "Server Only"
+	srv.signing_key_pem = str(pair["private"])
+	srv.signing_key_id = "test"
+	var srv_published := srv.publish(SRV_SOURCE, "%s/%s/%s" % [DIST, SRV_ID, SRV_VERSION])
+	_check(srv_published.ok, "a server-only pack publishes beside them", str(srv_published.error))
+
 	_check(
 		FileAccess.file_exists(_manifest_url),
 		"a signed manifest is on disk",
@@ -410,8 +427,21 @@ func _boot() -> bool:
 	delivered.scene = PACK_SCENE
 	delivered.client_scene = PACK_SCENE
 	delivered.dependencies = PackedStringArray(["%s@%s" % [DEP_ID, DEP_VERSION]])
+	delivered.server_dependencies = PackedStringArray(["%s@%s" % [SRV_ID, SRV_VERSION]])
+	# Never published: a map is fetched when the server changes to it, so naming one the
+	# origin does not have must not stop the GAME from loading.
+	delivered.maps = PackedStringArray([MAP_KEY])
 
 	_check(delivered.validate().ok, "the delivered descriptor validates")
+
+	var unpinned := DotGameDescriptor.new()
+	unpinned.game_id = "unpinned"
+	unpinned.scene = "res://examples/fixtures/lobby_world.tscn"
+	unpinned.maps = PackedStringArray(["test/map_b"])
+	_check(
+		not unpinned.validate().ok,
+		"a map with no pinned version is refused, as a dependency is"
+	)
 	_check(
 		delivered.content_key() == "%s@%s" % [PACK_ID, PACK_VERSION],
 		"and names its content key (%s)" % delivered.content_key()
@@ -613,6 +643,23 @@ func _test_switch_to_delivered() -> void:
 	_check(
 		bool(_client_cloud.call("is_mounted", DEP_ID, DEP_VERSION)),
 		"and the client mounted it too, from the same content.sync"
+	)
+	_check(
+		FileAccess.file_exists("res://dot_cloud/%s/%s/server.txt" % [SRV_ID, SRV_VERSION]),
+		"the server-only pack is mounted for the game"
+	)
+	_check(
+		Array(_link.content_extra) == ["%s@%s" % [DEP_ID, DEP_VERSION]],
+		"and the client was told to fetch the shared one only (%s)" % [_link.content_extra]
+	)
+	_check(
+		Array(_server.games.current_server_dependencies()) == ["%s@%s" % [SRV_ID, SRV_VERSION]],
+		"the manager names the server-only pack (%s)" % [_server.games.current_server_dependencies()]
+	)
+	_check(
+		Array(_server.games.current_maps()) == [MAP_KEY]
+			and not DirAccess.dir_exists_absolute("res://dot_cloud/test/map_a/1.0.0"),
+		"and offers the map without mounting it (%s)" % [_server.games.current_maps()]
 	)
 	# [b]One subscription, not one per change.[/b] The link connects a handler to the
 	# cloud client's `progress_changed` every time a sync begins, guarded by
