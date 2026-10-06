@@ -27,7 +27,7 @@ const SECTIONS := 27
 ## Every check this suite runs, including the two at the end that compare the counts. The
 ## section counter cannot see a section that aborted after announcing itself — its remaining
 ## checks simply never run — and a total can. See docs/testing.md.
-const CHECKS := 321
+const CHECKS := 322
 
 var _entered := 0
 var _completed := 0
@@ -1198,6 +1198,16 @@ func _test_admins() -> void:
 		"a display name is never a key",
 		not admins.uid_has_permission("Alice", DotAdminFlags.ROOT)
 			or table.asked_with_display_name == false
+	)
+
+	# Group NAMES are kept, not only merged into flags: a game grants things by role, and a
+	# role is a group name. They used to be read, used, and dropped.
+	var _vip := admins.set_admin(
+		"backbone:carol", PackedStringArray(), 0, PackedStringArray(["vip"]), "Carol"
+	)
+	_check(
+		"a player's admin groups are known by name",
+		Array(admins.uid_permissions("backbone:carol").get("groups", [])).has("vip")
 	)
 
 	_check("flag parse: comma", DotAdminFlags.parse("kick,ban").size() == 2)

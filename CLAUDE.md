@@ -690,6 +690,10 @@ who has not made somebody an admin has not accidentally made them one by turning
 on. It defaults to `Source.CHAT`, which this console already documents as the least
 trusted path.
 
+## A session keeps its group names
+
+`DotAdminManager.resolve` read a player's admin groups, merged their flags and dropped the names. `DotClientSession.groups` keeps them now — from the admin file's `groups` and from any source that returns a `groups` list — and `uid_permissions` returns them too. A flag says what somebody may do; a game also wants to know who somebody is, and a role in a game's config is a group name (game-playground's per-role spawn limits are the first reader).
+
 ## `admin_add` took a flag list where an operator types a group
 
 The admin file has had groups since it was written — the template ships `moderator`,

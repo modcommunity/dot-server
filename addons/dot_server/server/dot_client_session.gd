@@ -79,6 +79,15 @@ var permissions: PackedStringArray = PackedStringArray()
 
 var immunity: int = 0
 
+## The admin groups this player is in, by name — from the admin file's `groups` and from
+## any source that returns a `groups` list. Resolved with [member permissions].
+##
+## [b]Kept, not only folded into flags.[/b] A flag says what somebody may DO; a game also
+## wants to know who somebody IS — a sandbox gives its "vip" group twice the props — and a
+## role named in a config is a group name, not a set of flags. Before this the names were
+## read, used to merge flags, and dropped.
+var groups: PackedStringArray = PackedStringArray()
+
 ## Unix seconds when the transport connected.
 var connected_at: int = 0
 

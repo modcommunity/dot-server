@@ -111,6 +111,7 @@ func remove_source(source: Object) -> void:
 func resolve(session: DotClientSession) -> DotResult:
 	session.permissions = PackedStringArray()
 	session.immunity = DotAdminFlags.NO_IMMUNITY
+	session.groups = PackedStringArray()
 
 	if not session.is_authenticated():
 		# An unauthenticated or guest session gets nothing. A guest uid is a random
@@ -130,6 +131,8 @@ func resolve(session: DotClientSession) -> DotResult:
 
 		for group in entry.get("groups", []):
 			var group_name := str(group)
+			if not session.groups.has(group_name):
+				session.groups.append(group_name)
 			if _groups.has(group_name):
 				var g: Dictionary = _groups[group_name]
 				session.permissions = DotAdminFlags.merge(
@@ -173,6 +176,12 @@ func resolve(session: DotClientSession) -> DotResult:
 		)
 		session.immunity = maxi(session.immunity, int(d.get("immunity", 0)))
 		reasons.append(str(d.get("source", source.call("source_name"))))
+
+		# Optional: a source that knows the player's groups by name says so, and a game
+		# granting things by role sees the site's groups as well as the file's.
+		for group in d.get("groups", []):
+			if not session.groups.has(str(group)):
+				session.groups.append(str(group))
 
 	if not session.permissions.is_empty():
 		DotLog.info(
@@ -238,6 +247,7 @@ class UidOnlyIdentity:
 func uid_permissions(uid: String) -> Dictionary:
 	var flags := PackedStringArray()
 	var immunity := 0
+	var groups := PackedStringArray()
 
 	if _admins.has(uid):
 		var entry: Dictionary = _admins[uid]
@@ -245,6 +255,8 @@ func uid_permissions(uid: String) -> Dictionary:
 		immunity = int(entry.get("immunity", 0))
 
 		for group in entry.get("groups", []):
+			if not groups.has(str(group)):
+				groups.append(str(group))
 			if _groups.has(str(group)):
 				var g: Dictionary = _groups[str(group)]
 				flags = DotAdminFlags.merge(flags, _flags_of(g))
@@ -257,7 +269,7 @@ func uid_permissions(uid: String) -> Dictionary:
 	if uid == "":
 		# No identity at all. Asking the sources about the empty string is how a source
 		# with a blank key in its table grants everything to nobody in particular.
-		return {"flags": flags, "immunity": immunity}
+		return {"flags": flags, "immunity": immunity, "groups": groups}
 
 	var identity := UidOnlyIdentity.new(uid)
 
@@ -279,7 +291,11 @@ func uid_permissions(uid: String) -> Dictionary:
 		flags = DotAdminFlags.merge(flags, _as_flags(d.get("flags", [])))
 		immunity = maxi(immunity, int(d.get("immunity", 0)))
 
-	return {"flags": flags, "immunity": immunity}
+		for group in d.get("groups", []):
+			if not groups.has(str(group)):
+				groups.append(str(group))
+
+	return {"flags": flags, "immunity": immunity, "groups": groups}
 
 
 ## Whether a player holds a flag, by uid, without a session.
