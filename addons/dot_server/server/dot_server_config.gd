@@ -42,13 +42,40 @@ extends DotConfig
 ## Interface to bind. [code]*[/code] means every interface.
 @export var bind_address: String = "*"
 
-## Transport. Defaults to [DotTransportAuto], which prefers WebSocket so browser
-## clients can connect.
+## Transport. When unset, [member transport_mode] builds one.
 ##
 ## [b]This is the setting most likely to be wrong.[/b] A server that picks ENet
-## cannot accept browser clients at all, and nothing about the server looks
-## misconfigured when that happens. See [DotTransportAuto].
+## alone cannot accept browser clients at all, and nothing about the server looks
+## misconfigured when that happens. Leave it unset unless you need a transport
+## [member transport_mode] cannot describe.
 @export var transport: DotTransport = null
+
+## What [method resolve_transport] builds when [member transport] is unset.
+##
+## [code]dual[/code] (the default): WebSocket on TCP [member port] for browsers AND
+## ENet on UDP [method effective_enet_port] for native clients, in one match — see
+## [DotTransportDual]. Falls back to WebSocket only where this build has no ENet or
+## UDP. [code]websocket[/code]: every client on WebSocket, the behaviour before dual
+## existed. [code]enet[/code]: native clients only, no browsers.
+@export_enum("dual", "websocket", "enet") var transport_mode: String = "dual"
+
+## UDP port native clients reach ENet on. 0: the game port's number — TCP and UDP
+## are separate namespaces, so WebSocket and ENet share [member port] for free.
+##
+## When A2S or the dot query protocol answer on the same UDP port (the default),
+## the port is shared through [DotUdpDemux]; see [member enet_share_udp_port].
+@export_range(0, 65535, 1) var enet_port: int = 0
+
+## Interface ENet's UDP port binds. Empty: the query listeners' interface
+## ([method effective_query_bind_address]), because ENet shares their port by default
+## and because a reverse-proxied server — WebSocket on loopback behind nginx — needs
+## its UDP facing the world exactly as its queries do. nginx cannot carry UDP.
+@export var enet_bind_address: String = ""
+
+## Share one UDP port between ENet and A2S/DQP when they are configured onto the
+## same number. Off: ENet binds its port itself and A2S/DQP must be moved
+## ([member a2s_port], [member query_port]), or they fail to bind.
+@export var enet_share_udp_port: bool = true
 
 @export_range(1, 4096, 1) var max_players: int = 32
 
@@ -552,10 +579,23 @@ func validate() -> DotResult:
 			"got '%s'" % query_player_detail
 		)
 
-	# Only the TCP listeners can collide with each other. The query and A2S ports
-	# are UDP, and sharing a number with a TCP listener is not a conflict — sharing
-	# it with the game port is exactly what an ENet deployment must avoid, and that
-	# is caught at bind time where the transport is actually known.
+	if not ["dual", "websocket", "enet"].has(transport_mode):
+		return DotResult.fail(
+			DotError.CODE_INVALID,
+			"transport_mode must be dual, websocket or enet.",
+			"got '%s'" % transport_mode
+		)
+
+	if enet_port < 0 or enet_port > 65535:
+		return DotResult.fail(
+			DotError.CODE_INVALID, "enet_port must be between 0 and 65535."
+		)
+
+	# Only the TCP listeners can collide with each other. The query, A2S and ENet
+	# ports are UDP, and sharing a number with a TCP listener is not a conflict.
+	# ENet on the same UDP port as A2S/DQP is legal too: DotTransportDual shares it
+	# through a demux (enet_share_udp_port). With sharing off, the clash is caught
+	# at bind time, where the transport is actually known.
 	if query_enabled and query_websocket:
 		var ws_port := effective_query_websocket_port()
 		for taken in [
@@ -690,14 +730,57 @@ func public_slots() -> int:
 	return maxi(0, max_players - reserved_slots)
 
 
-## The transport, creating a default if none was configured.
+## UDP port ENet listens on in [code]dual[/code] and [code]enet[/code] modes.
+func effective_enet_port() -> int:
+	return enet_port if enet_port > 0 else port
+
+
+## The interface ENet binds. See [member enet_bind_address].
+func effective_enet_bind_address() -> String:
+	var chosen := enet_bind_address.strip_edges()
+	return chosen if chosen != "" else effective_query_bind_address()
+
+
+## Whether ENet's UDP port is also a query protocol's, so the two need the demux.
+func enet_shares_query_port() -> bool:
+	var udp := effective_enet_port()
+	if udp <= 0:
+		return false
+	return (a2s_enabled and effective_a2s_port() == udp) \
+		or (query_enabled and effective_query_port() == udp)
+
+
+## The transport, creating one from [member transport_mode] if none was configured.
 func resolve_transport() -> DotTransport:
 	if transport == null:
-		var auto := DotTransportAuto.new()
-		# Default to WebSocket so browser clients work. A native-only deployment
-		# turns this off and gets ENet's unreliable channels.
-		auto.require_web_clients = true
-		transport = auto
+		transport = _build_transport()
 
 	transport.max_clients = max_players
 	return transport
+
+
+func _build_transport() -> DotTransport:
+	var can_enet := DotPlatform.has_udp() and ClassDB.class_exists("ENetMultiplayerPeer")
+
+	if transport_mode == "enet" and can_enet:
+		return DotTransportENet.new()
+
+	if transport_mode == "dual" and can_enet:
+		var dual := DotTransportDual.new()
+		dual.enet_port = effective_enet_port()
+		dual.enet_bind_address = effective_enet_bind_address()
+		# The demux costs a relay hop per ENet packet; pay it only when a query
+		# protocol really is on the same UDP port.
+		dual.share_udp_port = enet_share_udp_port and enet_shares_query_port()
+		return dual
+
+	if transport_mode != "websocket":
+		DotLog.warn(
+			"server",
+			"transport_mode %s needs ENet, which this build has not got; using WebSocket"
+			% transport_mode
+		)
+
+	var auto := DotTransportAuto.new()
+	auto.require_web_clients = true
+	return auto

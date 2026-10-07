@@ -102,8 +102,36 @@ signal game_changed(game_id: String, content_id: String, display_name: String)
 
 @export_group("Transport")
 
-## Transport used to connect. Should match the server's.
+## Transport used to connect. When set, it is the only one tried. When unset (the
+## usual case) the link chooses: see [member transport_preference].
 @export var transport: DotTransport = null
+
+## [code]auto[/code]: a native build tries ENet over UDP first, for
+## [member udp_connect_timeout_sec], and falls back to WebSocket — a player on a
+## network that blocks UDP still gets in. A browser always uses WebSocket.
+## [code]udp[/code]: ENet only. [code]ws[/code]: WebSocket only, every client's
+## behaviour before dual-stack servers.
+@export_enum("auto", "udp", "ws") var transport_preference: String = "auto"
+
+## Where ENet is, as [code]host:port[/code]. Empty: derived from the connect
+## address when that is a plain [code]host:port[/code] (a dual-stack server serves
+## ENet on the same number by default); a [code]ws://[/code]/[code]wss://[/code]
+## address names a proxy, not the game box, so nothing is derived from it and only
+## an explicit value here (the server's advertised [code]enet_port[/code]) makes
+## the link try UDP.
+@export var udp_address: String = ""
+
+## How long the UDP attempt gets before WebSocket is tried. Short on purpose: it
+## is the wait a player behind a UDP-blocking firewall pays on every join.
+@export_range(0.5, 15.0, 0.5) var udp_connect_timeout_sec: float = 2.5
+
+## "enet" or "websocket": what the current (or last) connection uses.
+var transport_used: String = ""
+var _trying_udp: bool = false
+## The address of the join in progress, for the secure rejoin.
+var _last_address: String = ""
+## Set while rejoining over WebSocket because the server asked for a secret.
+var _secure_rejoin: bool = false
 
 @export_group("Behaviour")
 
@@ -267,17 +295,63 @@ func connect_to_server(address: String, password: String = "") -> DotResult:
 		disconnect_from_server()
 
 	_password = password
+	_last_address = address
 	_set_phase(Phase.CONNECTING, "Connecting…")
 
-	if transport == null:
-		var auto := DotTransportAuto.new()
-		# A client must speak whatever the server listens on; WebSocket is the
-		# only choice that works from a browser and also works natively.
-		auto.require_web_clients = true
-		transport = auto
+	if transport != null:
+		return await _connect_with(transport, address, transport.connect_timeout_sec)
 
-	var created := transport.create_client(address)
+	var udp := _udp_target(address)
+	if udp != "":
+		var enet := DotTransportENet.new()
+		_trying_udp = transport_preference != "udp"
+		last_error = null
+		var over_udp: DotResult = await _connect_with(
+			enet, udp, udp_connect_timeout_sec if _trying_udp else enet.connect_timeout_sec
+		)
+		_trying_udp = false
+		if over_udp.ok or transport_preference == "udp":
+			return over_udp
+		DotLog.info(
+			CHANNEL,
+			"UDP did not answer; falling back to WebSocket",
+			{"udp": udp, "waited_sec": udp_connect_timeout_sec}
+		)
+		last_error = null
+		_set_phase(Phase.CONNECTING, "Connecting…")
+
+	var ws := DotTransportAuto.new()
+	# A client must speak whatever the server listens on; WebSocket is the only
+	# choice that works from a browser and also works natively.
+	ws.require_web_clients = true
+	return await _connect_with(ws, address, ws.connect_timeout_sec)
+
+
+## The ENet address to try first, or "" to go straight to WebSocket.
+func _udp_target(address: String) -> String:
+	if transport_preference == "ws" or _secure_rejoin:
+		return ""
+	if DotPlatform.is_web() or not DotPlatform.has_udp() \
+			or not ClassDB.class_exists("ENetMultiplayerPeer"):
+		return ""
+	if udp_address.strip_edges() != "":
+		return udp_address.strip_edges()
+
+	var parts := DotTransport.normalise_address(address, 0)
+	var scheme := str(parts["scheme"])
+	if scheme == "udp" or scheme == "enet":
+		parts["scheme"] = ""
+		return DotTransport.format_address(parts, false)
+	if scheme != "" or str(parts["path"]) != "" or int(parts["port"]) <= 0:
+		return ""
+	return DotTransport.format_address(parts, false)
+
+
+func _connect_with(t: DotTransport, address: String, timeout_sec: float) -> DotResult:
+	var created := t.create_client(address)
 	if not created.ok:
+		if _trying_udp:
+			return DotResult.failure(created.error)
 		return _fail(created.error)
 
 	multiplayer.multiplayer_peer = created.value
@@ -287,23 +361,34 @@ func connect_to_server(address: String, password: String = "") -> DotResult:
 		multiplayer.connection_failed.connect(_on_connection_failed)
 		multiplayer.server_disconnected.connect(_on_server_disconnected)
 
-	DotLog.info(CHANNEL, "connecting", {"address": address})
+	var used := "enet" if t.scheme() == "udp" else "websocket"
+	# Set here, not once the loop below sees the connect: the server's challenge can
+	# arrive in the same frame as the connect, and the credential check reads this.
+	transport_used = used
+	DotLog.info(CHANNEL, "connecting", {"address": address, "transport": used})
 
 	# The transport reports success or failure through signals rather than a return
 	# value, so the connect is awaited with a timeout rather than checked.
-	var deadline := Time.get_ticks_msec() + int(
-		transport.connect_timeout_sec * 1000.0
-	)
+	var deadline := Time.get_ticks_msec() + int(timeout_sec * 1000.0)
 
 	while Time.get_ticks_msec() < deadline:
 		if _connected:
+			DotLog.info(CHANNEL, "connected", {"transport": used})
 			return DotResult.success(true)
-		if phase == Phase.FAILED:
+		if phase == Phase.FAILED or (_trying_udp and last_error != null):
+			if _trying_udp:
+				multiplayer.multiplayer_peer.close()
+				multiplayer.multiplayer_peer = null
 			return DotResult.failure(
 				last_error if last_error != null
 				else DotError.make(DotError.CODE_NETWORK, "Could not connect.")
 			)
 		await get_tree().process_frame
+
+	if _trying_udp:
+		multiplayer.multiplayer_peer.close()
+		multiplayer.multiplayer_peer = null
+		return DotResult.fail(DotError.CODE_TIMEOUT, "UDP did not answer.", address)
 
 	multiplayer.multiplayer_peer = null
 	return _fail(DotError.make(
@@ -354,6 +439,11 @@ func _on_connected() -> void:
 
 
 func _on_connection_failed() -> void:
+	# A failed UDP attempt is not the join failing: WebSocket is tried next, and an
+	# ERROR line and a FAILED phase for it would be a lie the player sees.
+	if _trying_udp:
+		last_error = DotError.make(DotError.CODE_NETWORK, "UDP connect failed.")
+		return
 	_fail(DotError.make(
 		DotError.CODE_NETWORK,
 		"Could not reach the server.",
@@ -577,9 +667,43 @@ func _on_challenge(_peer_id: int, challenge: Dictionary) -> void:
 		payload["password"] = _password
 
 	var strategy := str(challenge.get("auth", "none")).to_lower()
+	if not _may_send_credential_here(strategy):
+		return
 	await _attach_credential(payload, strategy)
 
 	send_kind(DotEnvelope.CREDENTIALS, payload)
+
+
+## Whether this link's transport may carry the credential [param strategy] needs.
+##
+## [b]ENet is not encrypted.[/b] A ticket is safe to send in the clear — single-use,
+## minutes long, and good for this server alone — but an access token (introspect)
+## or a password (local) is a bearer secret that anybody on the path could replay
+## anywhere. Neither goes over UDP: the link rejoins over WebSocket, which is TLS
+## wherever it is wss://, and sends nothing at all on the UDP connection. DTLS would
+## fix it at the cost of a certificate, which is the thing the native path exists to
+## not need. (A server's join password is shared, not an account's, and is sent as
+## before.)
+func _may_send_credential_here(strategy: String) -> bool:
+	if transport_used != "enet" or not strategy in ["introspect", "local"]:
+		return true
+
+	if transport_preference == "udp":
+		_fail(DotError.make(
+			DotError.CODE_UNSUPPORTED,
+			"This server's sign-in cannot be sent over UDP.",
+			"strategy %s sends a secret and UDP is unencrypted; connect over WebSocket" % strategy
+		))
+		disconnect_from_server()
+		return false
+
+	DotLog.info(
+		CHANNEL,
+		"this server's sign-in sends a secret and UDP is unencrypted; rejoining over WebSocket",
+		{"strategy": strategy}
+	)
+	_rejoin_over_websocket.call_deferred()
+	return false
 
 
 ## `web`, `mobile` or `desktop`: the class of client, which is a policy fact an owner
@@ -650,6 +774,13 @@ func _attach_credential(payload: Dictionary, strategy: String) -> void:
 			# Username and password for a LOCAL-strategy server come from a UI this
 			# node does not own; a game sets them before connecting.
 			pass
+
+
+func _rejoin_over_websocket() -> void:
+	_secure_rejoin = true
+	disconnect_from_server()
+	await connect_to_server(_last_address, _password)
+	_secure_rejoin = false
 
 
 func _issuer_url() -> String:

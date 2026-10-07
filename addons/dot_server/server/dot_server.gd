@@ -324,6 +324,7 @@ func boot() -> DotResult:
 		{
 			"transport": _transport._transport_name(),
 			"web_clients": _transport.supports_web_clients(),
+			"enet_udp": enet_port(),
 			"rcon": rcon != null and rcon.is_listening(),
 			"query": query != null and bool(query.call("is_listening")),
 			"a2s": a2s != null,
@@ -798,16 +799,64 @@ func _on_peer_disconnected(peer_id: int) -> void:
 	_maybe_hibernate()
 
 
+## Registers a connectionless protocol on the game's UDP port when the transport
+## owns that port through a demux ([DotTransportDual]). Returns false when it does
+## not, and the caller binds a socket of its own as before.
+##
+## Duck-typed for the same reason [method attach_query_host] is: dot-server-query
+## calls this, and nothing here names it.
+func share_udp_port(port: int, claim: Callable, handle: Callable) -> bool:
+	if _transport == null or not _transport.has_method("add_datagram_handler"):
+		return false
+	return bool(_transport.call("add_datagram_handler", port, claim, handle))
+
+
+## Removes a handler [method share_udp_port] registered.
+func unshare_udp_port(handle: Callable) -> void:
+	if _transport == null or not _transport.has_method("demux"):
+		return
+	var demux: Variant = _transport.call("demux")
+	if demux != null:
+		demux.remove_handler(handle)
+
+
+## The UDP port native clients reach ENet on, or 0 when this server has no ENet.
+## Advertised by the query protocols so a native client knows to try it.
+func enet_port() -> int:
+	if _transport == null:
+		return 0
+	if _transport.has_method("advertised_enet_port"):
+		return int(_transport.call("advertised_enet_port"))
+	if _transport.scheme() == "udp":
+		return config.port
+	return 0
+
+
+## Which backend a peer is on: "websocket", "enet", or "" when the transport has
+## only one.
+func peer_transport(peer_id: int) -> String:
+	if _peer != null and _peer.has_method("backend_name"):
+		return str(_peer.call("backend_name", peer_id))
+	return ""
+
+
 func _address_of(peer_id: int) -> String:
 	if _peer == null:
 		return ""
 
 	# WebSocket and ENet expose the remote address through different methods, and
-	# neither is on the MultiplayerPeer base class.
+	# neither is on the MultiplayerPeer base class. DotDualPeer answers for both.
 	if _peer.has_method("get_peer_address"):
 		var address: Variant = _peer.call("get_peer_address", peer_id)
 		if address != null and str(address) != "":
 			return str(address)
+
+	# ENet alone: the address is on the packet peer, not the multiplayer peer.
+	# Before this a native-only server logged, rate-limited and banned "unknown".
+	if _peer.has_method("get_peer"):
+		var packet_peer: Variant = _peer.call("get_peer", peer_id)
+		if packet_peer is Object and packet_peer.has_method("get_remote_address"):
+			return str(packet_peer.call("get_remote_address"))
 
 	return "unknown"
 

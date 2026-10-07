@@ -50,7 +50,7 @@ const PORT := 27717
 ## How many checks a clean run makes. A section that aborts part-way stops adding checks,
 ## and the section counter cannot see that when the abort comes after the section
 ## announced itself — so the total is asserted too.
-const CHECKS := 72
+const CHECKS := 76
 
 var _entered := 0
 var _completed := 0
@@ -91,6 +91,7 @@ func _run() -> void:
 		await _test_a_newer_client_on_an_older_server()
 		await _test_a_required_kind_the_server_lacks()
 		await _test_a_required_kind_the_client_lacks()
+		await _test_a_secret_never_rides_udp()
 
 	_teardown()
 
@@ -325,6 +326,12 @@ func _test_a_real_join_carries_it() -> bool:
 	if not _check(admitted, "and finishes signon", "refused: %s" % _refused[0]):
 		_done()
 		return false
+
+	# A dual-stack server and a native client: the join is over UDP unless told otherwise.
+	_check(
+		_link.transport_used == "enet" and _server.peer_transport(_first_peer()) == "enet",
+		"over ENet, which a native client tries first (%s)" % _link.transport_used
+	)
 
 	_check(
 		_link.server_signon == DotSignon.revision([DotServer]),
@@ -700,6 +707,58 @@ func _test_a_required_kind_the_client_lacks() -> void:
 	_drop_link(older)
 	_server.envelope.unregister(&"skew.must")
 	_done()
+
+
+# --- 9. A secret over UDP --------------------------------------------------
+
+## An access token is a bearer secret and ENet is cleartext: a server whose sign-in
+## wants one gets it over WebSocket, and the UDP connection carries nothing at all.
+func _test_a_secret_never_rides_udp() -> void:
+	_section("a sign-in that sends a secret never sends it over UDP")
+
+	var seen: Array[Dictionary] = []
+	var server_auth := _AuthStandIn.new()
+	server_auth.on_authenticate = func(credential: Dictionary) -> void:
+		var counts: Dictionary = _server.multiplayer.multiplayer_peer.call("peer_counts")
+		seen.append({"token": credential.get("access_token", ""), "enet": counts["enet"]})
+	var client_auth := _TokenStandIn.new()
+	DotRegistry.register(&"dot_auth_server", server_auth)
+	DotRegistry.register(&"dot_auth_client", client_auth)
+
+	var link := _new_link("Secretive", Callable())
+	await _join(link)
+	await _until(func() -> bool: return not seen.is_empty(), 5.0)
+
+	_check(link.transport_used == "websocket", "the client rejoined over WebSocket (%s)" % link.transport_used)
+	var over_udp := seen.filter(func(c: Dictionary) -> bool: return c["enet"] > 0)
+	var with_secret := seen.filter(func(c: Dictionary) -> bool: return c["token"] == _TokenStandIn.SECRET)
+	_check(over_udp.is_empty(), "no credentials at all arrived while it was on ENet (%d)" % over_udp.size())
+	_check(with_secret.size() == 1, "and the token arrived once, over WebSocket")
+
+	DotRegistry.unregister_instance(&"dot_auth_server", server_auth)
+	DotRegistry.unregister_instance(&"dot_auth_client", client_auth)
+	_drop_link(link)
+	_done()
+
+
+## dot-auth's server half, as far as dot-server asks: a strategy and a verdict.
+class _AuthStandIn extends RefCounted:
+	var on_authenticate: Callable
+
+	func strategy_name() -> String:
+		return "introspect"
+
+	func authenticate(credential: Dictionary, _address: String) -> DotResult:
+		on_authenticate.call(credential)
+		return DotResult.fail(DotError.CODE_AUTH, "stand-in refuses everybody")
+
+
+## dot-auth's client half: a token to send.
+class _TokenStandIn extends RefCounted:
+	const SECRET := "bearer-secret-for-the-test"
+
+	func valid_access_token() -> DotResult:
+		return DotResult.success(SECRET)
 
 
 # --- Harness ---------------------------------------------------------------

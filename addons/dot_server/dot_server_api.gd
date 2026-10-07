@@ -8,5 +8,9 @@ extends RefCounted
 
 # 2: DotGameDescriptor.server_dependencies and .maps; DotGameManager
 #    current_server_dependencies() and current_maps().
-const LEVEL := 2
+# 3: DotServerConfig transport_mode, enet_port, enet_bind_address, enet_share_udp_port;
+#    DotServer share_udp_port(), unshare_udp_port(), enet_port(), peer_transport();
+#    DotClientLink transport_preference, udp_address, udp_connect_timeout_sec,
+#    transport_used.
+const LEVEL := 3
 const OLDEST := 1

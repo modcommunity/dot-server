@@ -713,6 +713,16 @@ neither — listing the groups it does know. The refusal cannot be "unknown flag
 an unknown flag is legal here; it is "this is not a group and not any flag I ship", which
 is a misspelled group far more often than it is a new one.
 
+## Browsers over WebSocket, the desktop app over UDP, in one match
+
+`transport_mode` (default `dual`) makes the server listen twice: WebSocket on TCP `port` for browsers and ENet on UDP `effective_enet_port()` (the same number by default) for native clients, behind one `DotDualPeer` (dot-core's `DotTransportDual`). `websocket` is the old behaviour, `enet` native only. Where this build has no ENet, `dual` is WebSocket with a WARN.
+
+- **One UDP port for ENet, A2S and DQP.** The query protocols answer on the game port by default and ENet cannot share a socket with them, so when they are on the same number (`enet_shares_query_port()`) the transport's demux owns the port and dot-server-query registers handlers on it (`share_udp_port`) instead of binding. Different numbers: ENet binds directly and pays no relay hop.
+- **The UDP side binds `effective_enet_bind_address()`**, which follows the query listener's interface. Behind nginx the game's WebSocket is on loopback and nginx cannot carry UDP, so ENet has to face the world exactly like the queries do. No certificate is involved on that path.
+- **Advertised**: `enet_port()` goes out in DQP's info (`enet_port`) and A2S's keywords (`udp:<port>`). The client link tries UDP first on a native build (`transport_preference: auto`), for `udp_connect_timeout_sec` (2.5 s), then falls back to WebSocket. It derives the UDP address from a plain `host:port`; a `ws(s)://` address names a proxy, so only an explicit `udp_address` (the shell's `--udp`) makes it try UDP then.
+- **ENet is cleartext, so no bearer secret rides it.** A ticket is safe in the clear (single-use, minutes long, this server only — dot-auth's four properties). An access token (`introspect`) or an account password (`local`) is not: on ENet the link sends no credentials at all and rejoins over WebSocket (`_may_send_credential_here`; `signon_revision` asserts nothing arrived over UDP). With `transport_preference: udp` it refuses the join instead. DTLS was the alternative and is the wrong trade: it needs the certificate the native path exists to not need. A server's own join password is shared, not an account's, and is still sent.
+- **Peer addresses**: `_address_of` asks the peer's `get_peer_address`, which `DotDualPeer` answers with the real client address behind the demux's relay. A plain ENet server used to log, rate-limit and ban "unknown"; it now reads the packet peer.
+
 ## Validating changes
 
 ```bash
@@ -725,7 +735,7 @@ done
 # protocols and their 95 checks moved to dot-server-query.)
 godot --headless --path . res://examples/dedicated_server.tscn
 
-# 68 checks. The surface is exactly the six envelope RPCs, the revision is derived, a real
+# 76 checks. The surface is exactly the six envelope RPCs, the revision is derived, a real
 # join carries it and both adverts, a DotNotice crosses a real socket whole, a mismatch is
 # refused in words, and two builds that know different kinds play together -- or are
 # refused in words when one lacks a kind the other requires.
