@@ -557,6 +557,14 @@ func _resolve_subsystems() -> void:
 	games = _resolve(games_ref, "games") as DotGameManager
 	if games != null:
 		games.setup(self)
+		# Awake while a game loads: a game reads its tick rate from the engine as it starts,
+		# and a server that hibernated from boot (or emptied before a vote's change) had the
+		# engine at hibernate_tickrate, so the delivered playground's netcode refused to start
+		# at 5 Hz ("snapshot_rate must not exceed tick_rate"). Back to sleep after the load,
+		# deferred, so a host's own game_loaded handler (which loads the module) runs awake.
+		game_changing.connect(func(_from: String, _to: String) -> void: _begin_game_load())
+		games.game_loaded.connect(func(_key: String) -> void: _end_game_load())
+		games.game_load_failed.connect(func(_key: String, _error: DotError) -> void: _end_game_load())
 
 	if votes_ref == null:
 		votes_ref = DotNodeRef.of_created(&"Votes", DotVoteManager)
@@ -2221,8 +2229,22 @@ func _apply_tickrate() -> void:
 	DotLog.debug(CHANNEL, "tickrate applied", {"rate": rate})
 
 
+## True while a game change is under way: see the connection in [method start].
+var _loading_game: bool = false
+
+
+func _begin_game_load() -> void:
+	_loading_game = true
+	_wake_from_hibernation()
+
+
+func _end_game_load() -> void:
+	_loading_game = false
+	call_deferred(&"_maybe_hibernate")
+
+
 func _maybe_hibernate() -> void:
-	if not config.hibernate_when_empty:
+	if not config.hibernate_when_empty or _loading_game:
 		return
 	if state != State.RUNNING:
 		return

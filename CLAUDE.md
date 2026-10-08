@@ -842,3 +842,9 @@ addons/dot_server/
 - **Answering a query at all.** dot-server-query does that, and dot-browser asks.
 - **A listen server helper.** Running `DotServer` and `DotClientLink` in one process
   works — that is why there are no autoloads — but nothing wraps the pattern up.
+
+## A game loads awake (2026-10-07)
+
+An empty server hibernates from boot now, and a game reads its tick rate from the engine as it starts (the family's tickrate chain: `sv_tickrate` -> `Engine.physics_ticks_per_second` -> the game). So a game loaded while the server slept started at `hibernate_tickrate`. dot-server-deploy's real-host playground check found it: the delivered playground's netcode refused to start at 5 Hz ("snapshot_rate must not exceed tick_rate, 32 > 5"), so an empty playground server could not load its own game. `DotServer` now wakes on `game_changing` (`_begin_game_load`), refuses to hibernate while `_loading_game`, and after `game_loaded` or `game_load_failed` goes back to sleep **deferred** (`_end_game_load`). Deferred because a host's own `game_loaded` handler is what loads the module, and it must run awake too. A wake for a load is a wake like any other, so clocks following `hibernation_changed` restart, which is right for a new game. `content_switch` checks it, 57: hibernated first, the load watched at 30 Hz and awake, asleep again after. Armed by dropping the connection: the load ran at 5 Hz.
+
+**One process, one tick rate.** A check that runs a server and a client in one process now has to turn hibernation off in its fixture: the server sleeps before the client connects, and the client's game starts at 5 Hz. In production they are two processes. dot-server-deploy's playground, look-at-me and delivery client fixtures do (`sv_hibernate_when_empty: false`).

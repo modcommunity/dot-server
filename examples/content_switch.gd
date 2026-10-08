@@ -79,7 +79,7 @@ const CONTENT_BASE := "https://content.invalid/content"
 ## Every check this suite runs, including the one that compares against it. The section
 ## counter cannot see a section that aborted after announcing itself — its remaining checks
 ## simply never run — and a total can. See docs/testing.md.
-const CHECKS := 55
+const CHECKS := 57
 
 var _passed := 0
 var _failed := 0
@@ -459,10 +459,30 @@ func _boot() -> bool:
 	# would make a regression take fifteen minutes to report.
 	_server.games.sync_timeout_sec = 30.0
 
+	# A game loads AWAKE: an empty server hibernates (at boot, now), and a game reads its tick
+	# rate from the engine as it starts, so a load at the hibernate rate started the delivered
+	# playground's netcode at 5 Hz and it refused. Hibernated first, then the load watched.
+	_server.config.hibernate_when_empty = true
+	_server._maybe_hibernate()
+	var asleep_before := _server.is_hibernating()
+	var at_load := [-1, false]
+	var watch := func(_key: String) -> void:
+		at_load[0] = Engine.physics_ticks_per_second
+		at_load[1] = _server.is_hibernating()
+	_server.games.game_loaded.connect(watch)
+
 	var initial := await _server.games.change_game("lobby", "boot")
 	if not _check(initial.ok, "the lobby loads", str(initial.error)):
 		_done()
 		return false
+	_server.games.game_loaded.disconnect(watch)
+	await get_tree().process_frame
+	_check(asleep_before and int(at_load[0]) == 30 and not bool(at_load[1]),
+		"an empty, hibernating server is awake at its own tick rate while a game loads",
+		"before %s, at load %d Hz, hibernating %s" % [asleep_before, int(at_load[0]), at_load[1]])
+	_check(_server.is_hibernating(), "and goes back to sleep after it, still empty")
+	# The rest of this suite is about switching, not sleeping.
+	_server._apply_hibernate_setting(false)
 
 	_client_side.add_child(_client_cloud)
 	_done()
