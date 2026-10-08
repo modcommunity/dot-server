@@ -78,6 +78,15 @@ signal state_changed(state: State)
 ## connect to this by name, which is why it carries a plain bool.
 signal hibernation_changed(hibernating: bool)
 
+## [code]sv_tickrate[/code] was set while the server is up. Nothing has changed yet: the
+## rate is held until the game reaches a boundary and calls
+## [method apply_pending_tickrate], or the next game change applies it.
+signal tickrate_pending(rate: int)
+
+## The rate the server ticks at changed, at a boundary. A game re-steps its simulation and
+## tells its clients here; see [method apply_pending_tickrate].
+signal tickrate_changed(rate: int)
+
 ## A client finished the whole join flow.
 signal client_spawned(session: DotClientSession)
 
@@ -209,6 +218,7 @@ var _cv_allow_mobile: DotConVar
 var _cv_maxplayers: DotConVar
 var _cv_cheats: DotConVar
 var _cv_tickrate: DotConVar
+var _pending_tickrate: int = -1
 var _cv_timeout: DotConVar
 var _cv_background_grace: DotConVar
 
@@ -2205,8 +2215,43 @@ func _sweep_timeouts() -> void:
 			kick(session, "Timed out while %s" % session.state_name().to_lower())
 
 
+## The rate the server plays at -- [code]sv_tickrate[/code] as last applied, not the
+## engine's, which reads [member DotServerConfig.hibernate_tickrate] while it hibernates.
+func tickrate() -> int:
+	return config.tickrate
+
+
+## A [code]sv_tickrate[/code] set while running and not yet applied, or -1.
+func pending_tickrate() -> int:
+	return _pending_tickrate
+
+
+## Applies a pending [code]sv_tickrate[/code]. Returns whether the rate changed.
+##
+## [b]At a boundary the GAME chooses, because only the game knows where one is.[/b] A tick
+## rate is the step everything counts in -- the netcode's input and snapshot timelines,
+## prediction, a timer's run, a replay -- and changing it under a moving player is a run
+## half at one rate and half at another. A map change is where all of that starts over
+## anyway, so a game that follows maps calls this as its old map goes; dot-server cannot
+## see a map change, so it applies one itself only at the next GAME change, which is a
+## boundary for every game. Until then the old rate stands and `status` says what is
+## waiting.
+func apply_pending_tickrate() -> bool:
+	if _pending_tickrate < 0:
+		return false
+	var rate := _pending_tickrate
+	_pending_tickrate = -1
+	if rate == config.tickrate:
+		return false
+	config.tickrate = rate
+	_apply_tickrate()
+	DotLog.info(CHANNEL, "tickrate changed", {"tickrate": rate})
+	tickrate_changed.emit(rate)
+	return true
+
+
 func _apply_tickrate() -> void:
-	var rate := _cv_tickrate.get_int()
+	var rate := config.tickrate
 
 	if state == State.HIBERNATING:
 		rate = config.hibernate_tickrate
@@ -2234,6 +2279,8 @@ var _loading_game: bool = false
 
 
 func _begin_game_load() -> void:
+	# A game change is a boundary for every game, including one that never asks.
+	apply_pending_tickrate()
 	_loading_game = true
 	_wake_from_hibernation()
 
@@ -2358,12 +2405,29 @@ func _register_cvars() -> void:
 		DotConVar.FLAG_ARCHIVE
 	).with_range(1, 4096)
 
+	# [b]Live, applied at a boundary (2026-10-07).[/b] It was FLAG_STARTUP_ONLY, the way the
+	# servers this family imitates have it, and changing it meant a restart that dropped
+	# everybody. Before the listener it applies at once, exactly as before -- server.cfg
+	# and `+sv_tickrate` are unchanged. After it, the value waits for the game's next
+	# boundary; see [method apply_pending_tickrate].
 	_cv_tickrate = console.cvar(
 		"sv_tickrate",
 		str(config.tickrate),
-		"Server ticks per second.",
-		DotConVar.FLAG_ARCHIVE | DotConVar.FLAG_STARTUP_ONLY
+		"Server ticks per second. Set while running, it applies at the next map change.",
+		DotConVar.FLAG_ARCHIVE | DotConVar.FLAG_NOTIFY
 	).with_range(10, 240)
+	_cv_tickrate.changed.connect(
+		func(_old: String, value: String) -> void:
+			var rate := value.to_int()
+			if state != State.RUNNING and state != State.HIBERNATING:
+				config.tickrate = rate
+				return
+			_pending_tickrate = rate if rate != config.tickrate else -1
+			if _pending_tickrate > 0:
+				DotLog.info(CHANNEL, "tickrate change waiting for the next map change",
+					{"now": config.tickrate, "next": rate})
+				tickrate_pending.emit(rate)
+	)
 
 	_cv_timeout = console.cvar(
 		"sv_timeout",

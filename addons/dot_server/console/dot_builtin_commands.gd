@@ -185,6 +185,8 @@ static func _register_status(server: DotServer, console: DotConsole) -> void:
 			ctx.reply("players    %d" % server.player_count())
 			ctx.reply("fps        %d" % Engine.get_frames_per_second())
 			ctx.reply("tickrate   %d" % Engine.physics_ticks_per_second)
+			if server.has_method("pending_tickrate") and server.pending_tickrate() > 0:
+				ctx.reply("tickrate   %d at the next map change" % server.pending_tickrate())
 			ctx.reply("memory     %s" % DotPaths.format_bytes(
 				OS.get_static_memory_usage()
 			))

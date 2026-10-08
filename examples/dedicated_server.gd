@@ -27,7 +27,7 @@ const SECTIONS := 28
 ## Every check this suite runs, including the two at the end that compare the counts. The
 ## section counter cannot see a section that aborted after announcing itself — its remaining
 ## checks simply never run — and a total can. See docs/testing.md.
-const CHECKS := 331
+const CHECKS := 340
 
 var _entered := 0
 var _completed := 0
@@ -425,25 +425,58 @@ func _test_cvar_flags() -> void:
 	_check("protected value redacted", listed.contains("***") and not listed.contains("hunter2"))
 	_run("sv_password \"\"")
 
-	# Startup-only cvars are locked once the server is listening.
-	var before := console.get_int("sv_tickrate")
-	var refused := _run("sv_tickrate 120")
+	# Startup-only cvars are locked once the server is listening. sv_tickrate was the
+	# example here until it became live (2026-10-07), and it was the only one, so the
+	# flag gets a cvar of its own -- a flag nothing exercises is a flag that can break.
+	var startup := console.cvar("test_startup_only", "1", "", DotConVar.FLAG_STARTUP_ONLY)
+	var refused := _run("test_startup_only 2")
 	_check(
 		"startup-only refused while running",
-		console.get_int("sv_tickrate") == before and refused.contains("only be changed")
+		startup.get_int() == 1 and refused.contains("only be changed")
 	)
 
 	# ...and settable before it is, which is the half that makes the flag mean
 	# "startup" rather than "never". `server.cfg` is exec'd before the listener for
-	# exactly this, and so is the CVAR half of the command line — `+sv_tickrate 128`
-	# is the most startup-ish input a server takes, and running the whole command
-	# line after the listener made it unsettable from there, so an operator with
-	# muscle memory from any other server got one that quietly ignored them.
+	# exactly this, and so is the CVAR half of the command line.
 	console.set_server_running(false)
-	_run("sv_tickrate 120")
-	_check("startup-only settable before the server runs", console.get_int("sv_tickrate") == 120)
-	_run("sv_tickrate %d" % before)
+	_run("test_startup_only 2")
+	_check("startup-only settable before the server runs", startup.get_int() == 2)
 	console.set_server_running(true)
+
+	# [b]sv_tickrate is live, and waits for a boundary.[/b] Set while running, nothing
+	# moves -- not the engine, not the config -- until the game calls
+	# apply_pending_tickrate (at its map change) or the next game change does.
+	var playing := server.tickrate()
+	var engine_before := Engine.physics_ticks_per_second
+	var announced: Array[int] = []
+	var on_pending := func(rate: int) -> void: announced.append(rate)
+	server.tickrate_pending.connect(on_pending)
+	var set_reply := _run("sv_tickrate %d" % (playing + 4))
+	_check("sv_tickrate is accepted while running", not set_reply.contains("only be changed"))
+	_check("and nothing changes yet", server.tickrate() == playing
+		and Engine.physics_ticks_per_second == engine_before)
+	_check("it is held as pending, and said so", server.pending_tickrate() == playing + 4
+		and announced == [playing + 4])
+	_check("stats says what is waiting", _run("stats").contains("at the next map change"))
+	var changed: Array[int] = []
+	var on_changed := func(rate: int) -> void: changed.append(rate)
+	server.tickrate_changed.connect(on_changed)
+	_check("the boundary applies it", server.apply_pending_tickrate()
+		and server.tickrate() == playing + 4 and changed == [playing + 4]
+		and server.pending_tickrate() == -1)
+	_check("and the engine follows unless the server is hibernating",
+		server.is_hibernating() or Engine.physics_ticks_per_second == playing + 4)
+	_check("a second boundary with nothing waiting changes nothing",
+		not server.apply_pending_tickrate())
+	_run("sv_tickrate %d" % (playing + 8))
+	_run("sv_tickrate %d" % (playing + 4))
+	_check("setting it back to the playing rate cancels what was waiting",
+		server.pending_tickrate() == -1)
+	_run("sv_tickrate %d" % playing)
+	server.apply_pending_tickrate()
+	_check("and it goes back", server.tickrate() == playing)
+	server.tickrate_pending.disconnect(on_pending)
+	server.tickrate_changed.disconnect(on_changed)
 
 	# The command-line split itself. There is no `+` argument on this process's
 	# argv, so both passes find nothing — what is under test is that the cvar-only
