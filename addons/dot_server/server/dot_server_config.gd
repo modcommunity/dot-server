@@ -135,7 +135,16 @@ extends DotConfig
 ## Reduce tick processing when nobody is connected.
 ##
 ## An empty dedicated server has nothing to simulate, and a box hosting twelve of
-## them should not spend twelve cores on it. The familiar `sv_hibernate_when_empty`.
+## them should not spend twelve cores on it. The cvar is `sv_hibernate_when_empty`, live.
+##
+## [b]On (the default), an empty server is idle[/b]: from boot and from the moment the last
+## player leaves it ticks at [member hibernate_tickrate], and whatever follows
+## [signal DotServer.hibernation_changed] — a map's time limit, a vote's clock — stops
+## counting and starts again from its configured value when somebody joins.
+##
+## [b]Off, an empty server keeps playing.[/b] Its clocks run, and when a map's time is up
+## with nobody to vote, dot-vote draws the next map at random from what the ballot would
+## have offered ([code]DotVoteRules.empty_choice[/code]) and the server carries on.
 @export var hibernate_when_empty: bool = true
 
 ## Ticks per second while hibernating.

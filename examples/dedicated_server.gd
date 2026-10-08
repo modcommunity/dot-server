@@ -22,12 +22,12 @@ var server: DotServer
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose.
-const SECTIONS := 27
+const SECTIONS := 28
 
 ## Every check this suite runs, including the two at the end that compare the counts. The
 ## section counter cannot see a section that aborted after announcing itself — its remaining
 ## checks simply never run — and a total can. See docs/testing.md.
-const CHECKS := 322
+const CHECKS := 331
 
 var _entered := 0
 var _completed := 0
@@ -168,6 +168,9 @@ func _run_selftest() -> void:
 	_test_rcon_allow_list()
 	await _test_rcon_socket()
 	await _test_rcon_websocket()
+	# Last: a second DotServer replaces the first's registry entries, and every section above
+	# that looks a subsystem up by name would be talking to the wrong server.
+	await _test_boot_hibernation()
 
 	print("")
 	# The two guards, as the last two checks. See docs/testing.md.
@@ -836,6 +839,75 @@ func _test_hibernation() -> void:
 	server._apply_tickrate()
 	_check("waking restores the tickrate", Engine.physics_ticks_per_second == tickrate)
 	_check("and frames follow it again", Engine.max_fps == tickrate)
+
+	# On by default, and the cvar says so: the user's rule is that an empty server idles
+	# unless somebody turns it off.
+	_check("hibernating when empty is the default", DotServerConfig.new().hibernate_when_empty)
+	var cvar := server.console.find_cvar("sv_hibernate_when_empty")
+	_check("sv_hibernate_when_empty is a cvar", cvar != null)
+
+	# This server booted with it off and is empty, so it is RUNNING. Turning the cvar on
+	# hibernates it now rather than at a disconnect that may never come, and turning it off
+	# wakes it — and each says so on hibernation_changed, which every game clock follows.
+	var heard: Array[bool] = []
+	var listen := func(on: bool) -> void: heard.append(on)
+	server.hibernation_changed.connect(listen)
+	var empty := server.sessions().is_empty()
+	server.console.execute("sv_hibernate_when_empty 1")
+	_check("turning it on hibernates an empty server at once (%s)" % server.state_name(),
+		not empty or (server.is_hibernating() and server.config.hibernate_when_empty))
+	server.console.execute("sv_hibernate_when_empty 0")
+	_check("turning it off wakes it", not server.is_hibernating() and not server.config.hibernate_when_empty)
+	_check("and hibernation_changed carried both (%s)" % str(heard),
+		not empty or str(heard) == str([true, false]))
+	server.hibernation_changed.disconnect(listen)
+	server._apply_tickrate()
+	_done()
+
+
+## A second server, booted with hibernation left at its default and nobody connected.
+##
+## [b]It used to come up RUNNING and stay there until somebody joined and left[/b], so a
+## fresh server ran its map clock out to an empty room and the wake that restarts every
+## clock never came, because there had been no sleep.
+func _test_boot_hibernation() -> void:
+	print("")
+	_section("[hibernation from boot]")
+
+	var config := DotServerConfig.new()
+	config.hostname = "hibernating example"
+	config.port = 0
+	config.query_enabled = false
+	config.a2s_enabled = false
+	config.log_file_enabled = false
+	config.startup_config = ""
+	config.autoexec_config = ""
+	config.admins_path = "user://example/hib_admins.json"
+	config.bans_path = "user://example/hib_bans.json"
+	config.audit_log_path = "user://example/hib_audit.jsonl"
+
+	var second := DotServer.new()
+	second.name = "Hibernating"
+	second.config = config
+	second.config_file = ""
+	second.auto_boot = false
+	var heard: Array[bool] = []
+	second.hibernation_changed.connect(func(on: bool) -> void: heard.append(on))
+	add_child(second)
+
+	var booted: DotResult = await second.boot()
+	_check("a server with the default boots", booted.ok)
+	_check("and, being empty, hibernates straight away (%s)" % second.state_name(),
+		second.state == DotServer.State.HIBERNATING)
+	_check("saying so on hibernation_changed (%s)" % str(heard), str(heard) == str([true]))
+	_check("its cvar reads 1", second.console.get_bool("sv_hibernate_when_empty", false))
+
+	second.shutdown("test over")
+	remove_child(second)
+	second.free()
+
+	# Engine.physics_ticks_per_second is process-wide, and the second server set it.
+	server._apply_tickrate()
 	_done()
 
 

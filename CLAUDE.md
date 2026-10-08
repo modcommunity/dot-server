@@ -69,6 +69,14 @@ config resource -> JSON file -> env -> argv       (DotServerConfig layers)
 running server. `+command` arguments run last so a systemd unit can override a config
 file without editing it.
 
+## Hibernation: an empty server is idle, and its clocks wait
+
+`sv_hibernate_when_empty` (`DotServerConfig.hibernate_when_empty`, default **1**, live) puts a server with no sessions into `HIBERNATING` — `hibernate_tickrate` ticks, `hibernate_frame_rate` frames — **from boot**, and again whenever the last session leaves; the first client to spawn wakes it. Until 2026-10-07 a freshly booted server stayed `RUNNING` until somebody joined and left, so its map clock ran out to an empty room and the wake that restarts it never came.
+
+`hibernation_changed(hibernating: bool)` is the hook, and it is a plain bool on purpose: dot-vote's `DotVoteDirector.follow_hibernation(server)` and dot-map's `DotMapSession.follow_hibernation(server)` connect to it by name, and dot-game's `DotGameModule` hands the server to every such clock under a game module. Asleep they stop counting; on waking they start again from their configured values. Setting the cvar to 0 on an empty server wakes it (a wake like any other: the clocks restart and keep running); with it off, a time limit that runs out on nobody is dot-vote's `empty_choice` (random by default). `examples/dedicated_server.tscn` checks the default, the cvar both ways, the signal, and a second server hibernating from boot; each was armed.
+
+A host that waits for `state == RUNNING` after boot with hibernation on will now see `HIBERNATING`; `RUNNING or HIBERNATING` is "up", which is what `online` in the query answer has always said.
+
 ## The one path everything else serves: joining
 
 `DotClientSession.State` is a real state machine with checked transitions, not a

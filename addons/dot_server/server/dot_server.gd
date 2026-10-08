@@ -66,6 +66,18 @@ enum State {
 
 signal state_changed(state: State)
 
+## The server went into hibernation ([param hibernating] true) or came out of it.
+##
+## [b]The hook a game's clocks follow.[/b] [signal state_changed] says the same thing among
+## five other states, and every listener would have to remember which two transitions mean
+## "the room emptied" and "somebody is back" — and that leaving HIBERNATING for
+## SHUTTING_DOWN is neither. A map's time limit, a vote's clock and a round timer stop
+## counting on [code]true[/code] and start again from their configured values on
+## [code]false[/code], so the first player to arrive gets the whole map rather than
+## whatever an empty room left of it. dot-vote's and dot-map's [code]follow_hibernation[/code]
+## connect to this by name, which is why it carries a plain bool.
+signal hibernation_changed(hibernating: bool)
+
 ## A client finished the whole join flow.
 signal client_spawned(session: DotClientSession)
 
@@ -317,6 +329,12 @@ func boot() -> DotResult:
 	# outside, and there is nothing worth advertising until everything above has
 	# come up.
 	_open_query_host()
+
+	# An empty server hibernates from the moment it is up, not from the first time somebody
+	# leaves. It used to wait for a disconnect, so a freshly booted server ran its map clock
+	# out to an empty room and the first player arrived at a map with a minute left — and
+	# the wake that resets every clock never happened, because there had been no sleep.
+	_maybe_hibernate()
 
 	DotLog.info(
 		CHANNEL,
@@ -2214,6 +2232,7 @@ func _maybe_hibernate() -> void:
 	_set_state(State.HIBERNATING)
 	_apply_tickrate()
 	DotLog.info(CHANNEL, "hibernating (no players)")
+	hibernation_changed.emit(true)
 
 
 func _wake_from_hibernation() -> void:
@@ -2222,6 +2241,29 @@ func _wake_from_hibernation() -> void:
 	_set_state(State.RUNNING)
 	_apply_tickrate()
 	DotLog.info(CHANNEL, "woke from hibernation")
+	hibernation_changed.emit(false)
+
+
+## Whether the server is hibernating: up, empty, and ticking at
+## [member DotServerConfig.hibernate_tickrate].
+func is_hibernating() -> bool:
+	return state == State.HIBERNATING
+
+
+## Applies [code]sv_hibernate_when_empty[/code] to a running server, at once.
+##
+## [b]Turning it off wakes an empty server, and that is a wake like any other[/b]: the
+## clocks following [signal hibernation_changed] start again from their configured values
+## and keep running with nobody there, which is what the operator asked for. Turning it on
+## hibernates a server that is empty now rather than at the next disconnect, which might
+## never come.
+func _apply_hibernate_setting(enabled: bool) -> void:
+	config.hibernate_when_empty = enabled
+
+	if enabled:
+		_maybe_hibernate()
+	else:
+		_wake_from_hibernation()
 
 
 func _set_state(new_state: State) -> void:
@@ -2408,6 +2450,22 @@ func _register_cvars() -> void:
 			config.background_grace_max_sec = value.to_float()
 	)
 
+	# Live rather than startup-only: hibernating is a state the server moves in and out of
+	# all day, and an operator switching it off wants the empty server's clock running now,
+	# not after a restart.
+	console.cvar(
+		"sv_hibernate_when_empty",
+		"1" if config.hibernate_when_empty else "0",
+		"Idle at a reduced tickrate while nobody is connected; the map's clocks wait, and restart when somebody joins. 0 keeps an empty server running, and its map changes on its own.",
+		DotConVar.FLAG_ARCHIVE | DotConVar.FLAG_NOTIFY
+	).changed.connect(
+		func(_old: String, value: String) -> void:
+			if state == State.RUNNING or state == State.HIBERNATING:
+				_apply_hibernate_setting(value.to_int() != 0)
+			else:
+				config.hibernate_when_empty = value.to_int() != 0
+	)
+
 
 ## Reads cvars back into the config after server.cfg has run.
 func _apply_cvars_to_config() -> void:
@@ -2425,6 +2483,9 @@ func _apply_cvars_to_config() -> void:
 	config.a2s_enabled = console.get_bool("sv_a2s", config.a2s_enabled)
 	config.query_player_detail = console.get_string(
 		"sv_query_players", config.query_player_detail
+	)
+	config.hibernate_when_empty = console.get_bool(
+		"sv_hibernate_when_empty", config.hibernate_when_empty
 	)
 
 
