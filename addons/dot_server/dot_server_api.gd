@@ -12,5 +12,9 @@ extends RefCounted
 #    DotServer share_udp_port(), unshare_udp_port(), enet_port(), peer_transport();
 #    DotClientLink transport_preference, udp_address, udp_connect_timeout_sec,
 #    transport_used.
-const LEVEL := 3
+# 4: the scoreboard roster: DotServer scoreboard_fields, scoreboard_extra,
+#    scoreboard_interval_sec, scoreboard_snapshot(), SCOREBOARD_MAX_ROWS;
+#    DotClientSession wants_scoreboard; DotClientLink want_scoreboard(), scoreboard,
+#    scoreboard_received; DotEnvelope SCOREBOARD and SCOREBOARD_WANT.
+const LEVEL := 4
 const OLDEST := 1
