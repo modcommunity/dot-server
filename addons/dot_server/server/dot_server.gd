@@ -1895,9 +1895,20 @@ func _send_scoreboards() -> void:
 			_send_scoreboard(session)
 
 
+## Numbers every scoreboard sent, so a client can tell an old one from a new one.
+var _scoreboard_seq: int = 0
+
+
 func _send_scoreboard(session: DotClientSession) -> void:
-	var _sent := send_kind(session.peer_id, DotEnvelope.SCOREBOARD, scoreboard_snapshot(session),
-		DotEnvelope.Lane.UNRELIABLE)
+	# [b]`seq`, because unreliable over ENet is unordered.[/b] Godot's ENet sends an
+	# unreliable packet UNSEQUENCED, so on a desktop client a late board arrived after the
+	# one that superseded it and the link kept whichever came last: the previous roster for
+	# a whole interval (dot-net's relay audit, 2026-10-09). Over WebSocket it never showed,
+	# because there "unreliable" is TCP. The client drops one older than what it holds.
+	_scoreboard_seq += 1
+	var snap := scoreboard_snapshot(session)
+	snap["seq"] = _scoreboard_seq
+	var _sent := send_kind(session.peer_id, DotEnvelope.SCOREBOARD, snap, DotEnvelope.Lane.UNRELIABLE)
 
 
 ## What a held scoreboard shows: the server, and everybody playing.

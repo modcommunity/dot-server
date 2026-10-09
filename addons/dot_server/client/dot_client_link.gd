@@ -1254,6 +1254,11 @@ func want_scoreboard(open: bool) -> bool:
 
 
 func _on_scoreboard(_peer_id: int, payload: Dictionary) -> void:
+	# A board older than the one held arrived late (ENet sends unreliable unordered); it
+	# says nothing the newer one did not. One with no `seq` is from a server before it,
+	# and is taken as it always was.
+	if payload.has("seq") and scoreboard.has("seq") and int(payload["seq"]) <= int(scoreboard["seq"]):
+		return
 	scoreboard = payload
 	scoreboard_received.emit(payload)
 

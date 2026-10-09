@@ -50,7 +50,7 @@ const PORT := 27717
 ## How many checks a clean run makes. A section that aborts part-way stops adding checks,
 ## and the section counter cannot see that when the abort comes after the section
 ## announced itself — so the total is asserted too.
-const CHECKS := 88
+const CHECKS := 89
 
 var _entered := 0
 var _completed := 0
@@ -508,6 +508,16 @@ func _test_the_scoreboard_reaches_the_client() -> void:
 	await _settle(0.8)
 	_check(got.size() == after, "and nothing more is sent (%d then %d)" % [after, got.size()])
 	_check(_link.scoreboard == got[-1], "the link keeps the last one for a board drawn later")
+
+	# Unreliable over ENet arrives in any order: a board older than the one held is dropped.
+	var newest := int(_link.scoreboard.get("seq", 0))
+	var stale := (_link.scoreboard as Dictionary).duplicate(true)
+	stale["seq"] = newest - 1
+	stale["you"] = -999
+	var heard := got.size()
+	_link._on_scoreboard(1, stale)
+	_check(newest > 0 and int(_link.scoreboard.get("you", 0)) != -999 and got.size() == heard,
+		"a board older than the one held is dropped, not shown (seq %d after %d)" % [newest - 1, newest])
 
 	_server.scoreboard_fields = Callable()
 	_server.scoreboard_extra = Callable()
