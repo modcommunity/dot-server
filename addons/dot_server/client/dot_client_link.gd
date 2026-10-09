@@ -74,6 +74,10 @@ signal page_visibility_changed(visible: bool)
 ## Server details from the handshake challenge.
 signal server_info(info: Dictionary)
 
+## The roster, while this client holds its scoreboard open. See [method want_scoreboard] and
+## [method DotServer.scoreboard_snapshot] for the shape.
+signal scoreboard_received(snapshot: Dictionary)
+
 ## The server told this client which game to load.
 ##
 ## Fires on the first load and on every change afterwards — [code]SPAWNED ->
@@ -514,6 +518,7 @@ func _make_envelope() -> DotEnvelope:
 	env.handle(DotEnvelope.NOTICE, _on_notice)
 	env.handle(DotEnvelope.DISCONNECT, _on_disconnect_notice)
 	env.handle(DotEnvelope.CHAT_LINE, _on_chat_line)
+	env.handle(DotEnvelope.SCOREBOARD, _on_scoreboard)
 	return env
 
 
@@ -1231,6 +1236,26 @@ func _flush_peer() -> void:
 	if peer.get_connection_status() != MultiplayerPeer.CONNECTION_CONNECTED:
 		return
 	peer.poll()
+
+
+# --- Scoreboard ------------------------------------------------------------
+
+## The last roster the server sent. Empty until a board has been held open.
+var scoreboard: Dictionary = {}
+
+
+## Tells the server this client's scoreboard opened or closed. While it is open the server
+## sends the roster twice a second; closed, nothing — a board nobody holds costs nothing.
+## False when it was not sent (not connected, or a server that predates the kind).
+func want_scoreboard(open: bool) -> bool:
+	if not _connected:
+		return false
+	return send_kind(DotEnvelope.SCOREBOARD_WANT, {"open": open})
+
+
+func _on_scoreboard(_peer_id: int, payload: Dictionary) -> void:
+	scoreboard = payload
+	scoreboard_received.emit(payload)
 
 
 # --- Chat ------------------------------------------------------------------

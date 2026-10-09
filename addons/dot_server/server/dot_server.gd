@@ -166,6 +166,23 @@ var rcon: DotRconServer = null
 ## The server's own terminal, when there is one to read.
 var stdin_console: DotStdinConsole = null
 var games: DotGameManager = null
+
+## Most player rows one scoreboard carries. Bounds a payload sent twice a second.
+const SCOREBOARD_MAX_ROWS := 256
+
+## Seconds between scoreboards sent to a client holding its board open.
+var scoreboard_interval_sec: float = 0.5
+
+## `func(session: DotClientSession) -> Dictionary`: a game's own columns for one player
+## (kills, team, points), merged into its row of [method scoreboard_snapshot].
+var scoreboard_fields: Callable = Callable()
+
+## `func() -> Dictionary`: anything else on the board — `"teams"`, a `"header"` of the
+## round's state, `"rows"` for players that are not sessions. Added beside the core keys,
+## never over them.
+var scoreboard_extra: Callable = Callable()
+
+var _scoreboard_accum: float = 0.0
 var votes: DotVoteManager = null
 var events: DotEventBus = null
 var modules: DotModuleHost = null
@@ -1297,6 +1314,7 @@ func _make_envelope() -> DotEnvelope:
 	env.handle(DotEnvelope.PING, _on_ping)
 	env.handle(DotEnvelope.VISIBILITY, _on_visibility)
 	env.handle(DotEnvelope.CHAT_SUBMIT, _on_chat_submit)
+	env.handle(DotEnvelope.SCOREBOARD_WANT, _on_scoreboard_want)
 	return env
 
 
@@ -1858,6 +1876,92 @@ func _on_ping(peer_id: int, payload: Dictionary) -> void:
 	session.ping_ms = clampi(int(DotEnvelope.number(payload, "ms", 0)), 0, 60_000)
 
 
+# --- The scoreboard ----------------------------------------------------------------
+
+## A client's scoreboard opened or closed. Open is answered at once, then every
+## [member scoreboard_interval_sec] until it closes.
+func _on_scoreboard_want(peer_id: int, payload: Dictionary) -> void:
+	var session: DotClientSession = _sessions.get(peer_id)
+	if session == null:
+		return
+	session.wants_scoreboard = DotEnvelope.flag(payload, "open", false)
+	if session.wants_scoreboard:
+		_send_scoreboard(session)
+
+
+func _send_scoreboards() -> void:
+	for session in playing_sessions():
+		if session.wants_scoreboard and not session.local:
+			_send_scoreboard(session)
+
+
+func _send_scoreboard(session: DotClientSession) -> void:
+	var _sent := send_kind(session.peer_id, DotEnvelope.SCOREBOARD, scoreboard_snapshot(session),
+		DotEnvelope.Lane.UNRELIABLE)
+
+
+## What a held scoreboard shows: the server, and everybody playing.
+## [codeblock]
+## {
+##   "server":  {"name", "game", "map", "players", "max", "tickrate"},
+##   "you":     <the recipient's userid>,
+##   "players": [{"id", "name", "score", "ping", "seconds", "bot", "admin", ...}],
+##   ...whatever scoreboard_extra returns: "teams", "header", "rows"
+## }
+## [/codeblock]
+##
+## [b]The server's numbers, because only the server has them all.[/b] A client knows its own
+## ping and nobody else's, and when it joined but not when anybody else did; a game that
+## wanted a scoreboard with both had to replicate them itself, and most did not. Every field
+## here is one [DotClientSession] already kept for the console's `status`.
+##
+## [b]Sent only to a client holding its board open[/b] (`scoreboard.want`), so a full server
+## does not pay for a table nobody is looking at, and unreliable, because the next one
+## supersedes it. A game adds its own columns per player through [member scoreboard_fields]
+## and its teams or anything else through [member scoreboard_extra]; dot-menu's
+## `DotMenuScoreboard` draws it, and a game's own columns are its to name.
+func scoreboard_snapshot(for_session: DotClientSession = null) -> Dictionary:
+	var players: Array = []
+	for session in playing_sessions():
+		if players.size() >= SCOREBOARD_MAX_ROWS:
+			break
+		var row := {
+			"id": session.userid,
+			"name": session.display_name,
+			"score": session.score,
+			"ping": session.ping_ms,
+			"seconds": session.connected_seconds(),
+			"bot": session.local,
+			"admin": session.is_admin(),
+		}
+		if scoreboard_fields.is_valid():
+			var more: Variant = scoreboard_fields.call(session)
+			if more is Dictionary:
+				row.merge(more as Dictionary, true)
+		players.append(row)
+
+	var current := games.current() if games != null else null
+	var out := {
+		"server": {
+			"name": config.hostname,
+			"game": current.display_name if current != null else "",
+			"map": games.reported_map() if games != null else "",
+			"players": player_count(),
+			"max": config.max_players,
+			"tickrate": config.tickrate,
+		},
+		"you": for_session.userid if for_session != null else 0,
+		"players": players,
+	}
+	if scoreboard_extra.is_valid():
+		var extra: Variant = scoreboard_extra.call()
+		if extra is Dictionary:
+			for key in (extra as Dictionary):
+				if not out.has(key):
+					out[key] = (extra as Dictionary)[key]
+	return out
+
+
 ## A client announcing that its page went into, or came back from, the background.
 ##
 ## [b]Reliable, unlike the heartbeat above it.[/b] A dropped heartbeat costs one ping
@@ -2159,6 +2263,11 @@ func _process(delta: float) -> void:
 	if _sweep_accum >= 1.0:
 		_sweep_accum = 0.0
 		_sweep_timeouts()
+
+	_scoreboard_accum += delta
+	if _scoreboard_accum >= scoreboard_interval_sec:
+		_scoreboard_accum = 0.0
+		_send_scoreboards()
 
 
 ## Drops clients that have been stuck in a stage too long.

@@ -100,6 +100,10 @@ var last_seen_ms: int = 0
 ## Round-trip time in milliseconds, -1 when unknown.
 var ping_ms: int = -1
 
+## Whether this client is holding its scoreboard open, and so is sent the roster. See
+## [method DotServer.scoreboard_snapshot].
+var wants_scoreboard: bool = false
+
 ## Whether this client has told the server its page went into the background.
 ##
 ## [b]A browser stops driving the Godot main loop for a hidden tab.[/b] It stops

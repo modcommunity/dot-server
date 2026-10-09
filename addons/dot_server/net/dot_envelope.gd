@@ -58,6 +58,7 @@ const LOAD_GAME := &"game.load"                 ## CONTROL. Load this scene.
 const HEARTBEAT_ACK := &"heartbeat.ack"         ## UNRELIABLE. Your timestamp, back.
 const NOTICE := &"notice"                       ## EVENT. A HUD line; see DotNotice.
 const CHAT_LINE := &"chat.line"                 ## EVENT. A chat line, or chat's state.
+const SCOREBOARD := &"scoreboard"               ## UNRELIABLE. Who is here; see DotServer.scoreboard_snapshot.
 # Client to server.
 const CREDENTIALS := &"signon.credentials"      ## CONTROL. The answer to the challenge.
 const CONTENT_PROGRESS := &"content.progress"   ## CONTROL. How far a download has got.
@@ -67,6 +68,7 @@ const HEARTBEAT := &"heartbeat"                 ## UNRELIABLE. I am alive, and w
 const PING := &"ping"                           ## UNRELIABLE. What I measured.
 const VISIBILITY := &"visibility"               ## CONTROL. My tab went away, or came back.
 const CHAT_SUBMIT := &"chat.submit"             ## EVENT. Something I typed.
+const SCOREBOARD_WANT := &"scoreboard.want"     ## CONTROL. My scoreboard opened, or closed.
 
 ## Kinds that are sent before either end has the other's advert, so nothing can be
 ## filtered against it yet. Always sent, always known.
@@ -83,6 +85,7 @@ const CORE_REQUIRED: Array[StringName] = [
 ## and keeps the game.
 const CORE_OPTIONAL: Array[StringName] = [
 	CONTENT_PROGRESS, HEARTBEAT_ACK, PING, VISIBILITY, NOTICE, CHAT_LINE, CHAT_SUBMIT,
+	SCOREBOARD, SCOREBOARD_WANT,
 ]
 
 ## Longest kind name accepted off the wire. A kind is a label, not a payload.

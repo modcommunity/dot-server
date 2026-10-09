@@ -50,7 +50,7 @@ const PORT := 27717
 ## How many checks a clean run makes. A section that aborts part-way stops adding checks,
 ## and the section counter cannot see that when the abort comes after the section
 ## announced itself — so the total is asserted too.
-const CHECKS := 76
+const CHECKS := 88
 
 var _entered := 0
 var _completed := 0
@@ -86,6 +86,7 @@ func _run() -> void:
 	if await _boot():
 		if await _test_a_real_join_carries_it():
 			await _test_a_notice_reaches_the_client()
+			await _test_the_scoreboard_reaches_the_client()
 			_test_a_mismatch_is_refused_at_once()
 		await _test_an_older_client_on_a_newer_server()
 		await _test_a_newer_client_on_an_older_server()
@@ -457,6 +458,59 @@ func _test_a_notice_reaches_the_client() -> void:
 		"an empty notice is not sent at all"
 	)
 
+	_done()
+
+
+# --- 3b. The scoreboard ----------------------------------------------------
+
+## The roster a held scoreboard shows: the server's numbers, which no client has for anybody
+## but itself, sent only while the board is held.
+func _test_the_scoreboard_reaches_the_client() -> void:
+	_section("a held scoreboard is sent the server's roster, and only while held")
+
+	var got: Array[Dictionary] = []
+	_link.scoreboard_received.connect(func(snap: Dictionary) -> void: got.append(snap))
+	var session: DotClientSession = _server.playing_sessions()[0]
+	session.ping_ms = 42
+	session.score = 7
+	_server.scoreboard_fields = func(s: DotClientSession) -> Dictionary: return {"team": 2, "kills": s.score * 2}
+	_server.scoreboard_extra = func() -> Dictionary:
+		return {"teams": [{"id": 2, "name": "Blue", "score": 3}], "players": "never over a core key"}
+	_server.scoreboard_interval_sec = 0.2
+
+	await _settle(0.5)
+	_check(got.is_empty(), "nothing is sent to a client that is not holding its board")
+
+	_check(_link.want_scoreboard(true), "the client says its board is open")
+	if not _check(await _until(func() -> bool: return got.size() >= 1, 5.0), "and the roster arrives"):
+		_done()
+		return
+
+	var snap: Dictionary = got[0]
+	var server: Dictionary = snap.get("server", {})
+	var rows: Array = snap.get("players", [])
+	_check(str(server.get("name", "")) == _server.config.hostname and int(server.get("players", 0)) == 1
+		and int(server.get("max", 0)) == _server.config.max_players,
+		"with the server's name and its slots (%s)" % str(server))
+	_check(rows.size() == 1 and int(snap.get("you", 0)) == session.userid, "one row, and which one is this client")
+	var row: Dictionary = rows[0] if not rows.is_empty() else {}
+	_check(str(row.get("name", "")) == session.display_name and int(row.get("score", -1)) == 7
+		and int(row.get("ping", -1)) == 42 and int(row.get("seconds", -1)) >= 0,
+		"the name, score, ping and time connected the session kept (%s)" % str(row))
+	_check(int(row.get("team", 0)) == 2 and int(row.get("kills", 0)) == 14, "and the game's own columns")
+	_check(snap.get("teams", []).size() == 1 and snap.get("players") is Array,
+		"the game's extra keys ride beside the core ones and never replace one")
+	_check(await _until(func() -> bool: return got.size() >= 3, 3.0), "it keeps coming while held (%d)" % got.size())
+
+	_check(_link.want_scoreboard(false), "the board closes")
+	await _settle(0.4)
+	var after := got.size()
+	await _settle(0.8)
+	_check(got.size() == after, "and nothing more is sent (%d then %d)" % [after, got.size()])
+	_check(_link.scoreboard == got[-1], "the link keeps the last one for a board drawn later")
+
+	_server.scoreboard_fields = Callable()
+	_server.scoreboard_extra = Callable()
 	_done()
 
 
@@ -868,6 +922,14 @@ func _until(predicate: Callable, seconds: float = 10.0) -> bool:
 			return true
 		await get_tree().process_frame
 	return false
+
+
+## Lets [param seconds] pass with the network polled every frame — a wait for something to
+## NOT happen, which `_until` cannot express.
+func _settle(seconds: float) -> void:
+	var deadline := Time.get_ticks_msec() + int(seconds * 1000.0)
+	while Time.get_ticks_msec() < deadline:
+		await get_tree().process_frame
 
 
 func _teardown() -> void:
