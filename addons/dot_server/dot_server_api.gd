@@ -17,6 +17,9 @@ extends RefCounted
 #    DotClientSession wants_scoreboard; DotClientLink want_scoreboard(), scoreboard,
 #    scoreboard_received; DotEnvelope SCOREBOARD and SCOREBOARD_WANT.
 # 5: DotBotQuota (bot_quota, bot_quota_mode, bot_quota_empty); DotServer addon_set and
-#    DotClientLink server_addons (shipped in v0.1.9 without a level of their own).
-const LEVEL := 5
+#    DotClientLink server_addons (shipped in v0.1.9 without a level of their own);
+#    DotClientLink.rtt_ms().
+# 6: DotClientLink net_meter() (its peer behind a dot-core DotMeteredPeer, level 3);
+#    the heartbeat.ack carries "sv": {fps, var_ms, tick}.
+const LEVEL := 6
 const OLDEST := 1

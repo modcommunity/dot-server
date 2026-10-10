@@ -50,7 +50,7 @@ const PORT := 27717
 ## How many checks a clean run makes. A section that aborts part-way stops adding checks,
 ## and the section counter cannot see that when the abort comes after the section
 ## announced itself — so the total is asserted too.
-const CHECKS := 91
+const CHECKS := 95
 
 var _entered := 0
 var _completed := 0
@@ -331,6 +331,13 @@ func _test_a_real_join_carries_it() -> bool:
 		_done()
 		return false
 
+	# The round trip is known within a second of joining, not after the first two-second
+	# heartbeat: every game's clock takes its input lead from it (DotClientLink._enter_playing).
+	var joined_ms := Time.get_ticks_msec()
+	var measured := await _until(func() -> bool: return _link.ping_ms() >= 0, 1.0)
+	_check(measured, "the client knows its round trip within a second of joining (%d ms after)" % (Time.get_ticks_msec() - joined_ms))
+	_check(_link.rtt_ms() > 0.0 or _link.ping_ms() == 0, "and rtt_ms() answers (%.1f ms)" % _link.rtt_ms())
+
 	# A dual-stack server and a native client: the join is over UDP unless told otherwise.
 	_check(
 		_link.transport_used == "enet" and _server.peer_transport(_first_peer()) == "enet",
@@ -484,7 +491,8 @@ func _test_the_scoreboard_reaches_the_client() -> void:
 	var got: Array[Dictionary] = []
 	_link.scoreboard_received.connect(func(snap: Dictionary) -> void: got.append(snap))
 	var session: DotClientSession = _server.playing_sessions()[0]
-	session.ping_ms = 42
+	# The ping is not planted: the client's early heartbeats report a real one within a
+	# second of joining (DotClientLink._enter_playing), and the row has to match the session.
 	session.score = 7
 	_server.scoreboard_fields = func(s: DotClientSession) -> Dictionary: return {"team": 2, "kills": s.score * 2}
 	_server.scoreboard_extra = func() -> Dictionary:
@@ -508,7 +516,7 @@ func _test_the_scoreboard_reaches_the_client() -> void:
 	_check(rows.size() == 1 and int(snap.get("you", 0)) == session.userid, "one row, and which one is this client")
 	var row: Dictionary = rows[0] if not rows.is_empty() else {}
 	_check(str(row.get("name", "")) == session.display_name and int(row.get("score", -1)) == 7
-		and int(row.get("ping", -1)) == 42 and int(row.get("seconds", -1)) >= 0,
+		and int(row.get("ping", -1)) == session.ping_ms and int(row.get("seconds", -1)) >= 0,
 		"the name, score, ping and time connected the session kept (%s)" % str(row))
 	_check(int(row.get("team", 0)) == 2 and int(row.get("kills", 0)) == 14, "and the game's own columns")
 	_check(snap.get("teams", []).size() == 1 and snap.get("players") is Array,
@@ -661,6 +669,12 @@ func _test_an_older_client_on_a_newer_server() -> void:
 	old._send_heartbeat()
 	var alive := await _until(func() -> bool: return old.ping_ms() >= 0, 5.0)
 	_check(alive and old.is_playing(), "and it goes on playing (ping %d ms)" % old.ping_ms())
+	# net_stat's source: the link's peer is metered, and the heartbeat fed it.
+	var meter := old.net_meter()
+	_check(meter != null and meter.bytes_in > 0 and meter.bytes_out > 0 and meter.rtt_ms >= 0.0,
+		"its connection is metered, and the heartbeat gave the meter its ping (%s)" % [meter.describe() if meter != null else "no meter"])
+	_check(meter != null and int(meter.remote.get("tick", 0)) > 0 and meter.remote.has("fps"),
+		"and the server's own frame rate and tick came back with it (%s)" % [meter.remote if meter != null else {}])
 	_check(
 		session != null and session.is_playing(),
 		"without the server having dropped it"

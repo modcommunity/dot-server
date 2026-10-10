@@ -258,6 +258,13 @@ var address_guard: DotAddressGuard = null
 
 var _sweep_accum: float = 0.0
 
+## The server's frame time, smoothed, and how far frames stray from it, in milliseconds.
+## Sent back on every heartbeat (see [method _on_heartbeat]) so a client's net_stat can
+## tell "the network is slow" from "the server is": both feel like lag, and only one of
+## them is the player's connection.
+var _frame_ms: float = 0.0
+var _frame_dev_ms: float = 0.0
+
 ## The kinds this server knows, and what each client it has heard from knows. See
 ## [DotEnvelope] for why every message is a kind on six fixed RPCs.
 ##
@@ -1894,7 +1901,18 @@ func _on_heartbeat(peer_id: int, payload: Dictionary) -> void:
 		session.backgrounded = false
 		session.background_grace_sec = 0.0
 
-	send_kind(peer_id, DotEnvelope.HEARTBEAT_ACK, {"t": client_time_ms}, DotEnvelope.Lane.UNRELIABLE)
+	# "sv" is what this server says about its own frame, for net_stat: frames a second,
+	# their deviation in ms, and the tick rate it is playing at. A new key in a
+	# Dictionary, so a client that does not read it is unaffected, and one that does
+	# draws nothing for an older server that does not send it.
+	send_kind(peer_id, DotEnvelope.HEARTBEAT_ACK, {
+		"t": client_time_ms,
+		"sv": {
+			"fps": snappedf(1000.0 / _frame_ms, 0.1) if _frame_ms > 0.0 else 0.0,
+			"var_ms": snappedf(_frame_dev_ms, 0.01),
+			"tick": tickrate(),
+		},
+	}, DotEnvelope.Lane.UNRELIABLE)
 
 
 ## A client reporting its measured round-trip time.
@@ -2299,6 +2317,14 @@ func _process(delta: float) -> void:
 		return
 	if state != State.RUNNING and state != State.HIBERNATING:
 		return
+
+	# Exponential averages rather than a window: two floats, and a heartbeat every two
+	# seconds reads them. The 0.05 is about the last twenty frames.
+	var ms := delta * 1000.0
+	if _frame_ms <= 0.0:
+		_frame_ms = ms
+	_frame_dev_ms = lerpf(_frame_dev_ms, absf(ms - _frame_ms), 0.05)
+	_frame_ms = lerpf(_frame_ms, ms, 0.05)
 
 	_sweep_accum += delta
 	if _sweep_accum >= 1.0:

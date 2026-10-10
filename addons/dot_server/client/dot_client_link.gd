@@ -364,7 +364,10 @@ func _connect_with(t: DotTransport, address: String, timeout_sec: float) -> DotR
 			return DotResult.failure(created.error)
 		return _fail(created.error)
 
-	multiplayer.multiplayer_peer = created.value
+	# Behind a meter, so a client can draw what its connection is doing (net_stat) on
+	# either transport: WebSocket keeps no counts of its own, and a browser is a
+	# WebSocket client. Invisible to SceneMultiplayer; see DotMeteredPeer.
+	multiplayer.multiplayer_peer = DotMeteredPeer.wrap(created.value)
 
 	if not multiplayer.connected_to_server.is_connected(_on_connected):
 		multiplayer.connected_to_server.connect(_on_connected)
@@ -1113,7 +1116,18 @@ func _on_load_game(_peer_id: int, info: Dictionary) -> void:
 ## three steps, which is a bug that only exists on a server with no game configured.
 func _enter_playing() -> void:
 	_set_phase(Phase.PLAYING, "")
+	# A heartbeat now and three more a quarter of a second apart, then the usual interval.
+	# Every game's clock takes its input lead from the round trip, and until the first
+	# heartbeat came back -- two seconds after joining, at the earliest -- `ping_ms` was -1,
+	# so the clock left the flight time out and every command of the first seconds arrived
+	# after its tick: the player moved on their own screen and the server ran them on the
+	# command before. Measured in game-arena over a real link: 46% of the first three
+	# seconds' commands in time. A few early samples give the clock a round trip within one
+	# round trip of joining, on WebSocket as well as ENet.
+	_early_heartbeats = EARLY_HEARTBEATS
+	_heartbeat.wait_time = EARLY_HEARTBEAT_SEC
 	_heartbeat.start()
+	_send_heartbeat()
 	spawned.emit()
 
 
@@ -1168,11 +1182,23 @@ func _unload_scene() -> void:
 
 # --- Heartbeat -------------------------------------------------------------
 
+## Heartbeats sent quickly as a join completes. See [method _enter_playing].
+const EARLY_HEARTBEATS := 4
+const EARLY_HEARTBEAT_SEC := 0.25
+
+var _early_heartbeats := 0
+
+
 func _send_heartbeat() -> void:
 	if not _connected:
 		return
 	_ping_sent_ms = Time.get_ticks_msec()
 	send_kind(DotEnvelope.HEARTBEAT, {"t": _ping_sent_ms}, DotEnvelope.Lane.UNRELIABLE)
+
+	if _early_heartbeats > 0:
+		_early_heartbeats -= 1
+		if _early_heartbeats == 0:
+			_heartbeat.wait_time = heartbeat_interval_sec
 
 
 ## The server's reply, which is how ping is measured.
@@ -1185,9 +1211,45 @@ func _on_heartbeat_ack(_peer_id: int, payload: Dictionary) -> void:
 	_ping_ms = Time.get_ticks_msec() - sent_ms
 	send_kind(DotEnvelope.PING, {"ms": _ping_ms}, DotEnvelope.Lane.UNRELIABLE)
 
+	var meter := net_meter()
+	if meter != null:
+		meter.note_rtt(float(_ping_ms))
+		var sv: Variant = payload.get("sv")
+		if sv is Dictionary:
+			meter.note_remote(sv)
+
 
 func ping_ms() -> int:
 	return _ping_ms
+
+
+## The round trip to the server in milliseconds, the best this link can say: ENet's own
+## measure on UDP (it times every acknowledged packet from the connect on, so it is right
+## before the first snapshot), and the heartbeat's otherwise. 0 when nothing is known yet.
+## What a game's netcode clock should be fed rather than [method ping_ms].
+func rtt_ms() -> float:
+	var api := multiplayer
+	var peer: Object = api.multiplayer_peer if api != null else null
+
+	# Through the dual peer when there is one: it answers for whichever transport this
+	# connection used. Duck-typed, because a web build has no ENet class to name.
+	if peer != null and peer.has_method("get_peer") and ClassDB.class_exists(&"ENetPacketPeer"):
+		var server: Variant = peer.call("get_peer", 1)
+		if server is Object and (server as Object).has_method("get_statistic"):
+			var stat := ClassDB.class_get_integer_constant(&"ENetPacketPeer", &"PEER_ROUND_TRIP_TIME")
+			var rtt := float((server as Object).call("get_statistic", stat))
+			if rtt > 0.0:
+				return rtt
+
+	return float(maxi(_ping_ms, 0))
+
+
+## The meter the connection runs through, or null when there is no connection. What
+## net_stat reads; see [DotMeteredPeer].
+func net_meter() -> DotMeteredPeer:
+	if multiplayer == null:
+		return null
+	return DotMeteredPeer.of(multiplayer.multiplayer_peer)
 
 
 # --- Background tabs -------------------------------------------------------
