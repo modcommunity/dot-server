@@ -679,6 +679,8 @@ caches scripts by path.
 
 ## The round trip is known as the join completes (2026-10-10)
 
+**The link's peer is metered** (`net_meter()`, a dot-core `DotMeteredPeer`), and the heartbeat ack carries `"sv": {fps, var_ms, tick}` for net_stat; a new key in a Dictionary, so either end may be older.
+
 `DotClientLink` sends a heartbeat the moment it is playing and three more a quarter of a second apart (`EARLY_HEARTBEATS`, `EARLY_HEARTBEAT_SEC`), then the usual `heartbeat_interval_sec`. Every game's netcode clock takes its input lead from the round trip, and the first heartbeat used to leave two seconds after joining, so `ping_ms()` was -1 and the clock left the flight time out: every command of the first seconds arrived after its tick and the server ran the player on the one before (game-arena measured 46% of the first three seconds in time). `rtt_ms()` is the best figure the link has: ENet's own `PEER_ROUND_TRIP_TIME` on UDP (it times every acknowledged packet from the connect), the heartbeat's otherwise, 0 before either. `signon_revision` asserts the round trip is known within a second of joining (measured 16 ms; armed with the old timing it fails at 1,000 ms), and its scoreboard check compares the row to the session's measured ping instead of a planted one, which the early heartbeats now overwrite.
 
 ## How many bots: `DotBotQuota` (2026-10-10)
