@@ -182,6 +182,17 @@ var scoreboard_fields: Callable = Callable()
 ## never over them.
 var scoreboard_extra: Callable = Callable()
 
+## The addon versions this server runs, as a client can fetch them: one
+## `{dir, repo, id, version}` per addon -- `dir` under `res://addons/`, `id` the content id
+## its pack is published under. Empty says nothing, which is every server before this.
+##
+## [b]It rides the signon challenge[/b] because that is the first thing a client hears and
+## the one message that arrives whatever else differs. A client whose build is older than
+## this list can fetch the newer addons as packs and restart into them (dot-cloud's
+## `DotCloudAddonSet`) instead of waiting for a new client build. The host fills it: only
+## the host knows which repositories its addons came from.
+var addon_set: Array = []
+
 var _scoreboard_accum: float = 0.0
 var votes: DotVoteManager = null
 var events: DotEventBus = null
@@ -1382,6 +1393,25 @@ func _dot_up_event(kind: Variant, payload: Variant) -> void:
 # --- Handshake -------------------------------------------------------------
 
 func _handshake_challenge(session: DotClientSession) -> Dictionary:
+	var challenge := _handshake_fields(session)
+
+	# Added only when there is something to say: a field, so a client that predates it
+	# ignores it -- the envelope's rule for changing a payload.
+	if not addon_set.is_empty():
+		challenge["addons"] = addon_set.duplicate(true)
+
+		# [b]And where to fetch them from, which a native client does not know yet.[/b]
+		# It learns the content origin with the first `content.sync`, after this; a
+		# browser has its page's own `/content` and a desktop build has nothing, so the
+		# addons it was just told about could not be found. Only addresses: the packs
+		# still have to verify against a key the client already holds.
+		if not config.content_base_urls.is_empty():
+			challenge["content_base_urls"] = Array(config.content_base_urls)
+
+	return challenge
+
+
+func _handshake_fields(session: DotClientSession) -> Dictionary:
 	return {
 		"protocol": DotSignon.PROTOCOL,
 		# [b]The RPC surface, so a client that cannot finish this join can say why.[/b]

@@ -50,7 +50,7 @@ const PORT := 27717
 ## How many checks a clean run makes. A section that aborts part-way stops adding checks,
 ## and the section counter cannot see that when the abort comes after the section
 ## announced itself — so the total is asserted too.
-const CHECKS := 89
+const CHECKS := 91
 
 var _entered := 0
 var _completed := 0
@@ -282,6 +282,9 @@ func _boot() -> bool:
 	_server.auto_boot = false
 	server_side.add_child(_server)
 
+	# What a host announces about its addons, so a client can fetch newer ones as packs.
+	_server.addon_set = [{"dir": "dot_ui", "repo": "dot-ui", "id": "modcommunity/dot-ui", "version": "9.9.9"}]
+
 	var booted := await _server.boot()
 
 	if not _check(booted.ok, "it boots", str(booted.error)):
@@ -344,6 +347,16 @@ func _test_a_real_join_carries_it() -> bool:
 		"and each end has the other's kinds",
 		"the adverts did not ride the challenge and the credentials"
 	)
+	_check(
+		_link.server_addons.size() == 1
+			and str((_link.server_addons[0] as Dictionary).get("id", "")) == "modcommunity/dot-ui"
+			and str((_link.server_addons[0] as Dictionary).get("version", "")) == "9.9.9",
+		"and the addon versions the server runs rode the challenge",
+		str(_link.server_addons)
+	)
+
+	# Nothing to announce is nothing on the wire: the next joins read an empty list.
+	_server.addon_set = []
 
 	_done()
 	return true
@@ -613,6 +626,8 @@ func _test_an_older_client_on_a_newer_server() -> void:
 		_server.envelope.unregister(&"skew.server_news")
 		_done()
 		return
+
+	_check(old.server_addons.is_empty(), "a server announcing no addons sends no list", str(old.server_addons))
 
 	var peer := _peer_of("OldClient")
 	var session: DotClientSession = _server.session_of(peer)

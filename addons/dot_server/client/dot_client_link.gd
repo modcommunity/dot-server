@@ -195,6 +195,12 @@ var server_signon: String = ""
 var server_id: String = ""
 var server_hostname: String = ""
 
+## The addon versions the server runs, from the handshake: `{dir, repo, id, version}` per
+## addon, as [member DotServer.addon_set] sends them. Empty for a server that says nothing.
+## Read before the join completes, so a shell can fetch newer addons and restart into them
+## rather than play on older ones.
+var server_addons: Array = []
+
 ## The game the server is currently running, as [DotGameManager.load_info] reported it.
 ##
 ## Empty before the first load. [b]A game that ships inside a client's own build names no
@@ -585,6 +591,15 @@ func _dot_up_event(_kind: Variant, _payload: Variant) -> void:
 func _on_challenge(_peer_id: int, challenge: Dictionary) -> void:
 	server_hostname = str(challenge.get("hostname", ""))
 	server_id = str(challenge.get("server_id", ""))
+	var addons: Variant = challenge.get("addons", [])
+	server_addons = (addons as Array).duplicate(true) if addons is Array else []
+
+	# Where those addons are published, for a client with no content origin of its own
+	# yet (see `DotServer._handshake_challenge`). The same adoption `content.sync` does.
+	if challenge.has("content_base_urls"):
+		var cloud := DotRegistry.get_service(cloud_service)
+		if cloud != null:
+			_adopt_content_bases(cloud, challenge.get("content_base_urls"))
 
 	# [b]Before anything else, because everything else is about to stop working
 	# quietly.[/b] If this server declares a different set of `@rpc` methods than this

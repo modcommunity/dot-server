@@ -146,6 +146,12 @@ An empty revision on either side is never a mismatch: a server older than this c
 
 `signon_revision` proves it over a real socket: an older client (no notices, no chat lines) on a newer server with a kind of its own, joining, playing and dropping what it never heard of; a newer client on an older server (no notices); and a kind each end requires and the other lacks, refused in words in well under a second. Every check armed: a seventh `@rpc`, an `adopt` that never refuses, and a `should_send` that never filters each fail it.
 
+## The challenge says which addons the server runs (2026-10-10)
+
+`DotServer.addon_set` is an Array of `{dir, repo, id, version}`, one per addon (`dir` under `res://addons/`, `id` the content id the addon's tag is published under). The host fills it — dot-server-deploy's `TmcHost._advertise_addons` reads its `addons.lock` — and when it is non-empty the challenge carries it as `addons`, with the server's `content_base_urls` beside it. `DotClientLink.server_addons` is the client's copy, set before `server_info` fires, and the link adopts the bases into the registered cloud client on the spot.
+
+**Why the challenge.** It is the first thing a client hears and the one message that arrives whatever else differs, and the point is to act BEFORE the join: a client whose build carries older addons fetches the newer ones as packs and restarts into them (dot-cloud's `DotCloudAddonSet`), which is how an addon release reaches players without a new client build. Once a game is loaded the old addons have run and cannot be replaced in that process. **Why the bases ride with it:** a browser has its page's `/content`, but a desktop client learns the content origin from the first `content.sync`, which comes after the challenge — so without them it was told about addons it could not find. Both are FIELDS, so no revision moves and a client that predates them ignores them; an empty list sends neither. `signon_revision` asserts the list crosses a real socket and that an empty one sends nothing.
+
 ## Something for the HUD that is not chat: `DotNotice`
 
 `DotServer.broadcast_notice(notice)` and `send_notice(session, notice)` put a line, a countdown and a sound on a playing client's HUD; `DotClientLink.notice_received` is where the client hears it. A `DotNotice` is a cue id (a dot-audio id, typically), an optional line of text, an optional countdown in seconds that the client runs itself, and an optional topic that says which HUD line it replaces — so "10… 9… 8…" is one line changing rather than ten, and a notice carrying a topic and nothing else takes that line down.
@@ -743,10 +749,11 @@ done
 # protocols and their 95 checks moved to dot-server-query.)
 godot --headless --path . res://examples/dedicated_server.tscn
 
-# 76 checks. The surface is exactly the six envelope RPCs, the revision is derived, a real
+# 91 checks. The surface is exactly the six envelope RPCs, the revision is derived, a real
 # join carries it and both adverts, a DotNotice crosses a real socket whole, a mismatch is
 # refused in words, and two builds that know different kinds play together -- or are
-# refused in words when one lacks a kind the other requires.
+# refused in words when one lacks a kind the other requires -- and the addon list rides
+# the challenge.
 godot --headless --path . res://examples/signon_revision.tscn
 
 # 46 checks, the last of which compares the total. A real client, a real socket, and a game that is actually DELIVERED:
