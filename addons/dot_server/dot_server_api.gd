@@ -16,5 +16,7 @@ extends RefCounted
 #    scoreboard_interval_sec, scoreboard_snapshot(), SCOREBOARD_MAX_ROWS;
 #    DotClientSession wants_scoreboard; DotClientLink want_scoreboard(), scoreboard,
 #    scoreboard_received; DotEnvelope SCOREBOARD and SCOREBOARD_WANT.
-const LEVEL := 4
+# 5: DotBotQuota (bot_quota, bot_quota_mode, bot_quota_empty); DotServer addon_set and
+#    DotClientLink server_addons (shipped in v0.1.9 without a level of their own).
+const LEVEL := 5
 const OLDEST := 1

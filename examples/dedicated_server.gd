@@ -22,12 +22,12 @@ var server: DotServer
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose.
-const SECTIONS := 28
+const SECTIONS := 29
 
 ## Every check this suite runs, including the two at the end that compare the counts. The
 ## section counter cannot see a section that aborted after announcing itself — its remaining
 ## checks simply never run — and a total can. See docs/testing.md.
-const CHECKS := 340
+const CHECKS := 359
 
 var _entered := 0
 var _completed := 0
@@ -164,6 +164,7 @@ func _run_selftest() -> void:
 	_test_chat_commands()
 	_test_guest_identity()
 	await _test_modules()
+	await _test_bot_quota()
 	_test_audit()
 	_test_rcon_allow_list()
 	await _test_rcon_socket()
@@ -1641,6 +1642,64 @@ func _test_guest_identity() -> void:
 	# A guest must never receive admin permissions.
 	server.admins.resolve(session)
 	_check("guest gets no permissions", session.permissions.is_empty())
+	_done()
+
+
+func _test_bot_quota() -> void:
+	print("")
+	_section("[bot quota]")
+
+	var F := DotBotQuota.Mode.FILL
+	# fill: people take bots' places, and a bot comes back when they leave.
+	_check("fill: nobody here, the quota is bots", DotBotQuota.compute(F, 4, 0) == 4)
+	_check("fill: a person replaces a bot", DotBotQuota.compute(F, 4, 1) == 3)
+	_check("fill: a full quota of people, no bots", DotBotQuota.compute(F, 4, 4) == 0)
+	_check("fill: more people than the quota, still none", DotBotQuota.compute(F, 4, 9) == 0)
+	_check("fixed: the quota whoever is here", DotBotQuota.compute(DotBotQuota.Mode.FIXED, 3, 5) == 3)
+	_check("per_player: per person", DotBotQuota.compute(DotBotQuota.Mode.PER_PLAYER, 2, 3) == 6)
+	_check("off: none", DotBotQuota.compute(DotBotQuota.Mode.OFF, 8, 0) == 0)
+	_check("a bot never takes a person's seat", DotBotQuota.compute(DotBotQuota.Mode.FIXED, 10, 6, 8) == 2)
+	_check("a full server has no bots", DotBotQuota.compute(F, 16, 8, 8) == 0)
+	_check("empty and told not to keep them: none", DotBotQuota.compute(F, 4, 0, -1, false) == 0)
+	_check("but a person brings them back", DotBotQuota.compute(F, 4, 1, -1, false) == 3)
+
+	var source := """
+extends DotModule
+
+var quota: DotBotQuota
+
+func _module_name() -> String: return "quota_probe"
+
+func _module_load() -> DotResult:
+	quota = DotBotQuota.install(self, 5)
+	return DotResult.success(null)
+"""
+	DotPaths.write_text("user://example/modules/quota_probe.gd", source)
+	var loaded: DotResult = await server.modules.load_module("user://example/modules/quota_probe.gd")
+	_check("a module installs the quota", loaded.ok)
+
+	if not loaded.ok:
+		return
+
+	var module: Object = server.modules.get_module("quota_probe")
+	var q: DotBotQuota = module.get("quota") if module != null else null
+	_check("and holds it", q != null)
+
+	if q == null:
+		return
+
+	_check("default mode is fill", q.mode() == DotBotQuota.Mode.FILL)
+	_check("the game's default quota", q.wanted(0) == 5 and q.wanted(2) == 3)
+	_run("bot_quota_mode fixed")
+	_check("the mode is a cvar", q.wanted(2) == 5)
+	_run("bot_quota_mode nonsense")
+	_check("a mode that is not one is refused", q.mode() == DotBotQuota.Mode.FIXED)
+	_run("bot_quota_mode fill")
+	_run("bot_quota_empty 0")
+	_check("bot_quota_empty 0 empties an empty server", q.wanted(0) == 0 and q.wanted(1) == 4)
+
+	server.modules.unload_module("quota_probe")
+	_check("its cvars go with the module", server.console.find_cvar("bot_quota") == null)
 	_done()
 
 

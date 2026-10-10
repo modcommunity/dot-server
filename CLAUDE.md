@@ -677,6 +677,12 @@ directly.
 hooked directly, and `reload_module` calls `GDScript.reload()` because the engine
 caches scripts by path.
 
+## How many bots: `DotBotQuota` (2026-10-10)
+
+`modules/dot_bot_quota.gd`. `DotBotQuota.install(module, default_quota, default_mode = "fill")` registers `bot_quota`, `bot_quota_mode` and `bot_quota_empty` on a game's module and `wanted(humans, slots)` answers how many bots there should be. Modes: **fill** (bots + people = quota; a person who joins takes a bot's place and the bot comes back when they leave, the default), **fixed**, **per_player**, **off**. Every mode leaves the people their seats (`slots - humans`), and `bot_quota_empty 0` empties a server nobody is on.
+
+**Why here.** Every game with bots had grown its own count with its own cvar and its own meaning, and "a person replaces a bot" was in some games and not others. The policy is one rule an operator learns once; HOW a bot is made, named and removed stays the game's. The names are un-prefixed because one game module is loaded at a time and owns them; a game change re-registers them with that game's default, and an owner's `cvars:` in a game descriptor override them like any other. The mode validator is a static method, not a lambda (a lambda held by a long-lived console can outlive its script at teardown). `dedicated_server`'s `[bot quota]` section holds every mode and the cvars on a real module.
+
 ## Permissions for somebody who is not connected
 
 Two questions that look like one, and the server answers both about a **uid** rather than
@@ -827,6 +833,7 @@ addons/dot_server/
   modules/
     dot_module.gd            Base class. The helpers are not optional.
     dot_module_host.gd       Load, unload, reload.
+    dot_bot_quota.gd         How many bots, from how many people: fill/fixed/per_player/off.
   cfg/
     server.cfg               Shipped defaults. Copy to user://cfg and edit that.
     autoexec.cfg
