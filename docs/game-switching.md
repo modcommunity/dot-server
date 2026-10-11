@@ -17,7 +17,7 @@
 - Clients still downloading at `sync_timeout_sec` are **kicked** by default: the players who got the content should not be denied the change.
 - A failed change **restores the previous game**: a server with no game is worse than one on the old map.
 - The old scene is `free()`d, not `queue_free()`d: the next scene is added in the same call, and two games in the tree means duplicate nodes, groups and physics for a frame.
-- Releasing old content calls dot-cloud's `release()`. A resource pack cannot be unmounted; version-namespaced mount paths are what make that sufficient (see dot-cloud's [CLAUDE.md](../../dot-cloud/CLAUDE.md)).
+- Releasing old content calls dot-cloud's `release()`. A resource pack cannot be unmounted; version-namespaced mount paths are what make that sufficient (see dot-cloud's [mounting.md](../../dot-cloud/docs/mounting.md#a-mounted-resource-pack-can-never-be-unmounted)).
 - `DotGameDescriptor.cvars` are applied when the game loads, in two passes ([console.md](console.md#modules)).
 - The server wakes for a game load ([boot.md](boot.md#a-game-loads-awake)).
 

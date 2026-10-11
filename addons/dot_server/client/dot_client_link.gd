@@ -744,7 +744,7 @@ static func platform_kind() -> String:
 ##
 ## Deliberately sends only what was asked. A client that volunteers its access token
 ## to a server requesting a ticket would defeat the point of tickets — see
-## dot-auth's CLAUDE.md.
+## dot-auth's docs/tickets.md.
 func _attach_credential(payload: Dictionary, strategy: String) -> void:
 	var auth := DotRegistry.get_service(auth_service)
 

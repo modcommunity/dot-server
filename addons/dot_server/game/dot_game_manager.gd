@@ -20,7 +20,7 @@ extends Node
 ##
 ## [b]On unloading.[/b] Godot cannot unmount a resource pack, so "unload" means
 ## freeing the scene and dropping references; dot-cloud's version-namespaced mount
-## paths are what make that sufficient. See dot-cloud's CLAUDE.md.
+## paths are what make that sufficient. See dot-cloud's docs/mounting.md.
 
 const CHANNEL := "games"
 const SERVICE := &"dot_game_manager"
