@@ -2096,6 +2096,13 @@ func _on_scoreboard_want(peer_id: int, payload: Dictionary) -> void:
 	var session: DotClientSession = _sessions.get(peer_id)
 	if session == null:
 		return
+	# `once`: one board now, and the held state left as it is. A client's block list asks
+	# for the roster this way every few seconds, and toggling `wants_scoreboard` for it would
+	# close a board the player is holding open. The client also sends its current `open`, so
+	# a server before `once` reads the request as "no change" rather than as a close.
+	if DotEnvelope.flag(payload, "once", false):
+		_send_scoreboard(session)
+		return
 	session.wants_scoreboard = DotEnvelope.flag(payload, "open", false)
 	if session.wants_scoreboard:
 		_send_scoreboard(session)
@@ -2123,12 +2130,62 @@ func _send_scoreboard(session: DotClientSession) -> void:
 	var _sent := send_kind(session.peer_id, DotEnvelope.SCOREBOARD, snap, DotEnvelope.Lane.UNRELIABLE)
 
 
+## Where [method player_key]'s salt is kept. A server's own file: the salt is what stops a
+## key meaning anything on another server, so it is never configured, logged or sent.
+var player_key_salt_path: String = "user://cfg/player_key.salt"
+
+var _player_key_salt: String = ""
+
+
+## A player's key for a CLIENT's block list: stable for one account on this server across
+## reconnects, game changes and restarts, and meaningless anywhere else.
+##
+## [b]Not the uid, and not dot-chat's sender key.[/b] dot-chat attributes a line to the
+## session's userid, which a reconnect changes, so a mute keyed by it lasted until the
+## muted player pressed reconnect. The account uid survives that, but every player can read
+## every row of a board, and a raw uid published to every player of every server is a way
+## to follow one person between servers (dot-chat's `sender_key` note). A digest salted
+## with a secret this server keeps is the middle: the same person on this server is the
+## same key forever, and two servers' keys for them cannot be matched. Empty without an
+## identity (a bot), which a client reads as "match by name".
+func player_key(session: DotClientSession) -> String:
+	if session == null or session.local:
+		return ""
+	var uid := session.uid()
+	if uid == "":
+		return ""
+	return DotHash.sha256_text("%s|%s" % [_key_salt(), uid]).substr(0, 20)
+
+
+func _key_salt() -> String:
+	if _player_key_salt != "":
+		return _player_key_salt
+	if FileAccess.file_exists(player_key_salt_path):
+		var read := FileAccess.get_file_as_string(player_key_salt_path).strip_edges()
+		if read.length() >= 16:
+			_player_key_salt = read
+			return _player_key_salt
+	_player_key_salt = DotHash.random_hex(16)
+	var _made := DirAccess.make_dir_recursive_absolute(player_key_salt_path.get_base_dir())
+	var file := FileAccess.open(player_key_salt_path, FileAccess.WRITE)
+	if file == null:
+		# Kept for this process: keys stay stable until a restart, which only costs a
+		# client's mutes falling back to matching by name.
+		DotLog.warn(CHANNEL, "could not keep the player key salt; keys change on restart", {
+			"path": player_key_salt_path, "error": error_string(FileAccess.get_open_error()),
+		})
+		return _player_key_salt
+	file.store_string(_player_key_salt)
+	file.close()
+	return _player_key_salt
+
+
 ## What a held scoreboard shows: the server, and everybody playing.
 ## [codeblock]
 ## {
 ##   "server":  {"name", "game", "map", "players", "max", "tickrate"},
 ##   "you":     <the recipient's userid>,
-##   "players": [{"id", "name", "score", "ping", "seconds", "bot", "admin", ...}],
+##   "players": [{"id", "name", "score", "ping", "seconds", "bot", "admin", "key", "peer", ...}],
 ##   ...whatever scoreboard_extra returns: "teams", "header", "rows"
 ## }
 ## [/codeblock]
@@ -2156,6 +2213,10 @@ func scoreboard_snapshot(for_session: DotClientSession = null) -> Dictionary:
 			"seconds": session.connected_seconds(),
 			"bot": session.local,
 			"admin": session.is_admin(),
+			# Who a client's personal block list (dot-chat's `sm`) keys a player by, and
+			# which voice frames are theirs. See [method player_key].
+			"key": player_key(session),
+			"peer": session.peer_id,
 		}
 		if scoreboard_fields.is_valid():
 			var more: Variant = scoreboard_fields.call(session)

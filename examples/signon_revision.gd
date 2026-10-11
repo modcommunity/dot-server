@@ -50,7 +50,7 @@ const PORT := 27717
 ## How many checks a clean run makes. A section that aborts part-way stops adding checks,
 ## and the section counter cannot see that when the abort comes after the section
 ## announced itself — so the total is asserted too.
-const CHECKS := 121
+const CHECKS := 128
 
 var _entered := 0
 var _completed := 0
@@ -541,6 +541,33 @@ func _test_the_scoreboard_reaches_the_client() -> void:
 	_link._on_scoreboard(1, stale)
 	_check(newest > 0 and int(_link.scoreboard.get("you", 0)) != -999 and got.size() == heard,
 		"a board older than the one held is dropped, not shown (seq %d after %d)" % [newest - 1, newest])
+
+	# The block list's two fields (dot-chat's `sm`): whose voice is whose, and a key that
+	# outlives the session but means nothing on another server.
+	var key := str(row.get("key", ""))
+	_check(int(row.get("peer", 0)) == session.peer_id, "each row carries the player's peer, for voice")
+	_check(key != "" and key == _server.player_key(session) and not key.contains(session.uid())
+		and key != str(session.userid),
+		"and a key that is neither the uid nor the userid (%s)" % key)
+	var salt_path := _server.player_key_salt_path
+	_server._player_key_salt = ""
+	_check(_server.player_key(session) == key and FileAccess.file_exists(salt_path),
+		"the key survives a restart: its salt is kept on disk")
+
+	# One board on request, without holding it: nothing follows it, and a held board stays held.
+	var before := got.size()
+	_check(_link.request_scoreboard(), "a one-off board is asked for")
+	_check(await _until(func() -> bool: return got.size() == before + 1, 3.0), "and exactly one arrives")
+	await _settle(0.6)
+	_check(got.size() == before + 1 and not session.wants_scoreboard,
+		"and nothing after it: the board was never held (%d)" % (got.size() - before))
+	var _held := _link.want_scoreboard(true)
+	await _settle(0.3)
+	var _once := _link.request_scoreboard()
+	await _settle(0.3)
+	_check(session.wants_scoreboard, "a one-off request leaves a held board held")
+	var _closed := _link.want_scoreboard(false)
+	await _settle(0.3)
 
 	_server.scoreboard_fields = Callable()
 	_server.scoreboard_extra = Callable()

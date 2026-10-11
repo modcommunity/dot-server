@@ -22,7 +22,7 @@ Each is an envelope kind ([signon.md](signon.md#the-rpc-surface-is-frozen-dotenv
 {
   "server":  {"name", "game", "map", "players", "max", "tickrate"},
   "you":     <the recipient's userid>,
-  "players": [{"id", "name", "score", "ping", "seconds", "bot", "admin", ...}],
+  "players": [{"id", "name", "score", "ping", "seconds", "bot", "admin", "key", "peer", ...}],
   ...whatever scoreboard_extra returns: "teams", "header", "rows"
 }
 ```
@@ -31,6 +31,8 @@ Each is an envelope kind ([signon.md](signon.md#the-rpc-surface-is-frozen-dotenv
 - **Sent only to a client holding its board open** (`DotClientLink.want_scoreboard()` sends `scoreboard.want`; the session's `wants_scoreboard`), once at once and then every `scoreboard_interval_sec` (0.5), **unreliable** because the next one supersedes it, numbered by `seq`. A full server does not pay for a table nobody is looking at. At most `SCOREBOARD_MAX_ROWS` (256) rows.
 - **A game adds its columns per player through `scoreboard_fields`** (`func(session) -> Dictionary`, merged into the row) **and anything else through `scoreboard_extra`** (`func() -> Dictionary`, added beside the core keys, never over them). A game's own columns are its to name.
 - The client's copy is `DotClientLink.scoreboard` and `scoreboard_received`; dot-menu's `DotMenuScoreboard` draws it.
+- **`key` and `peer` are for a client's personal block list** (dot-chat's `DotChatSelfMute`, the `sm` command). `peer` is whose voice frames are whose. `key` is `DotServer.player_key(session)`: a digest of the account uid salted with a secret the server keeps at `player_key_salt_path` (`user://cfg/player_key.salt`), so one person is one key on this server across reconnects, game changes and restarts, and two servers' keys for them cannot be matched. Not dot-chat's `sender_key` (the userid, which a reconnect changes, so a mute keyed by it ended when the muted player reconnected) and not the raw uid (every player reads every row, and a raw uid would follow a person between servers). Empty for a bot.
+- **`DotClientLink.request_scoreboard()` asks for one board** (`scoreboard.want` with `once`), leaving a held board held. It also sends the current `open`, so a server before `once` reads it as no change rather than closing the player's board.
 
 ## Telling a joining client what is carrying chat
 

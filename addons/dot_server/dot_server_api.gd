@@ -29,5 +29,9 @@ extends RefCounted
 #    replicated_values(), is_replicated(); DotClientLink replicated_cvars,
 #    replicated_cvar(), replicated_cvar_changed. Optional on the wire: an older client is
 #    sent nothing and keeps its defaults.
-const LEVEL := 8
+# 9: a client's block list: scoreboard rows carry "key" (DotServer.player_key(), a
+#    per-server salted digest of the account) and "peer"; DotClientLink
+#    request_scoreboard() asks for one board without holding it ("once" on
+#    SCOREBOARD_WANT). Optional on the wire both ways.
+const LEVEL := 9
 const OLDEST := 1

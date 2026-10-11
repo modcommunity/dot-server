@@ -1395,14 +1395,28 @@ func _flush_peer() -> void:
 ## The last roster the server sent. Empty until a board has been held open.
 var scoreboard: Dictionary = {}
 
+## Whether this client's board is held open, as [method want_scoreboard] last said.
+var _scoreboard_held: bool = false
+
 
 ## Tells the server this client's scoreboard opened or closed. While it is open the server
 ## sends the roster twice a second; closed, nothing — a board nobody holds costs nothing.
 ## False when it was not sent (not connected, or a server that predates the kind).
 func want_scoreboard(open: bool) -> bool:
+	_scoreboard_held = open
 	if not _connected:
 		return false
 	return send_kind(DotEnvelope.SCOREBOARD_WANT, {"open": open})
+
+
+## Asks for ONE board, leaving a held board held. What a client's block list (dot-chat's
+## `sm`) uses to learn who is here without the player opening Tab. The current held state
+## goes with it, so a server that predates `once` reads "no change" instead of a close.
+## False when it was not sent.
+func request_scoreboard() -> bool:
+	if not _connected:
+		return false
+	return send_kind(DotEnvelope.SCOREBOARD_WANT, {"open": _scoreboard_held, "once": true})
 
 
 func _on_scoreboard(_peer_id: int, payload: Dictionary) -> void:
