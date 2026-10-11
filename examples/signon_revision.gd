@@ -50,7 +50,7 @@ const PORT := 27717
 ## How many checks a clean run makes. A section that aborts part-way stops adding checks,
 ## and the section counter cannot see that when the abort comes after the section
 ## announced itself — so the total is asserted too.
-const CHECKS := 112
+const CHECKS := 121
 
 var _entered := 0
 var _completed := 0
@@ -87,6 +87,7 @@ func _run() -> void:
 		if await _test_a_real_join_carries_it():
 			await _test_a_notice_reaches_the_client()
 			await _test_the_scoreboard_reaches_the_client()
+			await _test_replicated_cvars_reach_the_client()
 			_test_a_mismatch_is_refused_at_once()
 		await _test_an_older_client_on_a_newer_server()
 		await _test_a_newer_client_on_an_older_server()
@@ -546,6 +547,58 @@ func _test_the_scoreboard_reaches_the_client() -> void:
 	_done()
 
 
+# --- 3d. Replicated cvars --------------------------------------------------
+
+## [b]FLAG_REPLICATED meant nothing on the wire until this.[/b] A game rule a client predicts
+## under (dot-combat's mp_teammate_passthrough) is a replicated cvar, and a client that never
+## hears it predicts under its own default. The table rides before LOAD_GAME; a cvar a module
+## registers later, and every change, arrives as a delta; a protected or plain cvar never does.
+func _test_replicated_cvars_reach_the_client() -> void:
+	_section("replicated cvars reach the client, live, and nothing else does")
+
+	_check(_link.replicated_cvar("sv_cheats") == "0" and _link.replicated_cvar("sv_allow_web") == "1",
+		"the join carried the server's replicated cvars (%s)" % str(_link.replicated_cvars))
+	_check(not _link.replicated_cvars.has("hostname") and not _link.replicated_cvars.has("sv_password"),
+		"and no cvar without the flag, protected or not")
+
+	var heard: Array = []
+	_link.replicated_cvar_changed.connect(func(n: String, v: String) -> void: heard.append([n, v]))
+
+	var rule := _server.console.cvar("mp_signon_test_rule", "1", "a game rule a client predicts under",
+		DotConVar.FLAG_REPLICATED | DotConVar.FLAG_NOTIFY)
+	var secret := _server.console.cvar("mp_signon_test_secret", "hunter2", "replicated but protected",
+		DotConVar.FLAG_REPLICATED | DotConVar.FLAG_PROTECTED)
+	var plain := _server.console.cvar("mp_signon_test_plain", "5", "a server-only knob")
+
+	_check(await _until(func() -> bool: return _link.replicated_cvar("mp_signon_test_rule") == "1", 5.0),
+		"a replicated cvar a module registers mid-game reaches a playing client")
+
+	var _set := rule.set_value("2")
+	_check(await _until(func() -> bool: return _link.replicated_cvar("mp_signon_test_rule") == "2", 5.0),
+		"and so does its change")
+	_check(heard.has(["mp_signon_test_rule", "2"]), "announced by name and value (%s)" % str(heard))
+
+	var _s2 := secret.set_value("swordfish")
+	var _s3 := plain.set_value("6")
+	var _s4 := rule.set_value("0")
+	await _until(func() -> bool: return _link.replicated_cvar("mp_signon_test_rule") == "0", 5.0)
+	_check(not _link.replicated_cvars.has("mp_signon_test_secret") and not _link.replicated_cvars.has("mp_signon_test_plain"),
+		"a protected one and a plain one never arrive, registered or changed")
+
+	var before := heard.size()
+	_link._on_cvars(1, {"values": {"mp_signon_test_rule": "0"}, "full": false})
+	_check(heard.size() == before, "a value that did not change is not announced again")
+	_link._on_cvars(1, {"values": "not a table"})
+	_link._on_cvars(1, {"values": {"x".repeat(200): "1", 7: "2"}})
+	_check(_link.replicated_cvar("mp_signon_test_rule") == "0" and not _link.replicated_cvars.has("x".repeat(200)),
+		"a malformed table, an oversized name and a non-string name change nothing")
+
+	_server.console.unregister_cvar("mp_signon_test_rule")
+	_server.console.unregister_cvar("mp_signon_test_secret")
+	_server.console.unregister_cvar("mp_signon_test_plain")
+	_done()
+
+
 # --- 4. The mismatch -------------------------------------------------------
 
 ## [b]Driven through the challenge handler directly, and that is the only way to reach
@@ -628,6 +681,7 @@ func _test_an_older_client_on_a_newer_server() -> void:
 	var old := _new_link("OldClient", func(link: DotClientLink) -> void:
 		link.envelope.unregister(DotEnvelope.NOTICE)
 		link.envelope.unregister(DotEnvelope.CHAT_LINE)
+		link.envelope.unregister(DotEnvelope.CVARS)
 	)
 
 	var joined := await _join(old)
@@ -657,6 +711,10 @@ func _test_an_older_client_on_a_newer_server() -> void:
 	_check(
 		_server.envelope.skipped_sends == skipped + 2,
 		"and both are counted as not sent (%d)" % (_server.envelope.skipped_sends - skipped)
+	)
+	_check(
+		old.replicated_cvars.is_empty() and not _server._send_replicated_cvars(session),
+		"a client without the cvars kind is sent no table and keeps its own defaults"
 	)
 
 	# Put an unknown kind on the wire anyway, as a server that did not filter would.

@@ -32,6 +32,10 @@ signal command_refused(ctx: DotCmdContext, reason: String)
 ## without connecting to each cvar.
 signal cvar_changed(cvar: DotConVar, old_value: String)
 
+## Emitted when a cvar is registered, so a replicated one a module adds while players are
+## already in reaches them without waiting for its first change.
+signal cvar_registered(cvar: DotConVar)
+
 @export_group("Behaviour")
 
 ## Config files are searched here, in order.
@@ -142,6 +146,7 @@ func register_cvar(cvar: DotConVar) -> DotConVar:
 
 	_cvars[key] = cvar
 	cvar.changed.connect(_on_cvar_changed.bind(cvar))
+	cvar_registered.emit(cvar)
 	return cvar
 
 
@@ -431,6 +436,23 @@ func unregister_cvar(name: String) -> void:
 		if c.changed.is_connected(_on_cvar_changed):
 			c.changed.disconnect(_on_cvar_changed)
 		_cvars.erase(key)
+
+
+## Every [constant DotConVar.FLAG_REPLICATED] cvar's value, by its registered name: what a
+## client is told so it predicts under the server's rules. A protected cvar is never in it,
+## replicated or not: a value a client is sent is a value every player can read.
+func replicated_values() -> Dictionary:
+	var out := {}
+	for key in _cvars:
+		var c: DotConVar = _cvars[key]
+		if is_replicated(c):
+			out[c.name] = c.get_string()
+	return out
+
+
+## Whether [param c] is one [method replicated_values] would send.
+static func is_replicated(c: DotConVar) -> bool:
+	return c != null and c.has_flag(DotConVar.FLAG_REPLICATED) and not c.has_flag(DotConVar.FLAG_PROTECTED)
 
 
 func find_cvar(name: String) -> DotConVar:

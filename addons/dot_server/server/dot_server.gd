@@ -329,6 +329,7 @@ func boot() -> DotResult:
 	_resolve_console()
 	_register_cvars()
 	_register_commands()
+	_watch_replicated_cvars()
 
 	# server.cfg runs before the listener so FLAG_STARTUP_ONLY cvars are still
 	# settable — that is the whole reason for the ordering.
@@ -1949,7 +1950,65 @@ func _send_load_game(session: DotClientSession) -> void:
 	if games != null:
 		info = games.load_info()
 
+	# The rules first, on the same reliable ordered lane, so a client's scene starts with
+	# the server's values already in its link rather than predicting a few ticks under its
+	# own defaults. Again on every game change: the new game's module registered its own.
+	_send_replicated_cvars(session)
 	send_kind(session.peer_id, DotEnvelope.LOAD_GAME, info)
+
+
+# --- Replicated cvars -------------------------------------------------------
+#
+# [b]FLAG_REPLICATED was declared and sent nowhere.[/b] Every cvar carrying it (sv_cheats,
+# sv_allow_*) said "a client needs this to predict", and no client was ever told, so the
+# first game rule that needed it (dot-combat's mp_teammate_passthrough, whose value decides
+# where a client's predicted tracer stops) found nothing to ride on. The whole table goes
+# before each LOAD_GAME; a change, or a replicated cvar a module registers late, goes to
+# every client that has had the table (LOADING or SPAWNED) as a delta. A client that does
+# not know the kind is sent nothing and keeps its own defaults, which is what it did before.
+
+func _watch_replicated_cvars() -> void:
+	if console == null:
+		return
+	if not console.cvar_changed.is_connected(_on_replicated_cvar_changed):
+		console.cvar_changed.connect(_on_replicated_cvar_changed)
+	if not console.cvar_registered.is_connected(_on_replicated_cvar_registered):
+		console.cvar_registered.connect(_on_replicated_cvar_registered)
+
+
+## Sends [param session] every replicated cvar. False when it was not sent (no peer, or a
+## client that does not know the kind).
+func _send_replicated_cvars(session: DotClientSession) -> bool:
+	if console == null or session == null:
+		return false
+	return send_kind(session.peer_id, DotEnvelope.CVARS, {
+		"values": console.replicated_values(),
+		"full": true,
+	})
+
+
+func _on_replicated_cvar_changed(c: DotConVar, _old_value: String) -> void:
+	_broadcast_replicated_cvar(c)
+
+
+func _on_replicated_cvar_registered(c: DotConVar) -> void:
+	_broadcast_replicated_cvar(c)
+
+
+func _broadcast_replicated_cvar(c: DotConVar) -> void:
+	if not DotConsole.is_replicated(c):
+		return
+
+	var payload := {"values": {c.name: c.get_string()}, "full": false}
+	var sent := 0
+
+	for session in sessions():
+		if session.state != DotClientSession.State.LOADING and not session.is_playing():
+			continue
+		if send_kind(session.peer_id, DotEnvelope.CVARS, payload):
+			sent += 1
+
+	DotLog.debug(CHANNEL, "replicated cvar sent", {"cvar": c.name, "value": c.get_string(), "clients": sent})
 
 
 ## A client reporting that it has finished loading and is ready to play.

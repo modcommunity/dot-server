@@ -52,7 +52,7 @@ The family's two steps ([game-dev/CLAUDE.md](../../CLAUDE.md#validating-anything
 
 ## API level
 
-`LEVEL` in `addons/dot_server/dot_server_api.gd` (no `class_name`) rises by one for anything a game could call that did not exist before; `OLDEST` is raised to `LEVEL` when something a game could call is removed or changes meaning. The rule is dot-core's `DotAddonApi`; packs declare what they need in `requires.json` and a server refuses one it cannot run. Write the new level's additions in the file's comment. Current levels: 2 descriptor pack lists, 3 dual transport, 4 the scoreboard roster, 5 `DotBotQuota` / `addon_set` / `rtt_ms()`, 6 `net_meter()` and the heartbeat ack's `"sv"`, 7 the `PROFILE` signon stage (`hold_profile` / `release_profile` / `refuse_profile`, `profile_timeout_sec`).
+`LEVEL` in `addons/dot_server/dot_server_api.gd` (no `class_name`) rises by one for anything a game could call that did not exist before; `OLDEST` is raised to `LEVEL` when something a game could call is removed or changes meaning. The rule is dot-core's `DotAddonApi`; packs declare what they need in `requires.json` and a server refuses one it cannot run. Write the new level's additions in the file's comment. Current levels: 2 descriptor pack lists, 3 dual transport, 4 the scoreboard roster, 5 `DotBotQuota` / `addon_set` / `rtt_ms()`, 6 `net_meter()` and the heartbeat ack's `"sv"`, 7 the `PROFILE` signon stage (`hold_profile` / `release_profile` / `refuse_profile`, `profile_timeout_sec`), 8 replicated cvars (`DotEnvelope.CVARS`, `DotClientLink.replicated_cvar()`).
 
 ## Rules that bite
 
@@ -66,6 +66,7 @@ The family's two steps ([game-dev/CLAUDE.md](../../CLAUDE.md#validating-anything
 - `DotClientSession.State` values never move: a new stage goes on the end of the enum, the order is `_can_transition`'s. [signon](docs/signon.md#the-join-state-machine)
 - A module holds `PROFILE` from inside `client_state_changed`, before any await; nobody holding means the player goes straight through. [signon](docs/signon.md#the-profile-stage-a-module-may-hold-a-player-and-refuse-them-unseen)
 - No bearer secret (access token, account password) is ever sent over ENet; tickets and the server's own join password are. [transports](docs/transports.md)
+- `FLAG_REPLICATED` cvars reach clients (`DotEnvelope.CVARS`, table before each `LOAD_GAME`, deltas after); never replicate a protected one. [game-facing](docs/game-facing.md#replicated-cvars-the-servers-rules-on-the-client)
 - Ask a peer list before sending to a session; a session with no peer is an engine error per send. [game-facing](docs/game-facing.md#dotnotice-something-for-the-hud-that-is-not-chat)
 
 **Boot and time**

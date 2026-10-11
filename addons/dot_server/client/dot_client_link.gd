@@ -90,6 +90,12 @@ signal scoreboard_received(snapshot: Dictionary)
 ## it in one pass rather than reacting to two signals in an order it has to know.
 signal game_changed(game_id: String, content_id: String, display_name: String)
 
+## A replicated cvar's value arrived or changed (the server's FLAG_REPLICATED cvars, see
+## [member replicated_cvars]). Fires once per name whose value is new, not per message.
+## Duck-typed followers (dot-combat's [code]DotCombatManager.follow_cvars[/code]) connect
+## here by name.
+signal replicated_cvar_changed(cvar_name: String, value: String)
+
 @export_group("Identity")
 
 ## Name to request. Honoured for guests; an authenticated account uses its own.
@@ -236,6 +242,16 @@ var last_error: DotError = null
 ## The last [DotNotice] the server sent, for [method describe] and for a HUD built after
 ## it arrived. Null until one has.
 var last_notice: DotNotice = null
+
+## The server's replicated cvars, name -> value as a string, as last told. Empty against a
+## server older than the [constant DotEnvelope.CVARS] kind: a reader keeps its own default.
+var replicated_cvars: Dictionary = {}
+
+## Most replicated cvars a server may name, and the longest name and value kept. Bounds a
+## table somebody else sent.
+const MAX_REPLICATED_CVARS := 512
+const MAX_CVAR_NAME_BYTES := 64
+const MAX_CVAR_VALUE_BYTES := 1024
 
 var _game_root: Node = null
 var _scene_instance: Node = null
@@ -528,6 +544,7 @@ func _make_envelope() -> DotEnvelope:
 	env.handle(DotEnvelope.DISCONNECT, _on_disconnect_notice)
 	env.handle(DotEnvelope.CHAT_LINE, _on_chat_line)
 	env.handle(DotEnvelope.SCOREBOARD, _on_scoreboard)
+	env.handle(DotEnvelope.CVARS, _on_cvars)
 	return env
 
 
@@ -1340,6 +1357,44 @@ func _on_scoreboard(_peer_id: int, payload: Dictionary) -> void:
 	scoreboard_received.emit(payload)
 
 
+# --- Replicated cvars --------------------------------------------------------
+
+## The server's value of a replicated cvar, or [param fallback] when it has not said one.
+func replicated_cvar(cvar_name: String, fallback: String = "") -> String:
+	return String(replicated_cvars.get(cvar_name, fallback))
+
+
+func _on_cvars(_peer_id: int, payload: Dictionary) -> void:
+	var raw: Variant = payload.get("values", {})
+	if not (raw is Dictionary):
+		return
+
+	var values := raw as Dictionary
+	var full := DotEnvelope.flag(payload, "full", false)
+	var next := {} if full else replicated_cvars.duplicate()
+	var changed := PackedStringArray()
+
+	for key in values:
+		if next.size() >= MAX_REPLICATED_CVARS and not next.has(String(key)):
+			break
+		if not (key is String or key is StringName):
+			continue
+		var cvar_name := String(key)
+		if cvar_name == "" or cvar_name.to_utf8_buffer().size() > MAX_CVAR_NAME_BYTES:
+			continue
+		var value := str(values[key])
+		if value.to_utf8_buffer().size() > MAX_CVAR_VALUE_BYTES:
+			continue
+		if not replicated_cvars.has(cvar_name) or String(replicated_cvars[cvar_name]) != value:
+			changed.append(cvar_name)
+		next[cvar_name] = value
+
+	replicated_cvars = next
+
+	for cvar_name in changed:
+		replicated_cvar_changed.emit(cvar_name, String(next[cvar_name]))
+
+
 # --- Chat ------------------------------------------------------------------
 
 ## Sends a chat message, or a chat command when it starts with a prefix.
@@ -1449,4 +1504,5 @@ func describe() -> Dictionary:
 		"server_id": server_id,
 		"ping": _ping_ms,
 		"last_notice": last_notice.describe() if last_notice != null else {},
+		"replicated_cvars": replicated_cvars.size(),
 	}

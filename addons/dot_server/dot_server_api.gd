@@ -25,5 +25,9 @@ extends RefCounted
 #    DotServer hold_profile(), release_profile(), refuse_profile();
 #    DotServerConfig.profile_timeout_sec. Nothing on the wire: a client waits through it
 #    in its own AUTHENTICATING phase, so every shipped client still joins.
-const LEVEL := 7
+# 8: replicated cvars reach clients: DotEnvelope.CVARS; DotConsole cvar_registered,
+#    replicated_values(), is_replicated(); DotClientLink replicated_cvars,
+#    replicated_cvar(), replicated_cvar_changed. Optional on the wire: an older client is
+#    sent nothing and keeps its defaults.
+const LEVEL := 8
 const OLDEST := 1

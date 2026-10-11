@@ -40,6 +40,10 @@ Each is an envelope kind ([signon.md](signon.md#the-rpc-surface-is-frozen-dotenv
 - **`relay_fn` is a callable and `watch_relay` is duck-typed** (`is_carrying() -> bool`), because dot-server must not name `DotChatRelay` from optional dot-chat. Unset means no.
 - **It rides chat rather than the handshake**, because the relay may start with the game, after the challenge, and the answer must be re-sendable. The cost: a client listening on `chat_received` sees one payload that is not a line, so a suite counting chat lines must separate it by `kind`.
 
+## Replicated cvars: the server's rules on the client
+
+A cvar registered with `DotConVar.FLAG_REPLICATED` is one a client needs to predict correctly. The flag used to be declared and sent nowhere; now the server sends the whole table (`DotConsole.replicated_values()`) as `DotEnvelope.CVARS` on the control lane just before every `LOAD_GAME`, so a client's scene starts on the server's values, and sends a one-cvar delta to every client in LOADING or SPAWNED when one changes or a module registers one late. `DotClientLink` keeps `replicated_cvars`, answers `replicated_cvar(name, fallback)` and emits `replicated_cvar_changed(name, value)` once per new value. A protected cvar is never sent, replicated or not. The kind is optional: an older client is sent nothing and keeps its own defaults. The first user is dot-combat's `mp_teammate_passthrough` (`DotCombatManager.follow_cvars(link)`).
+
 ## How many bots: `DotBotQuota`
 
 `modules/dot_bot_quota.gd`. `DotBotQuota.install(module, default_quota, default_mode = "fill")` registers `bot_quota`, `bot_quota_mode` and `bot_quota_empty` on a game's module, and `wanted(humans, slots)` answers how many bots there should be.
