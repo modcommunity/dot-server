@@ -79,7 +79,10 @@ const CONTENT_BASE := "https://content.invalid/content"
 ## Every check this suite runs, including the one that compares against it. The section
 ## counter cannot see a section that aborted after announcing itself — its remaining checks
 ## simply never run — and a total can. See docs/testing.md.
-const CHECKS := 57
+const CHECKS := 60
+
+## The name a game's RPC node is given on both ends, for the retirement checks.
+const GAME_NODE := &"GameLink"
 
 var _passed := 0
 var _failed := 0
@@ -102,6 +105,9 @@ var _games_seen: Array[String] = []
 var _progress_calls := [0]
 
 var _manifest_url := ""
+
+## The stand-in game nodes added under the server and the client link while arena runs.
+var _game_nodes: Array = []
 
 
 func _ready() -> void:
@@ -693,7 +699,18 @@ func _test_switch_to_delivered() -> void:
 		"the client subscribed to download progress exactly once (%d)"
 			% _client_cloud.get_signal_connection_list("progress_changed").size()
 	)
+
+	# What a game does once it is running: parent its RPC node under `Server` on both ends.
+	_game_nodes = [_add_game_node(_server), _add_game_node(_link)]
 	_done()
+
+
+## Stands in for a game's RPC link: named, under `Server`, on one end.
+func _add_game_node(parent: Node) -> Node:
+	var node := Node.new()
+	node.name = GAME_NODE
+	parent.add_child(node)
+	return node
 
 
 func _test_switch_back() -> void:
@@ -708,6 +725,36 @@ func _test_switch_back() -> void:
 
 	var told := await _until(_told_lobby_again)
 	_check(told, "and was told (%s)" % [_games_seen])
+
+	# [b]The last game's RPC node must not keep the name the next game's needs.[/b] Nothing
+	# freed it, on either end, so the same game loaded a second time got a link Godot had
+	# renamed `@Node@<n>` beside the leftover, and every RPC between the two ends named a
+	# path the other did not have. Retired, it is renamed out of the way at the change (and
+	# freed a few seconds later, so packets already in flight still land on it).
+	var server_node: Node = _game_nodes[0] if _game_nodes.size() > 0 else null
+	var client_node: Node = _game_nodes[1] if _game_nodes.size() > 1 else null
+	_check(
+		server_node != null and is_instance_valid(server_node)
+			and String(server_node.name) != GAME_NODE,
+		"the server retired the last game's node (%s)"
+			% (server_node.name if is_instance_valid(server_node) else &"freed")
+	)
+	_check(
+		client_node != null and is_instance_valid(client_node)
+			and String(client_node.name) != GAME_NODE,
+		"the client retired the last game's node (%s)"
+			% (client_node.name if is_instance_valid(client_node) else &"freed")
+	)
+	var again_server := _add_game_node(_server)
+	var again_client := _add_game_node(_link)
+	_check(
+		String(again_server.name) == GAME_NODE and String(again_client.name) == GAME_NODE,
+		"the next game's node gets the same name on both ends (%s, %s)"
+			% [again_server.name, again_client.name],
+		"a name collision renames it @Node@<n> and the two ends' RPC paths disagree"
+	)
+	again_server.queue_free()
+	again_client.queue_free()
 	_done()
 
 

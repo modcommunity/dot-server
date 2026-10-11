@@ -29,6 +29,20 @@
 
 **The client `ensure`s rather than `acquire`s**, so a server cannot point a client at another published pack and have it mounted under the expected key.
 
+## What a game parents under `Server` goes with the game
+
+A game's RPC node (its "net link") lives under `Server` on both ends, because Godot routes an RPC by the receiver's node path relative to the scoped `MultiplayerAPI` root and both ends call their half `Server` (`DotServer`, `DotClientLink`). The game's scene is freed at a change; that node is not inside the scene, and no game frees it.
+
+**So both ends retire it at the change.** `DotGameManager` remembers the server's children when a game's scene goes in, and at `_unload_current` every child added since is the game's. `DotClientLink` treats every child that is not its own (chat, the two timers, a default game root) as the game's, at every `LOAD_GAME` and at unload. Each such node is **renamed** `<name>_retired_<id>` at once and **freed `RETIRED_SECONDS` (10 s) later**.
+
+**Why renamed, not freed.** Freed or left alone are both wrong:
+
+- Left alone (the old behaviour), the next time the same game loaded its node collided with the leftover's name, and Godot renamed the newcomer `@Node@<n>`. The ends' paths disagreed and every request the client sent was dropped with `Node not found: "Server/@Node@2370"`, `Failed to get path from RPC`, `Invalid packet received`. A rotation that comes back to a game is the ordinary case.
+- Freed at once, everything already in flight (a client sends until `LOAD_GAME` reaches it, the server's last snapshots are still travelling) became `Failed to get cached node from peer` or `Node not found: "Server/<Game>"`. Godot resolves an already-cached RPC path by the node's object, not its name, and forgets the cache when the node leaves the tree.
+- Renamed and kept, stragglers land on a node whose bridge is gone and are dropped quietly, and the name is free for the next game this frame.
+
+The rule this puts on everything else: **nothing but a game adds children under `DotServer` after boot.** The host's own nodes live under the host.
+
 ## Pack lists on a descriptor
 
 `DotGameDescriptor.dependencies` (mounted on the server and sent to clients), `server_dependencies` (server only) and `maps` (fetched when the server changes to one), with `DotGameManager.current_server_dependencies()` / `current_maps()` (API level 2). Pinning the versions is the host's job; dot-server-deploy's installer does it ([its doc](../../dot-server-deploy/docs/installing-games.md#three-lists-of-packs-beside-the-games-own)).

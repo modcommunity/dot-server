@@ -89,6 +89,14 @@ var _sync_deadline: int = 0
 var _rotation_index: int = 0
 var _current_map: String = ""
 
+## How long a game's retired nodes outlive it: requests a client sent before LOAD_GAME reached
+## it arrive within a round trip, and this is many of them. See [method _free_game_children].
+const RETIRED_SECONDS := 10.0
+
+## The server's children before the running game's scene went in. Anything else under the
+## server arrived while that game ran, and goes with it. See [method _free_game_children].
+var _server_children_before_game: Array[Node] = []
+
 
 func setup(p_server: DotServer) -> void:
 	server = p_server
@@ -707,6 +715,9 @@ func _instantiate(scene_path: String) -> DotResult:
 			DotError.CODE_STATE, "There is no game root node to add the scene to."
 		)
 
+	if server != null:
+		_server_children_before_game = server.get_children()
+
 	_scene_instance = instance
 	_game_root.add_child(instance)
 
@@ -730,6 +741,8 @@ func _unload_current() -> void:
 
 	_scene_instance = null
 
+	_free_game_children()
+
 	# The map belonged to the game that just went. Cleared here rather than when the
 	# next one loads, because the next game's module is what sets it again and it does
 	# so from `game_loaded`, after this.
@@ -743,6 +756,58 @@ func _unload_current() -> void:
 		cloud.call("release", previous_key)
 
 	DotLog.debug(CHANNEL, "previous game unloaded", {"was": previous_key})
+
+
+## Retires what the game that just went put under the server: its RPC link, above all.
+##
+## [b]A game parents its own RPC node under the server[/b], because Godot routes an RPC by
+## the receiver's node path and the server's end is called `Server` on both sides; the
+## client parents the same node under its [DotClientLink], also called `Server`. No game
+## freed that node, and nothing else did either, so every game change left the old game's
+## link under the server. The next time the SAME game loaded, its link collided with the
+## leftover's name and Godot renamed the newcomer to `@Node@<n>`: the two ends' paths no
+## longer agreed, and every request the client sent after returning to a game it had
+## already played was refused ("Node not found: Server/@Node@2370", "Failed to get path
+## from RPC"). A rotation that comes back to a game is the ordinary case, not an edge.
+##
+## [b]Renamed now, freed [constant RETIRED_SECONDS] later, and never freed at once.[/b] A
+## client keeps sending to the old game until LOAD_GAME reaches it, so requests are in flight
+## when the scene is swapped. Godot resolves an RPC from a path it has already cached by the
+## node's OBJECT, not its name, and drops that cache when the node leaves the tree: freed at
+## once, every one of those requests was an engine error ("Failed to get cached node from
+## peer"); renamed and kept, they land on a node whose bridge is gone and are dropped
+## quietly, and the name is free for the next game's link this frame.
+##
+## Everything that entered the server while the game ran is the game's: what the host and
+## the operator services attach goes in at boot (the host's own nodes live under the host).
+func _free_game_children() -> void:
+	if server == null or not is_instance_valid(server):
+		_server_children_before_game.clear()
+		return
+
+	var retired: Array[Node] = []
+
+	for child in server.get_children():
+		if child in _server_children_before_game:
+			continue
+		retired.append(child)
+		child.name = "%s_retired_%d" % [child.name, child.get_instance_id()]
+
+	_server_children_before_game.clear()
+
+	if retired.is_empty() or not server.is_inside_tree():
+		return
+
+	DotLog.debug(CHANNEL, "retired what the game left under the server", {
+		"nodes": retired.size(),
+	})
+
+	server.get_tree().create_timer(RETIRED_SECONDS, true, false, true).timeout.connect(
+		func() -> void:
+			for node in retired:
+				if is_instance_valid(node):
+					node.queue_free()
+	)
 
 
 # --- Rotation --------------------------------------------------------------

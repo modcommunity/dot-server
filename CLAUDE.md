@@ -100,6 +100,7 @@ The family's two steps ([game-dev/CLAUDE.md](../../CLAUDE.md#validating-anything
 - The server acquires the new content before telling clients; during a sync the current game is still the old one. [game-switching](docs/game-switching.md#the-change-flow)
 - A built-in game has no client scene (`""`); delivered is `needs_delivered_content()`, not a `manifest_url`. [game-switching](docs/game-switching.md#delivered-or-shipped-in-the-build)
 - The query config stays on `DotServerConfig` even though the responder is dot-server-query's. [game-switching](docs/game-switching.md#server-queries-live-in-dot-server-query)
+- What a game parents under `Server` (its RPC link) is retired at the change on both ends: renamed at once, freed 10 s later. Nothing but a game adds children under `DotServer` after boot. [game-switching](docs/game-switching.md#what-a-game-parents-under-server-goes-with-the-game)
 
 ## Things deliberately not here
 

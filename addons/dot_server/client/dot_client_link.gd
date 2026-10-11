@@ -255,6 +255,9 @@ const MAX_CVAR_VALUE_BYTES := 1024
 
 var _game_root: Node = null
 var _scene_instance: Node = null
+
+## How long the last game's nodes under this link outlive it. See [method _free_game_children].
+const RETIRED_SECONDS := 10.0
 var _heartbeat: Timer = null
 
 ## Started when the transport connects, stopped by the server's challenge. See
@@ -1070,6 +1073,10 @@ func _on_load_game(_peer_id: int, info: Dictionary) -> void:
 	# built, which for a built-in game is nothing.
 	game_changed.emit(server_game_id, server_content_id, server_game_name)
 
+	# Whatever the next game is, built in or delivered, scene or none: the last game's RPC
+	# node must not hold the name the next one's needs.
+	_free_game_children()
+
 	if scene_path == "":
 		# A server with no scene is legitimate for a lobby, and the join has to
 		# complete exactly as it does with one: tell the server we are ready, then
@@ -1189,12 +1196,63 @@ func _resolve_scene(scene_path: String, info: Dictionary) -> String:
 
 
 func _unload_scene() -> void:
+	# First, and whether or not this node built the scene: a shell that takes its game down
+	# itself (on [signal game_changed]) leaves `_scene_instance` freed, which reads as null
+	# here, and the game's RPC node under this link still has to go.
+	_free_game_children()
 	if _scene_instance == null:
 		return
 	if is_instance_valid(_scene_instance):
 		_game_root.remove_child(_scene_instance)
 		_scene_instance.free()
 	_scene_instance = null
+
+
+## Retires what the game that just went parented under this link: its RPC node, above all.
+##
+## [b]A delivered game parents its own RPC node under this link[/b], named the same as the
+## server's copy, because Godot routes an RPC by node path and this node is `Server` on
+## both ends. No game freed it, so every game change left the old one here, and when the
+## same game loaded again its node collided with the leftover's name and was renamed
+## `@Node@<n>`: from then on the server could not find what this client sent ("Failed to
+## get path from RPC: Server/@Node@2370"), in every game a rotation came back to.
+## [DotGameManager] retires the server's copy the same way.
+##
+## [b]Renamed now and freed [constant RETIRED_SECONDS] later[/b], because a snapshot the
+## server sent before the swap can still be in flight: Godot resolves a cached RPC path by the
+## node's object and forgets it when the node leaves the tree, so a node freed at once turns
+## each straggler into an engine error, while a renamed one drops it quietly and frees the
+## name for the next game's node, which is added in this same call.
+##
+## Everything under this link that is not the link's own belongs to the game: the chat
+## node, the two timers, and the game root when it is the default one under this node.
+func _free_game_children() -> void:
+	var retired: Array[Node] = []
+
+	for child in get_children():
+		if child == _chat or child == _heartbeat or child == _signon_watchdog:
+			continue
+		if _game_root != null and is_instance_valid(_game_root) \
+				and (child == _game_root or child.is_ancestor_of(_game_root)):
+			continue
+		if String(child.name).contains("_retired_"):
+			continue
+		retired.append(child)
+		child.name = "%s_retired_%d" % [child.name, child.get_instance_id()]
+
+	if retired.is_empty() or not is_inside_tree():
+		return
+
+	DotLog.debug(CHANNEL, "retired what the game left under the link", {
+		"nodes": retired.size(),
+	})
+
+	get_tree().create_timer(RETIRED_SECONDS, true, false, true).timeout.connect(
+		func() -> void:
+			for node in retired:
+				if is_instance_valid(node):
+					node.queue_free()
+	)
 
 
 # --- Heartbeat -------------------------------------------------------------
