@@ -99,6 +99,15 @@ extends DotConfig
 ## Seconds a client may spend authenticating before it is dropped.
 @export_range(5.0, 300.0, 5.0) var auth_timeout_sec: float = 60.0
 
+## Seconds a client may spend in the PROFILE stage, held by a module, before it is dropped.
+##
+## Its own number rather than the auth one, because what is being waited on is different:
+## a profile store on a bad afternoon, or a first-time player making an avatar before they
+## may play, which takes minutes rather than a round trip. It is the ceiling on a module
+## that holds and never releases, not the module's own deadline (dot-platform lets a slow
+## store's player in long before this). Unused on a server where no module holds.
+@export_range(5.0, 1800.0, 5.0) var profile_timeout_sec: float = 300.0
+
 ## Seconds a client may spend downloading content.
 ##
 ## Generous: this covers a full content download on whatever connection the player

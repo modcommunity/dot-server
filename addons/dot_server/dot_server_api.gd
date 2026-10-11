@@ -21,5 +21,9 @@ extends RefCounted
 #    DotClientLink.rtt_ms().
 # 6: DotClientLink net_meter() (its peer behind a dot-core DotMeteredPeer, level 3);
 #    the heartbeat.ack carries "sv": {fps, var_ms, tick}.
-const LEVEL := 6
+# 7: the PROFILE signon stage: DotClientSession.State.PROFILE and profile_holds;
+#    DotServer hold_profile(), release_profile(), refuse_profile();
+#    DotServerConfig.profile_timeout_sec. Nothing on the wire: a client waits through it
+#    in its own AUTHENTICATING phase, so every shipped client still joins.
+const LEVEL := 7
 const OLDEST := 1

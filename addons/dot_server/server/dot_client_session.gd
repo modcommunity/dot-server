@@ -11,14 +11,16 @@ extends RefCounted
 ## same way, and for the same reason.
 ##
 ## [codeblock]
-## CONNECTING -> AUTHENTICATING -> DOWNLOADING -> LOADING -> SPAWNED
-##      \              \               \             \
-##       ------------- REJECTED / DISCONNECTED -------------
+## CONNECTING -> AUTHENTICATING -> PROFILE -> DOWNLOADING -> LOADING -> SPAWNED
+##      \              \             \            \             \
+##       -------------------- REJECTED / DISCONNECTED -------------------
 ## [/codeblock]
 ##
 ## A client that never leaves [constant State.DOWNLOADING] is on a slow connection;
-## one stuck in [constant State.AUTHENTICATING] has a credential problem. Collapsing
-## these into "connecting" is what makes a server impossible to support.
+## one stuck in [constant State.AUTHENTICATING] has a credential problem; one stuck in
+## [constant State.PROFILE] is waiting on a module (a profile store, an avatar the player
+## has not made yet). Collapsing these into "connecting" is what makes a server
+## impossible to support.
 
 enum State {
 	## Transport connected, nothing known about them yet.
@@ -35,6 +37,18 @@ enum State {
 	REJECTED,
 	## Gone.
 	DISCONNECTED,
+	## Authenticated, and held by a module before any content is sent: the one stage in
+	## which a module can still refuse a player who has not appeared. See
+	## [method DotServer.hold_profile]. A server with no module holding it passes
+	## straight through.
+	##
+	## [b]Last in the enum, not between AUTHENTICATING and DOWNLOADING where it runs.[/b]
+	## A state is stored and compared as its number outside this file (a replay records
+	## [code]int(session.state)[/code]), so inserting it in signon order would renumber
+	## LOADING, SPAWNED, REJECTED and DISCONNECTED under every record and every build
+	## that kept one. The order of the signon is [method _can_transition], never the
+	## enum's.
+	PROFILE,
 }
 
 ## Server-local sequential id — a userid, in the usual sense.
@@ -127,6 +141,15 @@ var background_grace_sec: float = 0.0
 ## Score, for `status` output and roster reporting. The game sets this.
 var score: int = 0
 
+## Who is holding this session in [constant State.PROFILE], by the name each gave
+## [method DotServer.hold_profile]. The session leaves the stage when the last one
+## releases it. Empty in every other state.
+##
+## [b]Names, not a count.[/b] Two modules holding and one releasing twice must not let
+## the player in while the other is still deciding, and [code]status[/code] can say who
+## a stuck player is waiting on.
+var profile_holds: PackedStringArray = PackedStringArray()
+
 ## Content sync progress, 0..1. -1 when not downloading.
 var content_progress: float = -1.0
 
@@ -197,6 +220,11 @@ func transition_to(new_state: State) -> bool:
 	state = new_state
 	_state_entered_ms = Time.get_ticks_msec()
 
+	# A hold belongs to the stage. One left over would read as "waiting on X" in status
+	# for a player who is in the game.
+	if new_state != State.PROFILE:
+		profile_holds = PackedStringArray()
+
 	if new_state == State.SPAWNED and spawned_at == 0:
 		spawned_at = int(Time.get_unix_time_from_system())
 
@@ -216,8 +244,15 @@ static func _can_transition(from: State, to: State) -> bool:
 		State.CONNECTING:
 			return to == State.AUTHENTICATING
 		State.AUTHENTICATING:
+			# DotServer always goes through PROFILE. The direct moves stay legal for a
+			# host that drives the machine itself, which every one did before the stage
+			# existed; removing them would break those hosts for no gain.
 			# Content is optional: a server whose current game needs nothing new
 			# sends an authenticated client straight to loading.
+			return to == State.PROFILE or to == State.DOWNLOADING or to == State.LOADING
+		State.PROFILE:
+			# Out to content only. Never straight to SPAWNED: a held player who sends
+			# `game.loaded` early must not appear, which is the whole point of the stage.
 			return to == State.DOWNLOADING or to == State.LOADING
 		State.DOWNLOADING:
 			return to == State.LOADING
@@ -441,6 +476,7 @@ func describe() -> Dictionary:
 		"background_grace": background_grace_sec,
 		"content": content_key,
 		"progress": content_progress,
+		"profile_holds": Array(profile_holds),
 	}
 
 

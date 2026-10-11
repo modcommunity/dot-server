@@ -401,10 +401,12 @@ func _sync_clients(descriptor: DotGameDescriptor) -> DotResult:
 	for session in server.sessions():
 		if not session.is_active():
 			continue
-		# A client still authenticating will be sent to the new content by the
-		# normal join flow when it gets there, so it is not waited for.
+		# A client still authenticating, or held in PROFILE, will be sent to the new
+		# content by the normal join flow when it gets there, so it is not waited for.
+		# Moving a held one to DOWNLOADING here would let it past its holder.
 		if session.state == DotClientSession.State.CONNECTING \
-			or session.state == DotClientSession.State.AUTHENTICATING:
+			or session.state == DotClientSession.State.AUTHENTICATING \
+			or session.state == DotClientSession.State.PROFILE:
 			continue
 
 		session.content_progress = 0.0

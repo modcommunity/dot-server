@@ -5,14 +5,26 @@
 `DotClientSession.State` is a real state machine with checked transitions, not a label:
 
 ```
-CONNECTING -> AUTHENTICATING -> DOWNLOADING -> LOADING -> SPAWNED
-     \              \               \             \
-      ------------- REJECTED / DISCONNECTED -------------
+CONNECTING -> AUTHENTICATING -> PROFILE -> DOWNLOADING -> LOADING -> SPAWNED
+     \              \             \            \             \
+      -------------------- REJECTED / DISCONNECTED -------------------
 ```
 
-- **Each stage has its own timeout** (`auth_timeout_sec`, `download_timeout_sec`, `load_timeout_sec`), because "reply to a challenge" and "download 400 MB" differ by three orders of magnitude. A client stuck in `AUTHENTICATING` has a credential problem; one stuck in `DOWNLOADING` has a slow connection. Collapsing them into "connecting" makes a server impossible to support.
+- **Each stage has its own timeout** (`auth_timeout_sec`, `profile_timeout_sec`, `download_timeout_sec`, `load_timeout_sec`), because "reply to a challenge" and "download 400 MB" differ by three orders of magnitude. A client stuck in `AUTHENTICATING` has a credential problem; one stuck in `PROFILE` is waiting on a module; one stuck in `DOWNLOADING` has a slow connection. Collapsing them into "connecting" makes a server impossible to support.
+- **`PROFILE` is last in the enum, not where it runs.** A state is kept as its number outside this addon (dot-server-deploy's replay records `int(session.state)`), so the existing values never move; the signon order is `_can_transition`'s. `AUTHENTICATING -> DOWNLOADING/LOADING` stays legal for a host that drives the machine itself.
 - **`SPAWNED -> DOWNLOADING` is the game change**, and `LOADING -> DOWNLOADING` is legal too: a `changelevel` does not wait for a client that connected a second earlier ([game-switching.md](game-switching.md)).
 - `DotClientLink` enters `PLAYING` itself after it sends `game.loaded`, with nothing coming back, so a client in `PLAYING` is not proof the server spawned it. A test of a join waits for the server session in `SPAWNED`.
+
+## The PROFILE stage: a module may hold a player, and refuse them unseen
+
+After authentication, the ban check and the slot, `DotServer` puts the session in `PROFILE` and announces it on `client_state_changed`. A module that has something to decide about the player (dot-platform's profile and avatar) calls `hold_profile(session, "<its name>")` from inside that handler, and later `release_profile` or `refuse_profile(session, reason, why)`. When the handlers return and nobody holds the session, it goes on to content at once, so a server with no holder pays nothing.
+
+- **It is the last point at which a refusal is invisible.** Nothing has been sent yet that would have to be taken back: no content sync, no game, no spawn, no join line. Before the stage a platform could only decide after the spawn, so every player was drawn as a guest first and a refusal was a kick of somebody everyone had seen.
+- **The hold is taken synchronously.** The server reads the holds as soon as the announcement's handlers return; a handler that awaits first finds the player downloading. A holder that decides synchronously may release inside the handler; the server advances once either way.
+- **Holds are names, not a count**, so two holders are independent and a timeout logs `held_by`. `PROFILE -> SPAWNED` is illegal, so a held client that sends `game.loaded` early is ignored. A game change does not move a held session to the new content; it is sent the current game when released.
+- **`refuse_profile` is a rejection, not a kick**: `REJECTED`, the reason as `signon.disconnect`, no `client_kicked`, no leave line. Past the stage it returns false and the holder kicks instead.
+- **Nothing goes on the wire.** The client sits in its own `AUTHENTICATING` phase (its signon watchdog stopped at the challenge), so every shipped client still joins a server that holds it. A module that wants the client to do something during the stage (show an avatar editor) registers its own optional kind.
+- `profile_timeout_sec` (300 s) is the ceiling on a holder that never lets go, not a module's own deadline: "Timed out while setting up a profile".
 
 ## A browser tab that is not on screen is not running
 

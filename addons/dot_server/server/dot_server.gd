@@ -1564,7 +1564,112 @@ func _on_credentials(peer_id: int, payload: Dictionary) -> void:
 		}
 	)
 
-	_advance_to_content(session)
+	_enter_profile(session)
+
+
+# --- The PROFILE stage -------------------------------------------------------
+
+## Puts an authenticated session in [constant DotClientSession.State.PROFILE] and lets it
+## through at once unless something holds it there.
+##
+## [b]Why a stage and not a hook on the spawn.[/b] Everything a platform decides about a
+## player (their profile, their avatar, whether they may play at all without one) needs a
+## store that answers asynchronously, and before this the only place a module could run it
+## was off [signal client_state_changed], finishing after the player was already in the
+## world. A refusal then had to be a kick of somebody everyone had seen join, and an
+## admitted player was drawn as a guest for the length of a store read. A stage between
+## authentication and content is the last point at which nothing has been sent that a
+## refusal would have to take back: no content sync, no game, no spawn, no join line.
+##
+## [b]Holders claim the stage from inside [signal client_state_changed].[/b] The signal is
+## emitted with the session in PROFILE, a handler calls [method hold_profile]
+## synchronously, and only once every handler has returned does the server look at the
+## holds. A handler that awaits first has missed it, and the player is already
+## downloading.
+func _enter_profile(session: DotClientSession) -> void:
+	# The credentials handler awaited authentication; the player may have gone meanwhile.
+	if not session.is_active():
+		return
+
+	if not session.transition_to(DotClientSession.State.PROFILE):
+		return
+
+	client_state_changed.emit(session)
+
+	# A holder may already have released, or refused, from inside its handler: a module
+	# that decides synchronously. Only a session still in the stage with nobody holding
+	# it moves on here, so it is never advanced twice.
+	if session.state == DotClientSession.State.PROFILE and session.profile_holds.is_empty():
+		_advance_to_content(session)
+		return
+
+	if session.state == DotClientSession.State.PROFILE:
+		DotLog.debug(CHANNEL, "client held in the profile stage", {
+			"user": session.label(),
+			"by": ", ".join(session.profile_holds),
+		})
+
+
+## Holds [param session] in the PROFILE stage until [param holder] releases it.
+##
+## Returns false, and holds nothing, when the session is not in PROFILE: past it the
+## player is already on their way in, and a module must fall back to acting on a joined
+## player (dot-platform does). Call it from a [signal client_state_changed] handler, before
+## the handler awaits anything. [param holder] names who is holding (a module's name), so
+## two holders are independent and [code]status[/code] can say what a stuck player is
+## waiting for.
+##
+## The stage has its own deadline, [member DotServerConfig.profile_timeout_sec]: a holder
+## that never releases costs the player their join, never the server a slot.
+func hold_profile(session: DotClientSession, holder: String) -> bool:
+	if session == null or not session.is_active():
+		return false
+	if session.state != DotClientSession.State.PROFILE:
+		return false
+	if holder == "":
+		push_error("hold_profile needs a holder name, so it can be released")
+		return false
+	if not session.profile_holds.has(holder):
+		session.profile_holds.append(holder)
+	return true
+
+
+## Releases [param holder]'s hold. The last release sends the player on to content.
+##
+## Safe to call for a session that has left the stage, been refused or gone: it does
+## nothing, so a holder's cleanup path need not know how the join ended.
+func release_profile(session: DotClientSession, holder: String) -> void:
+	if session == null or session.state != DotClientSession.State.PROFILE:
+		return
+
+	var at := session.profile_holds.find(holder)
+	if at < 0:
+		return
+	session.profile_holds.remove_at(at)
+
+	if session.profile_holds.is_empty() and session.is_active():
+		_advance_to_content(session)
+
+
+## Refuses a player still in the PROFILE stage: they are told [param reason] and never
+## appear. Returns false when the session is not in PROFILE, so the caller knows the
+## player is already past the point where a refusal is invisible and has to
+## [method kick] instead.
+##
+## [b]A refusal, not a kick.[/b] The session is REJECTED, as a wrong password or a ban is:
+## no client_kicked event, no leave line in chat, because nobody saw them join.
+func refuse_profile(session: DotClientSession, reason: String, why: DotError = null) -> bool:
+	if session == null or not session.is_active():
+		return false
+	if session.state != DotClientSession.State.PROFILE:
+		return false
+
+	DotLog.info(CHANNEL, "client refused in the profile stage", {
+		"user": session.label(),
+		"reason": reason,
+	})
+	_reject_session(session, reason, why)
+	return true
 
 
 ## Runs dot-auth if it is present, or admits everyone as a guest if it is not.
@@ -2354,6 +2459,8 @@ func _sweep_timeouts() -> void:
 		match session.state:
 			DotClientSession.State.CONNECTING, DotClientSession.State.AUTHENTICATING:
 				limit = config.auth_timeout_sec
+			DotClientSession.State.PROFILE:
+				limit = config.profile_timeout_sec
 			DotClientSession.State.DOWNLOADING:
 				limit = config.download_timeout_sec
 			DotClientSession.State.LOADING:
@@ -2386,9 +2493,18 @@ func _sweep_timeouts() -> void:
 					"user": session.label(),
 					"state": session.state_name(),
 					"seconds": int(session.time_in_state()),
+					# Who a player stuck in PROFILE was waiting on; empty otherwise.
+					"held_by": ", ".join(session.profile_holds),
 				}
 			)
-			kick(session, "Timed out while %s" % session.state_name().to_lower())
+			# PROFILE is a noun, not something a player is doing; the others read as a
+			# sentence already ("Timed out while downloading").
+			var stage := (
+				"setting up a profile"
+				if session.state == DotClientSession.State.PROFILE
+				else session.state_name().to_lower()
+			)
+			kick(session, "Timed out while %s" % stage)
 
 
 ## The rate the server plays at -- [code]sv_tickrate[/code] as last applied, not the
