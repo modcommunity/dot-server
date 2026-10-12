@@ -13,8 +13,16 @@ extends Node
 ##
 ## [b]A thread, because the engine only offers a blocking read.[/b] `OS` exposes
 ## `read_string_from_stdin` and nothing that polls, so the choice is a thread or a
-## server that stops simulating between keystrokes. Lines cross back under a mutex and
-## are run on the main thread, where every command in this family expects to be.
+## server that stops simulating between keystrokes. Lines are run on the main thread,
+## where every command in this family expects to be.
+##
+## [b]The thread runs the engine's read itself, never a GDScript function.[/b] Each read
+## is one thread started on [code]OS.read_string_from_stdin.bind(BUFFER)[/code]; the main
+## thread collects the line in [method _process] and starts the next. A reader that was a
+## GDScript loop left a GDScript frame on a thread the engine cannot stop, and on a
+## terminal the process ended in SIGSEGV (exit 139) after a clean `quit` because of it
+## (docs/history.md, "quit on a terminal exited 139"). A thread blocked in native code
+## holds nothing that teardown frees.
 ##
 ## [b]Fully trusted, and that is not a shortcut.[/b] Whoever can type here can already
 ## edit `cfg/`, read `rcon.yml` and restart the process. A permission check against the
@@ -25,6 +33,14 @@ const CHANNEL := "console.stdin"
 ## How many bytes to ask for per read. One line is far below this; the size only
 ## bounds a paste.
 const BUFFER := 4096
+
+## How many empty reads in a row mean end of input.
+##
+## [b]The engine returns "" both for an empty line and for end of input[/b] (it strips the
+## newline), so one empty read cannot be told from the other. An operator pressing enter
+## on its own is a line; a closed terminal or a file that ran out returns "" immediately
+## and forever. Sixty-four in a row is a file or a hangup, not a person.
+const EOF_EMPTY_READS := 64
 
 ## Where typed lines are attributed from.
 ##
@@ -61,10 +77,8 @@ const BUFFER := 4096
 var server: DotServer = null
 
 var _thread: Thread = null
-var _mutex: Mutex = Mutex.new()
-var _pending: PackedStringArray = PackedStringArray()
 var _stop := false
-var _eof := false
+var _empty_reads := 0
 
 
 ## Starts reading, or explains why it will not.
@@ -101,12 +115,7 @@ func setup(p_server: DotServer) -> DotResult:
 		DotLog.info(CHANNEL, "no threads on this platform; console input is off")
 		return DotResult.success(false)
 
-	_thread = Thread.new()
-
-	var started := _thread.start(_read_loop)
-
-	if started != OK:
-		_thread = null
+	if not _start_read():
 		return DotResult.fail(
 			DotError.CODE_INTERNAL, "Could not start the stdin reader thread."
 		)
@@ -136,25 +145,44 @@ static func should_read(kind: int, pipes: bool) -> bool:
 
 
 func _process(_delta: float) -> void:
-	if _pending.is_empty() and not _eof:
+	if _thread == null or _thread.is_alive():
 		return
 
-	var lines := PackedStringArray()
+	var chunk: String = _thread.wait_to_finish()
+	_thread = null
 
-	_mutex.lock()
-	lines = _pending.duplicate()
-	_pending = PackedStringArray()
-	_mutex.unlock()
+	if chunk == "":
+		_empty_reads += 1
+		# The reader stops at end of input -- a piped script that ran out, or a terminal
+		# that was closed. Said once, so `./server < commands.txt` does not look hung.
+		if _empty_reads >= EOF_EMPTY_READS:
+			set_process(false)
+			DotLog.info(CHANNEL, "end of input; console input is off")
+			return
+	else:
+		_empty_reads = 0
+		for line in chunk.split("\n", false):
+			_run(line)
 
-	for line in lines:
-		_run(line)
-
-	# The reader stops at end of input -- a piped script that ran out, or a terminal
-	# that was closed. Said once, so `./server < commands.txt` does not look hung.
-	if _eof:
-		_eof = false
+	# [b]No next read once the server is down.[/b] `quit` ran on the line just collected;
+	# a read started now would block until exit and leave a thread the engine warns about.
+	if _stop or (server != null and server.state == DotServer.State.STOPPED):
 		set_process(false)
-		DotLog.info(CHANNEL, "end of input; console input is off")
+		return
+
+	_start_read()
+
+
+## Starts one blocking read on its own thread. See the class comment for why the thread
+## runs the engine's method and not one of ours.
+func _start_read() -> bool:
+	_thread = Thread.new()
+
+	if _thread.start(OS.read_string_from_stdin.bind(BUFFER)) != OK:
+		_thread = null
+		return false
+
+	return true
 
 
 func _run(line: String) -> void:
@@ -194,24 +222,6 @@ func _run(line: String) -> void:
 		printerr("  %s" % str(res.error))
 
 
-## Runs on the reader thread. Nothing here touches the scene tree.
-func _read_loop() -> void:
-	while not _stop:
-		var chunk := OS.read_string_from_stdin(BUFFER)
-
-		# [b]An empty read is end of input, not an empty line.[/b] A closed or exhausted
-		# stdin returns "" immediately and forever, so without this the thread spins a
-		# core for the life of the process.
-		if chunk == "":
-			_eof = true
-			return
-
-		_mutex.lock()
-		for line in chunk.split("\n", false):
-			_pending.append(line)
-		_mutex.unlock()
-
-
 func _exit_tree() -> void:
 	_stop = true
 
@@ -221,14 +231,12 @@ func _exit_tree() -> void:
 	# [b]Joined only when it has already finished.[/b] A reader blocked in
 	# `read_string_from_stdin` cannot be woken -- the engine offers no way to cancel one
 	# -- so `wait_to_finish()` on it would hang the shutdown until somebody pressed
-	# enter, turning ctrl-c into a server that will not stop. Measured: leaving it
-	# costs one "Thread object is being destroyed" warning at exit and the process
-	# still exits 0, which is the better of the two — ON A TERMINAL OR A FILE. On an
-	# open pipe that is never closed (`sleep 60 | godot ...`, a CI step, a parent that
-	# spawned this with `OS.execute_with_pipe`) it is not: the process prints everything,
-	# its leak report included, and then hangs inside its own exit (Godot 4.7.2). Nothing
-	# here can cancel the read, so [method setup] does not START one on a pipe unless
-	# [member read_pipes] says to -- and whoever says so owns closing the pipe.
+	# enter, turning ctrl-c into a server that will not stop. Leaving it costs one
+	# "Thread object is being destroyed" warning at exit, and because the thread is in
+	# the engine's own read rather than a GDScript frame the process exits 0 (measured
+	# on a pty with script(1): `quit` and ctrl-c, Godot 4.7.2). After `quit` there is no
+	# blocked read at all: [method _process] does not start one once the server is down.
+	# On an open pipe nobody closes, see [member read_pipes].
 	if not _thread.is_alive():
 		_thread.wait_to_finish()
 
@@ -240,6 +248,6 @@ func describe() -> Dictionary:
 		"reading": _thread != null and _thread.is_alive(),
 		"stdin_type": OS.get_stdin_type(),
 		"read_pipes": read_pipes,
-		"queued": _pending.size(),
+		"empty_reads": _empty_reads,
 		"source": source,
 	}

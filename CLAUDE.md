@@ -84,6 +84,7 @@ The family's two steps ([game-dev/CLAUDE.md](../../CLAUDE.md#validating-anything
 - Descriptor cvars apply in two passes; a host calls `reapply_descriptor_cvars()` once its module is up. [console](docs/console.md#modules)
 - `map` is dot-map's; this addon switches games (`changelevel`, `game`). [console](docs/console.md#map-belongs-to-dot-map)
 - A lambda held by a long-lived console can outlive its script at teardown; use static methods for validators. [game-facing](docs/game-facing.md#how-many-bots-dotbotquota)
+- The stdin reader thread runs the engine's read, never a GDScript function (a GDScript frame on it made a terminal `quit` exit 139); measure a change on a pty. [testing](docs/testing.md)
 
 **Security and moderation**
 
