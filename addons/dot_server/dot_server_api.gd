@@ -33,5 +33,8 @@ extends RefCounted
 #    per-server salted digest of the account) and "peer"; DotClientLink
 #    request_scoreboard() asks for one board without holding it ("once" on
 #    SCOREBOARD_WANT). Optional on the wire both ways.
-const LEVEL := 9
+# 10: DotClientLink tls_connect_timeout_sec: a native WebSocket join to a public bare
+#    host:port tries wss:// first (a listed server's game port is a TLS port). Nothing on
+#    the wire.
+const LEVEL := 10
 const OLDEST := 1

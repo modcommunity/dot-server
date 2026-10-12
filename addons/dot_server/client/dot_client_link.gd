@@ -135,9 +135,19 @@ signal replicated_cvar_changed(cvar_name: String, value: String)
 ## is the wait a player behind a UDP-blocking firewall pays on every join.
 @export_range(0.5, 15.0, 0.5) var udp_connect_timeout_sec: float = 2.5
 
+## The longest a native WebSocket join waits on [code]wss://[/code] before trying plain
+## [code]ws://[/code] at a public bare [code]host:port[/code] (see [method _tls_first]).
+## [b]A plain server is paid in full:[/b] dot-server's own listener does not answer a TLS
+## ClientHello, it waits for an HTTP header that never comes, so a wrong guess costs all
+## of this. 2.5 s is a TCP connect, a TLS 1.3 handshake and the upgrade at ~300 ms RTT,
+## twice over.
+@export_range(0.5, 15.0, 0.5) var tls_connect_timeout_sec: float = 2.5
+
 ## "enet" or "websocket": what the current (or last) connection uses.
 var transport_used: String = ""
-var _trying_udp: bool = false
+## True while an attempt that has a fallback is running (UDP before WebSocket, TLS before
+## plain): its failure is quiet, because the join has not failed yet.
+var _trying_first: bool = false
 ## The address of the join in progress, for the secure rejoin.
 var _last_address: String = ""
 ## Set while rejoining over WebSocket because the server asked for a secret.
@@ -333,12 +343,12 @@ func connect_to_server(address: String, password: String = "") -> DotResult:
 	var udp := _udp_target(address)
 	if udp != "":
 		var enet := DotTransportENet.new()
-		_trying_udp = transport_preference != "udp"
+		_trying_first = transport_preference != "udp"
 		last_error = null
 		var over_udp: DotResult = await _connect_with(
-			enet, udp, udp_connect_timeout_sec if _trying_udp else enet.connect_timeout_sec
+			enet, udp, udp_connect_timeout_sec if _trying_first else enet.connect_timeout_sec
 		)
-		_trying_udp = false
+		_trying_first = false
 		if over_udp.ok or transport_preference == "udp":
 			return over_udp
 		DotLog.info(
@@ -353,7 +363,64 @@ func connect_to_server(address: String, password: String = "") -> DotResult:
 	# A client must speak whatever the server listens on; WebSocket is the only
 	# choice that works from a browser and also works natively.
 	ws.require_web_clients = true
+
+	if _tls_first(address):
+		_trying_first = true
+		last_error = null
+		var secure: DotResult = await _connect_with(
+			ws, "wss://" + address.strip_edges(), minf(ws.connect_timeout_sec, tls_connect_timeout_sec)
+		)
+		_trying_first = false
+		if secure.ok:
+			return secure
+		DotLog.info(CHANNEL, "TLS did not answer; trying plain WebSocket", {"address": address})
+		last_error = null
+		_set_phase(Phase.CONNECTING, "Connecting…")
+		ws = DotTransportAuto.new()
+		ws.require_web_clients = true
+
 	return await _connect_with(ws, address, ws.connect_timeout_sec)
+
+
+## Whether a WebSocket join to [param address] tries [code]wss://[/code] before
+## [code]ws://[/code].
+##
+## [b]A public server's WebSocket port is a TLS port.[/b] Browsers reach every listed server
+## from an HTTPS page, so its game port is behind a TLS terminator (nginx, see
+## dot-server-deploy's install-server-tls.sh) or terminates TLS itself, and the address the
+## site hands the desktop app is that same `host:port`. Dialled as plain `ws://` it is
+## answered "400 plain HTTP request sent to HTTPS port": a desktop player whose UDP was
+## blocked, or who turned UDP off, could not join a server any browser could. TLS first
+## costs nothing when it is right; when it is wrong (a public server with no certificate,
+## which no browser can join either) the join waits [member tls_connect_timeout_sec] first.
+##
+## Only a bare `host:port` on a native build, and never a loopback or private address: a
+## LAN or development server is the plain-WebSocket case, and an explicit scheme is obeyed.
+func _tls_first(address: String) -> bool:
+	if DotPlatform.is_web():
+		return false
+	var parts := DotTransport.normalise_address(address, 0)
+	if str(parts["scheme"]) != "" or int(parts["port"]) <= 0:
+		return false
+	return not _is_local_host(str(parts["host"]))
+
+
+static func _is_local_host(host: String) -> bool:
+	var h := host.to_lower().trim_prefix("[").trim_suffix("]")
+	if h == "" or h == "localhost" or h.ends_with(".local") or h.ends_with(".localhost"):
+		return true
+	# IPv6 literals only: a hostname may begin with "fc" or "fd" too.
+	if h.contains(":"):
+		return h == "::1" or h.begins_with("fe80:") or h.begins_with("fc") or h.begins_with("fd")
+	if not h.is_valid_ip_address():
+		return false
+	var o := h.split(".")
+	if o.size() != 4:
+		return false
+	var a := int(o[0])
+	var b := int(o[1])
+	return a == 127 or a == 10 or (a == 192 and b == 168) or (a == 172 and b >= 16 and b <= 31) \
+		or (a == 169 and b == 254) or (a == 100 and b >= 64 and b <= 127)
 
 
 ## The ENet address to try first, or "" to go straight to WebSocket.
@@ -379,7 +446,7 @@ func _udp_target(address: String) -> String:
 func _connect_with(t: DotTransport, address: String, timeout_sec: float) -> DotResult:
 	var created := t.create_client(address)
 	if not created.ok:
-		if _trying_udp:
+		if _trying_first:
 			return DotResult.failure(created.error)
 		return _fail(created.error)
 
@@ -407,8 +474,8 @@ func _connect_with(t: DotTransport, address: String, timeout_sec: float) -> DotR
 		if _connected:
 			DotLog.info(CHANNEL, "connected", {"transport": used})
 			return DotResult.success(true)
-		if phase == Phase.FAILED or (_trying_udp and last_error != null):
-			if _trying_udp:
+		if phase == Phase.FAILED or (_trying_first and last_error != null):
+			if _trying_first:
 				multiplayer.multiplayer_peer.close()
 				multiplayer.multiplayer_peer = null
 			return DotResult.failure(
@@ -417,7 +484,7 @@ func _connect_with(t: DotTransport, address: String, timeout_sec: float) -> DotR
 			)
 		await get_tree().process_frame
 
-	if _trying_udp:
+	if _trying_first:
 		multiplayer.multiplayer_peer.close()
 		multiplayer.multiplayer_peer = null
 		return DotResult.fail(DotError.CODE_TIMEOUT, "UDP did not answer.", address)
@@ -471,10 +538,10 @@ func _on_connected() -> void:
 
 
 func _on_connection_failed() -> void:
-	# A failed UDP attempt is not the join failing: WebSocket is tried next, and an
-	# ERROR line and a FAILED phase for it would be a lie the player sees.
-	if _trying_udp:
-		last_error = DotError.make(DotError.CODE_NETWORK, "UDP connect failed.")
+	# A failed first attempt (UDP, or TLS) is not the join failing: the fallback is tried
+	# next, and an ERROR line and a FAILED phase for it would be a lie the player sees.
+	if _trying_first:
+		last_error = DotError.make(DotError.CODE_NETWORK, "The first connect attempt failed.")
 		return
 	_fail(DotError.make(
 		DotError.CODE_NETWORK,

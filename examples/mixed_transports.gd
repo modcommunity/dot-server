@@ -20,6 +20,7 @@ extends Node
 ##   4. The server sees one match: both sessions playing, and each client's scoreboard lists both.
 ##   5. Reliable game RPCs cross both ways, WebSocket to ENet and ENet to WebSocket.
 ##   6. An unreliable stream crosses both ways, nearly whole on loopback.
+##   6b. Which addresses a native WebSocket join tries over TLS first.
 ##   7. A desktop player whose UDP gets no answer falls back to WebSocket in about
 ##      `udp_connect_timeout_sec`, and plays with the other two.
 ##   8. The ENet player leaving disturbs nobody else.
@@ -36,7 +37,7 @@ const DEAD_UDP_PORT := 27739
 const WORLD := preload("res://examples/fixtures/mixed_world.gd")
 
 ## How many checks a clean run makes; asserted, so a section that aborts part-way shows.
-const CHECKS := 24
+const CHECKS := 26
 
 var _entered := 0
 var _completed := 0
@@ -76,6 +77,7 @@ func _run() -> void:
 			await _test_one_match(browser, desktop)
 			await _test_reliable_crosses(browser, desktop)
 			await _test_unreliable_crosses(browser, desktop)
+			_test_which_addresses_try_tls_first(desktop)
 			var fallback := await _test_blocked_udp_falls_back(browser, desktop)
 			if fallback != null:
 				await _test_a_leaver_disturbs_nobody(browser, desktop, fallback)
@@ -275,6 +277,32 @@ func _test_unreliable_crosses(browser: DotClientLink, desktop: DotClientLink) ->
 	# Loopback loses nothing in practice; the margin is for a loaded CI box, not the network.
 	_check(at_desktop.size() >= 54, "WebSocket to ENet: %d of 60" % at_desktop.size())
 	_check(at_browser.size() >= 54, "ENet to WebSocket: %d of 60" % at_browser.size())
+	_done()
+
+
+# --- 6b. Which WebSocket joins try TLS first ------------------------------------
+
+## A listed server's game port is a TLS port (browsers reach it from an HTTPS page), so a
+## native WebSocket join to a public bare host:port tries wss:// first; anything local, and
+## anything that names its scheme, does not. Real TLS is proven by hand against nginx (see
+## docs/transports.md); this pins the rule that picks it.
+func _test_which_addresses_try_tls_first(link: DotClientLink) -> void:
+	_section("a native WebSocket join tries TLS first only at a public bare host:port")
+
+	var tls := ["play.example.com:6064", "fcdn.example.com:443", "203.0.113.9:6000"]
+	var plain := ["127.0.0.1:6064", "localhost:6064", "10.0.0.5:6064", "192.168.1.20:6064",
+		"172.20.0.2:6064", "[::1]:6064", "box.local:6064", "ws://play.example.com:6064",
+		"wss://play.example.com:6064", "play.example.com"]
+	var wrong: Array[String] = []
+	for a: String in tls:
+		if not link._tls_first(a):
+			wrong.append(a)
+	_check(wrong.is_empty(), "public hosts and addresses try wss:// first", str(wrong))
+	wrong.clear()
+	for a: String in plain:
+		if link._tls_first(a):
+			wrong.append(a)
+	_check(wrong.is_empty(), "local, private, named-scheme and portless ones do not", str(wrong))
 	_done()
 
 
