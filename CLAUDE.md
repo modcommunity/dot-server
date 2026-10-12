@@ -24,7 +24,7 @@ Read the family [CLAUDE.md](../../CLAUDE.md) first; this file is only what is sp
 | [docs/console.md](docs/console.md) | a command or cvar, chat commands, `add_source`, completion, modules, target names |
 | [docs/security.md](docs/security.md) | permissions, RCON, sanitising, bans, `dot_ban_source`, the per-address limit |
 | [docs/game-switching.md](docs/game-switching.md) | `DotGameManager`, descriptors, delivered content, an optional addon, the query hook |
-| [docs/testing.md](docs/testing.md) | the three suites |
+| [docs/testing.md](docs/testing.md) | the four suites |
 | [docs/history.md](docs/history.md) | a server bug that "cannot be happening" |
 
 ## Layout
@@ -44,11 +44,11 @@ Read the family [CLAUDE.md](../../CLAUDE.md) first; this file is only what is sp
 | `vote/`, `events/` | `dot_vote_manager.gd`; `dot_event.gd` (pre-hooks may rewrite or cancel), `dot_event_bus.gd` |
 | `modules/` | `dot_module.gd` (base class; the helpers are not optional), `dot_module_host.gd`, `dot_bot_quota.gd` |
 | `cfg/` | `server.cfg` (shipped defaults; copy to `user://cfg` and edit that), `autoexec.cfg` |
-| `examples/` | `dedicated_server`, `signon_revision`, `content_switch` |
+| `examples/` | `dedicated_server`, `signon_revision`, `content_switch`, `mixed_transports` |
 
 ## Running and testing
 
-The family's two steps ([game-dev/CLAUDE.md](../../CLAUDE.md#validating-anything)), then `dedicated_server.tscn`, `signon_revision.tscn` and `content_switch.tscn`. `dedicated_server.tscn -- --serve` runs a real server. **A change here is not done until dot-server-deploy's `*_client` suites and the games' net suites agree.** [testing](docs/testing.md)
+The family's two steps ([game-dev/CLAUDE.md](../../CLAUDE.md#validating-anything)), then `dedicated_server.tscn`, `signon_revision.tscn`, `content_switch.tscn` and `mixed_transports.tscn`. `dedicated_server.tscn -- --serve` runs a real server. **A change here is not done until dot-server-deploy's `*_client` suites and the games' net suites agree.** [testing](docs/testing.md)
 
 ## API level
 

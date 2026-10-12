@@ -8,6 +8,7 @@ done
 godot --headless --path . res://examples/dedicated_server.tscn
 godot --headless --path . res://examples/signon_revision.tscn
 godot --headless --path . res://examples/content_switch.tscn
+godot --headless --path . res://examples/mixed_transports.tscn
 
 # Run it as an actual server instead of self-testing:
 godot --headless --path . res://examples/dedicated_server.tscn -- --serve
@@ -19,6 +20,7 @@ Each suite exits non-zero on any failure and counts its sections and total, so a
 | --- | --- |
 | `dedicated_server` | console parsing (quoting, semicolons, aliases, suggestions), every cvar flag, permissions and immunity, chat-source gating, config execution and traversal refusal, the command buffer and `wait`, ban durations and expiry, admin flag parsing, event cancel/rewrite, module load and clean unload, the audit trail, the sanitiser against the old definition, hibernation, `sv_tickrate` held to a boundary, `[bot quota]` on a real module, and the ban-source seam against a real dot-moderation (link `addons/dot_moderation`; the section says so loudly when it is missing) |
 | `signon_revision` | the surface is exactly the six envelope RPCs, the revision is derived, a real join carries it and both adverts, a `DotNotice` (with `data`) crosses a real socket whole, a mismatch is refused in words, two builds that know different kinds play together or are refused in words when one lacks a required kind, the addon list rides the challenge, nothing bearer-secret arrives over UDP, the round trip is known within a second, the scoreboard row matches the session's measured ping, replicated cvars arrive at the join and live (and protected or plain ones never), and the `PROFILE` stage over a real socket: passed through with no holder, held (no content, no spawn, a premature `game.loaded` ignored), released, refused in the module's words, timed out, and no existing state renumbered |
+| `mixed_transports` | a browser-style player on WebSocket and a desktop player on ENet in ONE match on a `dual` server: both ends agree on each player's transport, each scoreboard lists both, reliable RPCs (in order) and an unreliable stream cross the seam both ways through a game node, a desktop player whose UDP gets no answer falls back to WebSocket in about `udp_connect_timeout_sec` and plays with both, and the ENet player leaving disturbs nobody. A built-in game's client half is placed by the host at the server's path, on `spawned` (the link retires what it finds under itself during the swap) |
 | `content_switch` | a real client, a real socket and a game that is actually DELIVERED: publish a signed pack, `changelevel` into it, back out and in again; the server hibernated first and awake for the load |
 
 - **`content_switch` is the one that reaches the content path.** It needs two `MultiplayerAPI` instances, a socket and dot-cloud, which is why it is separate from the self-test.

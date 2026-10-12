@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://dotserver0mixedtransports"]
+
+[ext_resource type="Script" path="res://examples/mixed_transports.gd" id="1"]
+
+[node name="MixedTransports" type="Node"]
+script = ExtResource("1")

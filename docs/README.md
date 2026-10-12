@@ -11,5 +11,5 @@ The reasoning behind [../CLAUDE.md](../CLAUDE.md)'s rules.
 | [console.md](console.md) | Console flags and contexts, chat commands, `map` vs games, `add_source`, completion, modules, naming a player |
 | [security.md](security.md) | Permissions, offline permissions, security decisions, shared and external ban lists, the per-address limit |
 | [game-switching.md](game-switching.md) | The change flow, delivered vs built-in games, pack lists, optional addons, the query hook |
-| [testing.md](testing.md) | The three suites and what each covers |
+| [testing.md](testing.md) | The four suites and what each covers |
 | [history.md](history.md) | Bug stories worth keeping |
