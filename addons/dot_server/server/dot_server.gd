@@ -2998,7 +2998,14 @@ func status_lines() -> PackedStringArray:
 	var out := PackedStringArray()
 
 	out.append("hostname: %s" % _cv_hostname.get_string())
-	out.append("version : dot-server %s (%s)" % [VERSION, DotPlatform.kind_name()])
+	# The game's version first: it is the release an operator restarted to get, and the
+	# framework constant beside it never changes.
+	var game_version := ""
+	if games != null and games.current() != null:
+		game_version = games.current().version
+	out.append("version : %s(dot-server %s, %s)" % [
+		(game_version + " ") if game_version != "" else "", VERSION, DotPlatform.kind_name()
+	])
 	out.append("udp/ip  : %s:%d (%s)" % [
 		config.bind_address, config.port, _transport._transport_name()
 			if _transport != null else "not listening",
