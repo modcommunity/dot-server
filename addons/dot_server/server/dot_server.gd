@@ -829,6 +829,16 @@ func _on_peer_connected(peer_id: int) -> void:
 		{"userid": session.userid, "from": address}
 	)
 
+	# [b]Awake from the connect, not the spawn.[/b] A hibernating server ticks at
+	# hibernate_tickrate, and a joining client syncs its clock and starts sending commands
+	# long before it spawns -- through signon, a download and a map build. Woken only at the
+	# spawn, the server had run at 5 Hz under the client's sync and then jumped to the real
+	# rate: the client's commands arrived some 1700 ticks (28 s) early at 60 Hz, the server
+	# queued them and starved, and the first player onto an empty server stood on the spawn
+	# pad until a refresh joined an awake one. A connect that never spawns sleeps again on
+	# its disconnect.
+	_wake_from_hibernation()
+
 	client_state_changed.emit(session)
 
 	if events != null:

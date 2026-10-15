@@ -27,7 +27,7 @@ const SECTIONS := 29
 ## Every check this suite runs, including the two at the end that compare the counts. The
 ## section counter cannot see a section that aborted after announcing itself — its remaining
 ## checks simply never run — and a total can. See docs/testing.md.
-const CHECKS := 359
+const CHECKS := 360
 
 var _entered := 0
 var _completed := 0
@@ -935,6 +935,14 @@ func _test_boot_hibernation() -> void:
 		second.state == DotServer.State.HIBERNATING)
 	_check("saying so on hibernation_changed (%s)" % str(heard), str(heard) == str([true]))
 	_check("its cvar reads 1", second.console.get_bool("sv_hibernate_when_empty", false))
+
+	# A connect wakes it, long before a spawn would: the joining client syncs its clock to
+	# the ticks the server runs from here, and a server still at hibernate_tickrate under
+	# that sync sent the first player's commands 28 s early and left them on the spawn pad.
+	second._on_peer_connected(4242)
+	_check("a client connecting wakes it, before any spawn (%s)" % second.state_name(),
+		second.state == DotServer.State.RUNNING
+		and Engine.physics_ticks_per_second == second.config.tickrate)
 
 	second.shutdown("test over")
 	remove_child(second)
