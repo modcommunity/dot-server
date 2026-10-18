@@ -79,7 +79,7 @@ const CONTENT_BASE := "https://content.invalid/content"
 ## Every check this suite runs, including the one that compares against it. The section
 ## counter cannot see a section that aborted after announcing itself — its remaining checks
 ## simply never run — and a total can. See docs/testing.md.
-const CHECKS := 60
+const CHECKS := 67
 
 ## The name a game's RPC node is given on both ends, for the retirement checks.
 const GAME_NODE := &"GameLink"
@@ -130,6 +130,7 @@ func _run() -> void:
 				await _test_switch_back()
 				await _test_switch_to_delivered_again()
 				_check_bases_are_not_duplicated()
+				await _test_disconnect_mid_load()
 
 	_teardown()
 	DotPaths.remove_tree(DATA)
@@ -810,6 +811,17 @@ func _test_switch_to_delivered_again() -> void:
 			seen_downloading[0] = true
 	_server.client_state_changed.connect(watcher)
 
+	# Loading yields: LOADING is on screen for a frame before the scene exists. It used to
+	# load, instantiate and add in the call that set the phase, so a browser never painted it.
+	var load_seen := {"frame": -1, "old": null, "playing": -1}
+	var on_phase := func(ph: DotClientLink.Phase, _t: String) -> void:
+		if ph == DotClientLink.Phase.LOADING:
+			load_seen["frame"] = Engine.get_process_frames()
+			load_seen["old"] = _link._scene_instance
+		elif ph == DotClientLink.Phase.PLAYING:
+			load_seen["playing"] = Engine.get_process_frames()
+	_link.phase_changed.connect(on_phase)
+
 	var result := _server.console.execute("changelevel arena")
 	_check(result.ok, "the command is accepted", str(result.error))
 
@@ -817,6 +829,18 @@ func _test_switch_to_delivered_again() -> void:
 	_check(arrived, "the server reaches it again")
 
 	await _until(_client_playing)
+
+	_link.phase_changed.disconnect(on_phase)
+	_check(load_seen["frame"] >= 0, "the client entered LOADING")
+	_check(
+		load_seen["playing"] - load_seen["frame"] >= 1,
+		"and LOADING lasts at least a frame before PLAYING (%d)" % (load_seen["playing"] - load_seen["frame"])
+	)
+	_check(
+		_link._scene_instance != null and is_instance_valid(_link._scene_instance)
+			and _link._scene_instance != load_seen["old"],
+		"and a new scene replaced the old one by PLAYING"
+	)
 
 	_server.client_state_changed.disconnect(watcher)
 
@@ -831,4 +855,23 @@ func _test_switch_to_delivered_again() -> void:
 			and _server.sessions()[0].state == DotClientSession.State.SPAWNED,
 		"and playing"
 	)
+	_done()
+
+
+## [b]A disconnect while the scene loads leaves no scene.[/b] The load awaits frames now, so
+## it can be overtaken. Driven by calling the handler with what the server sent, then
+## disconnecting a frame later (the load is by then in its wait); nothing may be added after.
+func _test_disconnect_mid_load() -> void:
+	_section("a disconnect during the load leaves no scene")
+
+	var info: Dictionary = _server.games.load_info()
+	_link.disconnect_from_server()
+	_check(_link._scene_instance == null, "the link starts with no scene")
+	_link._on_load_game(1, info)
+	_check(_link.phase == DotClientLink.Phase.LOADING, "the load begins")
+	await get_tree().process_frame
+	_link.disconnect_from_server()
+	await _until(func() -> bool: return false, 1.0)
+	_check(_link._scene_instance == null, "a disconnect mid-load leaves no scene")
+	_check(_link.phase == DotClientLink.Phase.IDLE, "and the phase stays IDLE")
 	_done()

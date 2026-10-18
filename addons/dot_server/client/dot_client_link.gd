@@ -265,6 +265,10 @@ const MAX_CVAR_VALUE_BYTES := 1024
 
 var _game_root: Node = null
 var _scene_instance: Node = null
+## Bumped by every new load, disconnect and exit from the tree. [method _on_load_game] awaits,
+## and whatever it was doing when the world changed under it must not add a scene or say
+## LOADED. Compare after every await.
+var _load_gen: int = 0
 
 ## How long the last game's nodes under this link outlive it. See [method _free_game_children].
 const RETIRED_SECONDS := 10.0
@@ -316,6 +320,7 @@ func _ready() -> void:
 
 
 func _exit_tree() -> void:
+	_load_gen += 1
 	DotRegistry.unregister_instance(SERVICE, self)
 
 	if _visibility_key != "":
@@ -498,6 +503,7 @@ func _connect_with(t: DotTransport, address: String, timeout_sec: float) -> DotR
 
 
 func disconnect_from_server(reason: String = "") -> void:
+	_load_gen += 1
 	if multiplayer.multiplayer_peer != null:
 		multiplayer.multiplayer_peer.close()
 		multiplayer.multiplayer_peer = null
@@ -1121,8 +1127,21 @@ static func _progress_text(p: Dictionary) -> String:
 # --- Loading ---------------------------------------------------------------
 
 ## The server telling us which scene to load.
+##
+## [b]This yields.[/b] It used to load, instantiate and add the scene in one call, so a
+## browser (where that is many seconds of wasm) never painted the LOADING phase and the page
+## went unresponsive. Two frames let a loading screen draw, the load is threaded where threads
+## exist, and a frame separates instantiate from add_child. Callers must not assume the scene
+## exists when this returns: wait for [signal spawned] or PLAYING.
 func _on_load_game(_peer_id: int, info: Dictionary) -> void:
+	_load_gen += 1
+	var gen := _load_gen
 	_set_phase(Phase.LOADING, "Loading…")
+	if is_inside_tree():
+		await get_tree().process_frame
+		await get_tree().process_frame
+		if gen != _load_gen:
+			return
 
 	var scene_path := str(info.get("scene", ""))
 	var content_key := str(info.get("content_key", ""))
@@ -1178,22 +1197,65 @@ func _on_load_game(_peer_id: int, info: Dictionary) -> void:
 
 	_unload_scene()
 
-	var packed := load(resolved)
+	var t0 := Time.get_ticks_usec()
+	var packed: Resource = null
+	if is_inside_tree() and DotPlatform.has_threads() \
+			and ResourceLoader.load_threaded_request(resolved) == OK:
+		while true:
+			var progress: Array = []
+			var status := ResourceLoader.load_threaded_get_status(resolved, progress)
+			if status == ResourceLoader.THREAD_LOAD_IN_PROGRESS:
+				if progress.size() > 0:
+					download_progress.emit(float(progress[0]), "Loading…")
+				await get_tree().process_frame
+				if gen != _load_gen or not is_inside_tree():
+					return
+				continue
+			if status == ResourceLoader.THREAD_LOAD_LOADED:
+				packed = ResourceLoader.load_threaded_get(resolved)
+			break
+		if gen != _load_gen:
+			return
+	else:
+		packed = load(resolved)
+	var t1 := Time.get_ticks_usec()
 	if not (packed is PackedScene):
 		_fail(DotError.make(
 			DotError.CODE_INVALID, "The game scene is not loadable.", resolved
 		))
 		return
 
-	_scene_instance = (packed as PackedScene).instantiate()
+	if is_inside_tree():
+		await get_tree().process_frame
+		if gen != _load_gen:
+			return
+
+	var t1b := Time.get_ticks_usec()
+	var instance := (packed as PackedScene).instantiate()
+	var t2 := Time.get_ticks_usec()
+
+	# Held in a local until it is in the tree: a disconnect during this frame cannot see it.
+	if is_inside_tree():
+		await get_tree().process_frame
+		if gen != _load_gen:
+			instance.free()
+			return
 
 	if _game_root == null:
 		_game_root = game_root_ref.resolve_or_null(self, CHANNEL)
 
+	_scene_instance = instance
+	var t2b := Time.get_ticks_usec()
 	_game_root.add_child(_scene_instance)
+	var t3 := Time.get_ticks_usec()
 
 	DotLog.info(
-		CHANNEL, "game loaded", {"scene": resolved, "content": content_key}
+		CHANNEL, "game loaded", {
+			"scene": resolved, "content": content_key,
+			"load_ms": (t1 - t0) / 1000.0,
+			"instantiate_ms": (t2 - t1b) / 1000.0,
+			"add_child_ms": (t3 - t2b) / 1000.0,
+		}
 	)
 
 	send_kind(DotEnvelope.LOADED)
