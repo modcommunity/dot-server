@@ -58,6 +58,14 @@ var _clients: Array[Dictionary] = []
 ## address -> failure count
 var _failures: Dictionary = {}
 
+## One WARN per address per [constant REFUSAL_LOG_SEC]. An internet-wide scanner dials the
+## RCON port a handful of times in a row; a line per attempt buries the console, and the
+## count of the ones left out is on the next line instead.
+const REFUSAL_LOG_SEC := 300.0
+var _refusal_log := DotRateLimiter.new(1.0 / REFUSAL_LOG_SEC, 1.0)
+## address -> refusals not logged since that address's last WARN
+var _refusals_quiet: Dictionary = {}
+
 ## address -> unix seconds when the lockout lifts
 var _lockouts: Dictionary = {}
 
@@ -152,6 +160,20 @@ func _process(_delta: float) -> void:
 	_poll_clients()
 
 
+## Logs a refusal as a WARN the first time per window for [param address], and counts the
+## rest to be reported with the next one.
+func _log_refusal(address: String, what: String) -> void:
+	if _refusal_log.allow(address):
+		var quiet := int(_refusals_quiet.get(address, 0))
+		_refusals_quiet.erase(address)
+		var fields := {"from": address}
+		if quiet > 0:
+			fields["also_refused"] = quiet
+		DotLog.warn(CHANNEL, what, fields)
+	else:
+		_refusals_quiet[address] = int(_refusals_quiet.get(address, 0)) + 1
+
+
 func _accept_from(listener: TCPServer, websocket: bool) -> void:
 	if listener == null:
 		return
@@ -164,20 +186,12 @@ func _accept_from(listener: TCPServer, websocket: bool) -> void:
 		var address := peer.get_connected_host()
 
 		if not _address_allowed(address):
-			DotLog.warn(
-				CHANNEL,
-				"RCON connection refused: address not allowed",
-				{"from": address}
-			)
+			_log_refusal(address, "RCON connection refused: address not allowed")
 			peer.disconnect_from_host()
 			continue
 
 		if _is_locked_out(address):
-			DotLog.warn(
-				CHANNEL,
-				"RCON connection refused: address locked out",
-				{"from": address}
-			)
+			_log_refusal(address, "RCON connection refused: address locked out")
 			peer.disconnect_from_host()
 			continue
 

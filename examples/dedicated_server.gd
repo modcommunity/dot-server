@@ -27,7 +27,7 @@ const SECTIONS := 29
 ## Every check this suite runs, including the two at the end that compare the counts. The
 ## section counter cannot see a section that aborted after announcing itself — its remaining
 ## checks simply never run — and a total can. See docs/testing.md.
-const CHECKS := 360
+const CHECKS := 361
 
 var _entered := 0
 var _completed := 0
@@ -2007,6 +2007,20 @@ func _test_rcon_allow_list() -> void:
 		rcon._address_allowed("127.0.0.1"))
 	_check("the running RCON server refuses anything else",
 		not rcon._address_allowed("203.0.113.9"))
+	# A scanner dialling the port seven times in a row logs one WARN, not seven.
+	var warns: Array[Dictionary] = []
+	var on_record := func(rec: Dictionary) -> void:
+		if str(rec.get("channel", "")) == "rcon" and int(rec.get("level", -1)) == DotLog.Level.WARN:
+			warns.append(rec)
+	DotLog.signals().record.connect(on_record)
+	var refuser := DotRconServer.new()
+	for n in 7:
+		refuser._log_refusal("167.94.146.48", "RCON connection refused: address not allowed")
+	refuser._log_refusal("203.0.113.9", "RCON connection refused: address not allowed")
+	DotLog.signals().record.disconnect(on_record)
+	refuser.free()
+	_check("seven refusals from one address log one WARN (plus the other address's)", warns.size() == 2)
+
 	_done()
 
 
