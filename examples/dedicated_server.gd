@@ -27,7 +27,7 @@ const SECTIONS := 29
 ## Every check this suite runs, including the two at the end that compare the counts. The
 ## section counter cannot see a section that aborted after announcing itself — its remaining
 ## checks simply never run — and a total can. See docs/testing.md.
-const CHECKS := 361
+const CHECKS := 363
 
 var _entered := 0
 var _completed := 0
@@ -166,7 +166,7 @@ func _run_selftest() -> void:
 	await _test_modules()
 	await _test_bot_quota()
 	_test_audit()
-	_test_rcon_allow_list()
+	await _test_rcon_allow_list()
 	await _test_rcon_socket()
 	await _test_rcon_websocket()
 	# Last: a second DotServer replaces the first's registry entries, and every section above
@@ -2018,8 +2018,27 @@ func _test_rcon_allow_list() -> void:
 		refuser._log_refusal("167.94.146.48", "RCON connection refused: address not allowed")
 	refuser._log_refusal("203.0.113.9", "RCON connection refused: address not allowed")
 	DotLog.signals().record.disconnect(on_record)
-	refuser.free()
 	_check("seven refusals from one address log one WARN (plus the other address's)", warns.size() == 2)
+	_check("the quiet count is held for the address that was muted", int(refuser._refusals_quiet.get("167.94.146.48", 0)) == 6)
+
+	refuser.free()
+
+	# Both tables shrink once the window has passed: a refilled bucket is dropped by time
+	# (it is stored at 0 tokens, which used to keep it forever) and the counts go with it.
+	var scan := DotRconServer.new()
+	scan._refusal_log = DotRateLimiter.new(100.0, 1.0)
+	scan._refusal_log.idle_eviction_sec = 0.02
+	scan._refusal_log.sweep_interval_ms = 0
+	for n in 3:
+		scan._log_refusal("198.51.100.%d" % n, "RCON connection refused: address not allowed")
+		scan._log_refusal("198.51.100.%d" % n, "RCON connection refused: address not allowed")
+	var before := scan._refusal_log.tracked_count() + scan._refusals_quiet.size()
+	await get_tree().create_timer(0.1).timeout
+	scan._log_refusal("203.0.113.77", "RCON connection refused: address not allowed")
+	scan._log_refusal("203.0.113.77", "RCON connection refused: address not allowed")
+	_check("after the window only the live address is tracked (%d entries before)" % before,
+		before == 6 and scan._refusal_log.tracked_count() == 1 and scan._refusals_quiet.size() == 1)
+	scan.free()
 
 	_done()
 

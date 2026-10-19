@@ -163,6 +163,11 @@ func _process(_delta: float) -> void:
 ## Logs a refusal as a WARN the first time per window for [param address], and counts the
 ## rest to be reported with the next one.
 func _log_refusal(address: String, what: String) -> void:
+	# Both tables are bounded by the addresses refused inside the window: the limiter drops
+	# a refilled bucket on its own sweep, and the counts of an address it dropped go too.
+	for known: String in _refusals_quiet.keys():
+		if not _refusal_log.is_tracked(known):
+			_refusals_quiet.erase(known)
 	if _refusal_log.allow(address):
 		var quiet := int(_refusals_quiet.get(address, 0))
 		_refusals_quiet.erase(address)
