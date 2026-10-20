@@ -159,6 +159,29 @@ extends DotConfig
 ## Ticks per second while hibernating.
 @export_range(1, 60, 1) var hibernate_tickrate: int = 5
 
+@export_group("Threads")
+
+## Worker threads each subsystem this server turns on may use (cvar [code]sv_worker_threads[/code],
+## live). -1, the default, is the processor count less one, at most eight, which assumes one
+## server process per machine: an owner running several on one box sets this so they do not
+## all ask for every core. 0 sends every subsystem back to the main thread at once, the one
+## command that rules threads out when something looks wrong.
+##
+## Nothing is threaded until its own switch below is on: this is the count, those are the
+## opt-ins. A server's settings, not the process's, so a second server or a client in the
+## same process keeps its own.
+@export_range(-1, 64) var worker_threads: int = -1
+
+## Build each player's snapshot on the workers (cvar [code]sv_threads_net[/code], live from the
+## next snapshot). Off by default. The game's wiring copies [method net_snapshot_workers] into
+## dot-net's [code]DotNetConfig.snapshot_workers[/code]; dot-net does not depend on this addon.
+@export var threads_net: bool = false
+
+## Run NPC decisions and path searches on the workers (cvar [code]sv_threads_npc[/code], live
+## from the next tick), for the brains that say they can. Off by default; read through
+## [method npc_workers].
+@export var threads_npc: bool = false
+
 ## Frames per second while hibernating, on a headless server. NOT the tickrate.
 ##
 ## Every socket this server owns -- the query and A2S listeners, the game transport, RCON
@@ -527,6 +550,12 @@ func sensitive_keys() -> PackedStringArray:
 
 
 func validate() -> DotResult:
+	if worker_threads < -1:
+		return DotResult.fail(
+			DotError.CODE_INVALID,
+			"worker_threads must be -1 (automatic), 0 (main thread only) or a count.",
+			str(worker_threads)
+		)
 	if parse_log_level(log_level) < 0:
 		return DotResult.fail(
 			DotError.CODE_INVALID,
@@ -746,6 +775,18 @@ func effective_query_websocket_port() -> int:
 ## Slots available to players without a reservation.
 func public_slots() -> int:
 	return maxi(0, max_players - reserved_slots)
+
+
+## The worker count for dot-net's snapshot build: 0 unless [member threads_net] is on, then
+## [member worker_threads] (-1 automatic, 0 inline). Never more than DotParallel allows on
+## this machine, which it decides itself.
+func net_snapshot_workers() -> int:
+	return worker_threads if threads_net else 0
+
+
+## The worker count for NPC decisions and paths, the same way as [method net_snapshot_workers].
+func npc_workers() -> int:
+	return worker_threads if threads_npc else 0
 
 
 ## UDP port ENet listens on in [code]dual[/code] and [code]enet[/code] modes.

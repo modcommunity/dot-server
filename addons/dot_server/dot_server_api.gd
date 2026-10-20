@@ -36,5 +36,8 @@ extends RefCounted
 # 10: DotClientLink tls_connect_timeout_sec: a native WebSocket join to a public bare
 #    host:port tries wss:// first (a listed server's game port is a TLS port). Nothing on
 #    the wire.
-const LEVEL := 10
+# 11: DotServerConfig worker_threads / threads_net / threads_npc (cvars sv_worker_threads,
+#    sv_threads_net, sv_threads_npc), net_snapshot_workers(), npc_workers(), and
+#    DotServer.describe_threads() ("threads" in describe()). Nothing on the wire.
+const LEVEL := 11
 const OLDEST := 1

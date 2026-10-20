@@ -2975,6 +2975,35 @@ func _register_cvars() -> void:
 	)
 
 
+	# [b]Threads: live, and only the count and the opt-ins.[/b] The config is what the game's
+	# wiring reads each snapshot or tick (net_snapshot_workers, npc_workers), so writing it is
+	# the whole of "apply". The physics engine is not here: it is fixed before any script runs.
+	console.cvar(
+		"sv_worker_threads", str(config.worker_threads),
+		"Worker threads each threaded subsystem may use. -1 automatic (cores less one, at most 8; set it when several servers share a machine), 0 runs everything on the main thread.",
+		DotConVar.FLAG_ARCHIVE
+	).with_range(-1, 64).changed.connect(
+		func(_old: String, value: String) -> void:
+			config.worker_threads = value.to_int()
+	)
+	console.cvar(
+		"sv_threads_net", "1" if config.threads_net else "0",
+		"Build each player's snapshot on worker threads (sv_worker_threads of them).",
+		DotConVar.FLAG_ARCHIVE
+	).changed.connect(
+		func(_old: String, value: String) -> void:
+			config.threads_net = value.to_int() != 0
+	)
+	console.cvar(
+		"sv_threads_npc", "1" if config.threads_npc else "0",
+		"Run NPC decisions and path searches on worker threads, for brains that support it.",
+		DotConVar.FLAG_ARCHIVE
+	).changed.connect(
+		func(_old: String, value: String) -> void:
+			config.threads_npc = value.to_int() != 0
+	)
+
+
 ## Reads cvars back into the config after server.cfg has run.
 func _apply_cvars_to_config() -> void:
 	config.hostname = _cv_hostname.get_string()
@@ -2995,6 +3024,9 @@ func _apply_cvars_to_config() -> void:
 	config.hibernate_when_empty = console.get_bool(
 		"sv_hibernate_when_empty", config.hibernate_when_empty
 	)
+	config.worker_threads = console.get_int("sv_worker_threads", config.worker_threads)
+	config.threads_net = console.get_bool("sv_threads_net", config.threads_net)
+	config.threads_npc = console.get_bool("sv_threads_npc", config.threads_npc)
 
 
 func _register_commands() -> void:
@@ -3071,7 +3103,38 @@ func describe() -> Dictionary:
 		# operator asks of a server that has just lost something, and "true" is not an
 		# answer to it.
 		"log": _log_destination(),
+		"threads": describe_threads(),
 	}
+
+
+## One line: the worker count and cores, what is pooled, and the physics engine, read-only
+## from the project because nothing in the process can change it. The figures come from
+## dot-core's [DotParallel], whose labels the threaded subsystems name ("net.snapshot").
+func describe_threads() -> String:
+	var workers := config.worker_threads if config != null else 0
+	var resolved := DotParallel.resolve_workers(workers)
+	var labels: Dictionary = DotParallel.describe()["labels"]
+	var parts := PackedStringArray()
+	parts.append("workers %d of %d cores%s" % [
+		resolved, OS.get_processor_count(),
+		"" if DotParallel.available() else " (no worker pool here)",
+	])
+	for which: Array in [["net", "net.snapshot", config != null and config.threads_net],
+			["npc", "npc.think", config != null and config.threads_npc]]:
+		var entry: Dictionary = labels.get(which[1], {})
+		if not bool(which[2]):
+			parts.append("%s inline (off)" % which[0])
+		elif entry.is_empty() or int(entry["pooled"]) == 0:
+			parts.append("%s on, nothing pooled yet" % which[0])
+		else:
+			parts.append("%s pooled (%d items a call, %.1f ms join, p99 %.1f)" % [
+				which[0], int(entry["items"]) / maxi(1, int(entry["calls"])),
+				float(entry["mean_usec"]) / 1000.0, float(entry["p99_usec"]) / 1000.0,
+			])
+	var engine := str(ProjectSettings.get_setting("physics/3d/physics_engine", "DEFAULT"))
+	var separate := bool(ProjectSettings.get_setting("physics/3d/run_on_separate_thread", false))
+	parts.append("physics %s, %s" % [engine, "own thread" if separate else "main thread"])
+	return "threads: " + "; ".join(parts)
 
 
 func _log_destination() -> String:
