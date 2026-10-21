@@ -1413,6 +1413,14 @@ func _dot_up_event(kind: Variant, payload: Variant) -> void:
 func _handshake_challenge(session: DotClientSession) -> Dictionary:
 	var challenge := _handshake_fields(session)
 
+	# [b]Which backbone target a join token must name to be spent here.[/b] An
+	# INTROSPECT client mints a single-use token for exactly this audience rather
+	# than handing over its access token (dot-auth `docs/strategies.md`). A field,
+	# so an older client ignores it; absent when this server does not know it yet.
+	var audience := _auth_join_audience()
+	if audience != "":
+		challenge["join_audience"] = audience
+
 	# Added only when there is something to say: a field, so a client that predates it
 	# ignores it -- the envelope's rule for changing a payload.
 	if not addon_set.is_empty():
@@ -1464,6 +1472,13 @@ func _auth_strategy_name() -> String:
 	if auth.has_method("strategy_name"):
 		return str(auth.call("strategy_name")).to_lower()
 	return "unknown"
+
+
+func _auth_join_audience() -> String:
+	var auth := DotRegistry.get_service(&"dot_auth_server")
+	if auth == null or not auth.has_method("join_audience"):
+		return ""
+	return str(auth.call("join_audience"))
 
 
 ## A client's answer to the challenge.

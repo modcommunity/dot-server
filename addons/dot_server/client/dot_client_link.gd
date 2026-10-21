@@ -211,6 +211,10 @@ var server_signon: String = ""
 var server_id: String = ""
 var server_hostname: String = ""
 
+## The backbone target an INTROSPECT server says a join token must name
+## (`server:<id>`), from the handshake. Empty for a server that does not say.
+var server_join_audience: String = ""
+
 ## The addon versions the server runs, from the handshake: `{dir, repo, id, version}` per
 ## addon, as [member DotServer.addon_set] sends them. Empty for a server that says nothing.
 ## Read before the join completes, so a shell can fetch newer addons and restart into them
@@ -687,6 +691,7 @@ func _dot_up_event(_kind: Variant, _payload: Variant) -> void:
 func _on_challenge(_peer_id: int, challenge: Dictionary) -> void:
 	server_hostname = str(challenge.get("hostname", ""))
 	server_id = str(challenge.get("server_id", ""))
+	server_join_audience = str(challenge.get("join_audience", ""))
 	var addons: Variant = challenge.get("addons", [])
 	server_addons = (addons as Array).duplicate(true) if addons is Array else []
 
@@ -785,7 +790,8 @@ func _on_challenge(_peer_id: int, challenge: Dictionary) -> void:
 	var strategy := str(challenge.get("auth", "none")).to_lower()
 	if not _may_send_credential_here(strategy):
 		return
-	await _attach_credential(payload, strategy)
+	if not await _attach_credential(payload, strategy):
+		return
 
 	send_kind(DotEnvelope.CREDENTIALS, payload)
 
@@ -838,7 +844,14 @@ static func platform_kind() -> String:
 ## Deliberately sends only what was asked. A client that volunteers its access token
 ## to a server requesting a ticket would defeat the point of tickets — see
 ## dot-auth's docs/tickets.md.
-func _attach_credential(payload: Dictionary, strategy: String) -> void:
+##
+## [b]An INTROSPECT server never gets the account's access token.[/b] Anything handed
+## to a game server reaches its operator, and that token works on every app route
+## for an hour. The client mints a single-use join token for the audience the server
+## announced, and only when that audience is on [member DotAuthConfig.first_party_audiences];
+## otherwise it falls back to a connect ticket, and with no issuer it refuses the join
+## in words. Returns false when it has already failed the join and disconnected.
+func _attach_credential(payload: Dictionary, strategy: String) -> bool:
 	var auth := DotRegistry.get_service(auth_service)
 
 	if auth == null:
@@ -848,48 +861,96 @@ func _attach_credential(payload: Dictionary, strategy: String) -> void:
 				"this server wants authentication but dot-auth is not installed",
 				{"strategy": strategy}
 			)
-		return
+		return true
 
 	match strategy:
 		"ticket":
-			if server_id == "":
-				DotLog.warn(
-					CHANNEL,
-					"the server asked for a ticket but named no server_id"
-				)
-				return
-
-			if not auth.has_method("request_ticket"):
-				return
-
-			# The issuer URL is a client-side setting: it is the publisher's
-			# service, not the game server's, so the game server must not be able
-			# to name it.
-			var issuer := _issuer_url()
-			if issuer == "":
-				DotLog.warn(
-					CHANNEL,
-					"no ticket issuer is configured; cannot authenticate"
-				)
-				return
-
-			var ticket: Variant = await auth.call(
-				"request_ticket", issuer, server_id
-			)
-			if ticket is DotResult and (ticket as DotResult).ok:
-				payload["ticket"] = str((ticket as DotResult).value)
+			await _attach_ticket(payload, auth)
 
 		"introspect":
-			if not auth.has_method("valid_access_token"):
-				return
-			var token: Variant = await auth.call("valid_access_token")
-			if token is DotResult and (token as DotResult).ok:
-				payload["access_token"] = str((token as DotResult).value)
+			return await _attach_introspect(payload, auth)
 
 		"local":
 			# Username and password for a LOCAL-strategy server come from a UI this
 			# node does not own; a game sets them before connecting.
 			pass
+
+	return true
+
+
+## A connect ticket for [member server_id] from the client-side issuer, when both
+## are known. Returns whether one was attached.
+func _attach_ticket(payload: Dictionary, auth: Object) -> bool:
+	if server_id == "":
+		DotLog.warn(
+			CHANNEL,
+			"the server asked for a ticket but named no server_id"
+		)
+		return false
+
+	if not auth.has_method("request_ticket"):
+		return false
+
+	# The issuer URL is a client-side setting: it is the publisher's
+	# service, not the game server's, so the game server must not be able
+	# to name it.
+	var issuer := _issuer_url()
+	if issuer == "":
+		DotLog.warn(
+			CHANNEL,
+			"no ticket issuer is configured; cannot authenticate"
+		)
+		return false
+
+	var ticket: Variant = await auth.call(
+		"request_ticket", issuer, server_id
+	)
+	if ticket is DotResult and (ticket as DotResult).ok:
+		payload["ticket"] = str((ticket as DotResult).value)
+		return true
+	return false
+
+
+func _attach_introspect(payload: Dictionary, auth: Object) -> bool:
+	var audience := server_join_audience
+
+	# First-party: a join token. A server that lies about its audience gains nothing
+	# — the backbone spends the token only for the credential that audience names.
+	if audience != "" and auth.has_method("is_first_party") \
+			and bool(auth.call("is_first_party", audience)) \
+			and auth.has_method("request_join_token"):
+		var minted: Variant = await auth.call("request_join_token", audience)
+		if minted is DotResult and (minted as DotResult).ok:
+			payload["access_token"] = str((minted as DotResult).value)
+			return true
+		var err: DotError = (minted as DotResult).error if minted is DotResult else null
+		_refuse_introspect(
+			err.message if err != null else "Could not get a sign-in for this server.",
+			"join token mint failed for %s" % audience
+		)
+		return false
+
+	# Not one of ours: a connect ticket if this build has an issuer.
+	if _issuer_url() != "" and server_id != "":
+		if await _attach_ticket(payload, auth):
+			return true
+
+	_refuse_introspect(
+		"This server asks for your account sign-in, which this game only gives to its own servers.",
+		"introspect refused: audience %s is not first-party and no ticket was available" % (
+			audience if audience != "" else "(not announced)"
+		)
+	)
+	return false
+
+
+func _refuse_introspect(message: String, detail: String) -> void:
+	var err := DotError.make(DotError.CODE_FORBIDDEN, message, detail)
+	DotLog.warn(CHANNEL, "not signing in to this server", {
+		"why": detail, "host": server_hostname,
+	})
+	_fail(err)
+	disconnect_from_server(err.message)
 
 
 func _rejoin_over_websocket() -> void:

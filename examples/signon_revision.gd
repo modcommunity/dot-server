@@ -50,7 +50,7 @@ const PORT := 27717
 ## How many checks a clean run makes. A section that aborts part-way stops adding checks,
 ## and the section counter cannot see that when the abort comes after the section
 ## announced itself — so the total is asserted too.
-const CHECKS := 128
+const CHECKS := 134
 
 var _entered := 0
 var _completed := 0
@@ -94,6 +94,7 @@ func _run() -> void:
 		await _test_a_required_kind_the_server_lacks()
 		await _test_a_required_kind_the_client_lacks()
 		await _test_a_secret_never_rides_udp()
+		await _test_introspect_refuses_a_server_not_ours()
 		await _test_the_profile_stage()
 
 	_teardown()
@@ -910,9 +911,48 @@ func _test_a_secret_never_rides_udp() -> void:
 
 	_check(link.transport_used == "websocket", "the client rejoined over WebSocket (%s)" % link.transport_used)
 	var over_udp := seen.filter(func(c: Dictionary) -> bool: return c["enet"] > 0)
+	var with_join := seen.filter(func(c: Dictionary) -> bool: return c["token"] == _TokenStandIn.JOIN)
 	var with_secret := seen.filter(func(c: Dictionary) -> bool: return c["token"] == _TokenStandIn.SECRET)
 	_check(over_udp.is_empty(), "no credentials at all arrived while it was on ENet (%d)" % over_udp.size())
-	_check(with_secret.size() == 1, "and the token arrived once, over WebSocket")
+	_check(with_join.size() == 1, "and a join token arrived once, over WebSocket")
+	_check(with_secret.is_empty(), "and the account's access token never arrived at all")
+	_check(
+		client_auth.minted_for == [_AuthStandIn.AUDIENCE],
+		"minted for the audience the server announced", str(client_auth.minted_for)
+	)
+
+	DotRegistry.unregister_instance(&"dot_auth_server", server_auth)
+	DotRegistry.unregister_instance(&"dot_auth_client", client_auth)
+	_drop_link(link)
+	_done()
+
+
+## [b]An INTROSPECT server the client does not list as first-party gets nothing.[/b]
+## No join token is minted for it, no access token is sent, and with no ticket issuer
+## the join fails in words rather than leaking the account's credential.
+func _test_introspect_refuses_a_server_not_ours() -> void:
+	_section("an introspect server not on the first-party list never gets a token")
+
+	var seen: Array[Dictionary] = []
+	var server_auth := _AuthStandIn.new()
+	server_auth.audience = "server:999"
+	server_auth.on_authenticate = func(credential: Dictionary) -> void:
+		seen.append(credential.duplicate())
+	var client_auth := _TokenStandIn.new()
+	DotRegistry.register(&"dot_auth_server", server_auth)
+	DotRegistry.register(&"dot_auth_client", client_auth)
+
+	var link := _new_link("Stranger", func(l: DotClientLink) -> void:
+		l.transport_preference = "ws")
+	var outcome := await _join(link)
+
+	_check(
+		link.last_error != null and link.last_error.code == DotError.CODE_FORBIDDEN,
+		"the join failed as forbidden", str(link.last_error)
+	)
+	_check(outcome != "", "with a sentence for the player", outcome)
+	_check(seen.is_empty(), "and the server received no credentials (%d)" % seen.size())
+	_check(client_auth.minted_for.is_empty(), "and no join token was minted")
 
 	DotRegistry.unregister_instance(&"dot_auth_server", server_auth)
 	DotRegistry.unregister_instance(&"dot_auth_client", client_auth)
@@ -922,22 +962,37 @@ func _test_a_secret_never_rides_udp() -> void:
 
 ## dot-auth's server half, as far as dot-server asks: a strategy and a verdict.
 class _AuthStandIn extends RefCounted:
+	const AUDIENCE := "server:7"
 	var on_authenticate: Callable
+	var audience: String = AUDIENCE
 
 	func strategy_name() -> String:
 		return "introspect"
+
+	func join_audience() -> String:
+		return audience
 
 	func authenticate(credential: Dictionary, _address: String) -> DotResult:
 		on_authenticate.call(credential)
 		return DotResult.fail(DotError.CODE_AUTH, "stand-in refuses everybody")
 
 
-## dot-auth's client half: a token to send.
+## dot-auth's client half: an access token it must never send, and a join token
+## minted only for a first-party audience.
 class _TokenStandIn extends RefCounted:
 	const SECRET := "bearer-secret-for-the-test"
+	const JOIN := "tmc_jt_join-token-for-the-test"
+	var minted_for: Array[String] = []
 
 	func valid_access_token() -> DotResult:
 		return DotResult.success(SECRET)
+
+	func is_first_party(audience: String) -> bool:
+		return audience == _AuthStandIn.AUDIENCE
+
+	func request_join_token(audience: String) -> DotResult:
+		minted_for.append(audience)
+		return DotResult.success(JOIN)
 
 
 # --- Harness ---------------------------------------------------------------
