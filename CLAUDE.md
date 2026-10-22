@@ -45,6 +45,7 @@ Read the family [CLAUDE.md](../../CLAUDE.md) first; this file is only what is sp
 | `modules/` | `dot_module.gd` (base class; the helpers are not optional), `dot_module_host.gd`, `dot_bot_quota.gd` |
 | `cfg/` | `server.cfg` (shipped defaults; copy to `user://cfg` and edit that), `autoexec.cfg` |
 | `examples/` | `dedicated_server`, `signon_revision`, `content_switch`, `mixed_transports` |
+| `examples/cfg_selftest.tscn` | `groups.yml` and `permissions.yml` through `DotAdminCfg`: `cfg/addons/dot_server/`, `cfg/server/dot_server/` over it, the flat `cfg/<file>.yml` shim (WARN once, removed 2026-12-31) |
 
 ## Running and testing
 
@@ -52,7 +53,7 @@ The family's two steps ([game-dev/CLAUDE.md](../../CLAUDE.md#validating-anything
 
 ## API level
 
-`LEVEL` in `addons/dot_server/dot_server_api.gd` (no `class_name`) rises by one for anything a game could call that did not exist before; `OLDEST` is raised to `LEVEL` when something a game could call is removed or changes meaning. The rule is dot-core's `DotAddonApi`; packs declare what they need in `requires.json` and a server refuses one it cannot run. Write the new level's additions in the file's comment. Current levels: 2 descriptor pack lists, 3 dual transport, 4 the scoreboard roster, 5 `DotBotQuota` / `addon_set` / `rtt_ms()`, 6 `net_meter()` and the heartbeat ack's `"sv"`, 7 the `PROFILE` signon stage (`hold_profile` / `release_profile` / `refuse_profile`, `profile_timeout_sec`), 8 replicated cvars (`DotEnvelope.CVARS`, `DotClientLink.replicated_cvar()`), 9 the block list's roster (`"key"` and `"peer"` on scoreboard rows, `DotServer.player_key()`, `DotClientLink.request_scoreboard()`), 10 `DotClientLink.tls_connect_timeout_sec` (a native WebSocket join to a public bare `host:port` tries `wss://` first), 11 the thread settings (`worker_threads`, `threads_net`, `threads_npc` as `sv_worker_threads` / `sv_threads_net` / `sv_threads_npc`, `net_snapshot_workers()`, `describe_threads()`).
+`LEVEL` in `addons/dot_server/dot_server_api.gd` (no `class_name`) rises by one for anything a game could call that did not exist before; `OLDEST` is raised to `LEVEL` when something a game could call is removed or changes meaning. The rule is dot-core's `DotAddonApi`; packs declare what they need in `requires.json` and a server refuses one it cannot run. Write the new level's additions in the file's comment. Current levels: 2 descriptor pack lists, 3 dual transport, 4 the scoreboard roster, 5 `DotBotQuota` / `addon_set` / `rtt_ms()`, 6 `net_meter()` and the heartbeat ack's `"sv"`, 7 the `PROFILE` signon stage (`hold_profile` / `release_profile` / `refuse_profile`, `profile_timeout_sec`), 8 replicated cvars (`DotEnvelope.CVARS`, `DotClientLink.replicated_cvar()`), 9 the block list's roster (`"key"` and `"peer"` on scoreboard rows, `DotServer.player_key()`, `DotClientLink.request_scoreboard()`), 10 `DotClientLink.tls_connect_timeout_sec` (a native WebSocket join to a public bare `host:port` tries `wss://` first), 11 the thread settings (`worker_threads`, `threads_net`, `threads_npc` as `sv_worker_threads` / `sv_threads_net` / `sv_threads_npc`, `net_snapshot_workers()`, `describe_threads()`), 12 `DotAdminCfg.load_groups` / `load_users` (the yml layout, `cfg/addons/dot_server/`).
 
 ## Rules that bite
 
