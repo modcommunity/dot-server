@@ -1,7 +1,7 @@
 class_name DotAdminCfg
 extends RefCounted
 
-## Reads `groups.yml` and `permissions.yml` from `cfg/addons/dot_server/`, the operator's `cfg/server/dot_server/` over it.
+## Reads `groups.yml` and `permissions.yml` from `cfg/addons/dot_server/`, the operator's `cfg/server/addons/dot_server/` over it.
 ## A flat `legacy_dir/<file>` is still read (one WARN) while no new copy exists, until [constant DotCfgLegacy.REMOVE_AFTER].
 
 const CFG_ADDON := "dot-server"

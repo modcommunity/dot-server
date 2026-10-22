@@ -45,7 +45,7 @@ Read the family [CLAUDE.md](../../CLAUDE.md) first; this file is only what is sp
 | `modules/` | `dot_module.gd` (base class; the helpers are not optional), `dot_module_host.gd`, `dot_bot_quota.gd` |
 | `cfg/` | `server.cfg` (shipped defaults; copy to `user://cfg` and edit that), `autoexec.cfg` |
 | `examples/` | `dedicated_server`, `signon_revision`, `content_switch`, `mixed_transports` |
-| `examples/cfg_selftest.tscn` | `groups.yml` and `permissions.yml` through `DotAdminCfg`: `cfg/addons/dot_server/`, `cfg/server/dot_server/` over it, the flat `cfg/<file>.yml` shim (WARN once, removed 2026-12-31) |
+| `examples/cfg_selftest.tscn` | `groups.yml` and `permissions.yml` through `DotAdminCfg`: `cfg/addons/dot_server/`, `cfg/server/addons/dot_server/` over it, the flat `cfg/<file>.yml` shim (WARN once, removed 2026-12-31) |
 
 ## Running and testing
 

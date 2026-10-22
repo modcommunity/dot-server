@@ -40,7 +40,7 @@ extends RefCounted
 #    sv_threads_net, sv_threads_npc), net_snapshot_workers(), npc_workers(), and
 #    DotServer.describe_threads() ("threads" in describe()). Nothing on the wire.
 # 12: DotAdminCfg.load_groups and load_users read cfg/addons/dot_server/groups.yml and
-#    permissions.yml and the operator's cfg/server/dot_server/, with the flat cfg/<file>.yml as
+#    permissions.yml and the operator's cfg/server/addons/dot_server/, with the flat cfg/<file>.yml as
 #    a shim until 2026-12-31. Needs dot-core API level 16.
 const LEVEL := 12
 const OLDEST := 1
