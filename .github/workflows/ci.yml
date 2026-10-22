@@ -21,6 +21,8 @@ jobs:
     validate:
         uses: modcommunity/dot-ci/.github/workflows/validate.yml@v1
         with:
+            efficiency: true
+            hygiene: true
             suites: 'examples/content_switch examples/signon_revision examples/dedicated_server examples/mixed_transports'
             suite-timeout: 600
         secrets:
