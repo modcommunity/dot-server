@@ -1323,7 +1323,8 @@ func _on_load_game(_peer_id: int, info: Dictionary) -> void:
 	DotLog.info(
 		CHANNEL, "game loaded", {
 			"scene": resolved, "content": content_key,
-			"warm_ms": (t0 - w0) / 1000.0, "warmed": warmed != null,
+			"warm_ms": (t0 - w0) / 1000.0,
+			"warmed": (warmed.get("loaded") as Array).size() if warmed is Object and warmed.get("loaded") is Array else 0,
 			"load_ms": (t1 - t0) / 1000.0,
 			"instantiate_ms": (t2 - t1b) / 1000.0,
 			"add_child_ms": (t3 - t2b) / 1000.0,
