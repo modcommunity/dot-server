@@ -803,11 +803,15 @@ func _free_game_children() -> void:
 	})
 
 	server.get_tree().create_timer(RETIRED_SECONDS, true, false, true).timeout.connect(
-		func() -> void:
-			for node in retired:
-				if is_instance_valid(node):
-					node.queue_free()
-	)
+		_free_ids.bind(retired.map(func(n: Node) -> int: return n.get_instance_id())))
+
+
+## Frees the nodes still alive by instance id; a lambda capturing them errors once one is freed early.
+static func _free_ids(ids: Array) -> void:
+	for id in ids:
+		var node := instance_from_id(id) as Node
+		if node != null and not node.is_queued_for_deletion():
+			node.queue_free()
 
 
 # --- Rotation --------------------------------------------------------------

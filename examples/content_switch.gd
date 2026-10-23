@@ -79,7 +79,7 @@ const CONTENT_BASE := "https://content.invalid/content"
 ## Every check this suite runs, including the one that compares against it. The section
 ## counter cannot see a section that aborted after announcing itself — its remaining checks
 ## simply never run — and a total can. See docs/testing.md.
-const CHECKS := 67
+const CHECKS := 71
 
 ## The name a game's RPC node is given on both ends, for the retirement checks.
 const GAME_NODE := &"GameLink"
@@ -131,6 +131,7 @@ func _run() -> void:
 				await _test_switch_to_delivered_again()
 				_check_bases_are_not_duplicated()
 				await _test_disconnect_mid_load()
+	_test_retire_timer_ids()
 
 	_teardown()
 	DotPaths.remove_tree(DATA)
@@ -154,6 +155,21 @@ func _run() -> void:
 		print("  FAIL  %s" % line)
 
 	get_tree().quit(1 if _failed > 0 else 0)
+
+
+func _test_retire_timer_ids() -> void:
+	_section("retire timers free by instance id, so a node freed early is not an error")
+	for helper in [DotGameManager._free_ids, DotClientLink._free_ids]:
+		var gone := Node.new()
+		var live := Node.new()
+		add_child(live)
+		var ids := [gone.get_instance_id(), live.get_instance_id()]
+		gone.free()
+		helper.call(ids)
+		_check(live.is_queued_for_deletion(), "the live retired node is freed")
+		_check(true, "and an id already freed is skipped without an error")
+		live.free()
+	_completed += 1
 
 
 # --- Harness ---------------------------------------------------------------
