@@ -1258,6 +1258,16 @@ func _on_load_game(_peer_id: int, info: Dictionary) -> void:
 
 	_unload_scene()
 
+	# Without threads load() compiles the game's whole script closure in one frame (5 s in a
+	# browser); dot-cloud compiles it a slice per frame first. `warmed` holds it until we are done.
+	var w0 := Time.get_ticks_usec()
+	var warmed: Variant = null
+	var cloud := DotRegistry.get_service(cloud_service)
+	if content_key != "" and cloud != null and cloud.has_method("warm_content") and is_inside_tree():
+		warmed = await cloud.call("warm_content", get_tree(), PackedStringArray([content_key]) + content_extra)
+		if gen != _load_gen or not is_inside_tree():
+			return
+
 	var t0 := Time.get_ticks_usec()
 	var packed: Resource = null
 	if is_inside_tree() and DotPlatform.has_threads() \
@@ -1313,6 +1323,7 @@ func _on_load_game(_peer_id: int, info: Dictionary) -> void:
 	DotLog.info(
 		CHANNEL, "game loaded", {
 			"scene": resolved, "content": content_key,
+			"warm_ms": (t0 - w0) / 1000.0, "warmed": warmed != null,
 			"load_ms": (t1 - t0) / 1000.0,
 			"instantiate_ms": (t2 - t1b) / 1000.0,
 			"add_child_ms": (t3 - t2b) / 1000.0,
