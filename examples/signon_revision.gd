@@ -50,7 +50,7 @@ const PORT := 27717
 ## How many checks a clean run makes. A section that aborts part-way stops adding checks,
 ## and the section counter cannot see that when the abort comes after the section
 ## announced itself — so the total is asserted too.
-const CHECKS := 134
+const CHECKS := 138
 
 var _entered := 0
 var _completed := 0
@@ -82,6 +82,7 @@ func _run() -> void:
 
 	_test_the_two_sides_agree()
 	_test_the_revision_is_derived()
+	await _test_the_warm_feeds_progress_and_survives_the_cloud()
 
 	if await _boot():
 		if await _test_a_real_join_carries_it():
@@ -1217,6 +1218,66 @@ func _missing_from(these: PackedStringArray, those: PackedStringArray) -> Packed
 		if not those.has(name):
 			out.append(name)
 	return out
+
+
+## Stands in for the dot-cloud client's warm_content.
+class FakeCloud extends Node:
+	var hang := false
+
+	func warm_content(_tree: SceneTree, _keys: PackedStringArray, _force: bool = false, on_progress: Callable = Callable()) -> RefCounted:
+		if on_progress.is_valid():
+			on_progress.call(1, 2)
+			on_progress.call(2, 2)
+		if hang:
+			await get_tree().create_timer(3600.0).timeout
+		return RefCounted.new()
+
+
+## The warm feeds the loading bar, and a cloud freed mid-warm must not leave the join in
+## LOADING: the link falls back to a plain load().
+func _test_the_warm_feeds_progress_and_survives_the_cloud() -> void:
+	_section("The content warm: progress reaches the bar, and a freed cloud does not strand the join")
+
+	var dir := "res://dot_cloud/_warmtest/0.0.0"
+	DirAccess.make_dir_recursive_absolute(dir)
+	var scene := PackedScene.new()
+	var node := Node.new()
+	scene.pack(node)
+	node.free()
+	ResourceSaver.save(scene, dir + "/s.tscn")
+	var info := {"scene": "s.tscn", "content_key": "_warmtest@0.0.0"}
+
+	var cloud := FakeCloud.new()
+	add_child(cloud)
+	DotRegistry.register(&"dot_cloud_client", cloud)
+
+	var link := DotClientLink.new()
+	add_child(link)
+	var seen: Array = []
+	link.download_progress.connect(func(fraction: float, _text: String) -> void: seen.append(fraction))
+	link._on_load_game(0, info)
+	await _until(func() -> bool: return link.get("_scene_instance") != null, 5.0)
+	_check(seen.has(0.5) and seen.has(1.0), "warm progress reaches download_progress", str(seen))
+	_check(link.get("_scene_instance") != null, "and the scene loads after the warm")
+	link.queue_free()
+
+	cloud.hang = true
+	var link2 := DotClientLink.new()
+	add_child(link2)
+	link2._on_load_game(0, info)
+	for i in 8:
+		await get_tree().process_frame
+	cloud.free()
+	var loaded := await _until(func() -> bool: return link2.get("_scene_instance") != null, 3.0)
+	_check(loaded, "a cloud freed mid-warm falls back to a plain load() of the scene")
+	_check(link2.phase != DotClientLink.Phase.LOADING or loaded, "and the join is not left in LOADING")
+	link2.queue_free()
+
+	DotRegistry.unregister(&"dot_cloud_client")
+	DirAccess.remove_absolute(dir + "/s.tscn")
+	DirAccess.remove_absolute(dir)
+	DirAccess.remove_absolute("res://dot_cloud/_warmtest")
+	_done()
 
 
 func _section(title: String) -> void:

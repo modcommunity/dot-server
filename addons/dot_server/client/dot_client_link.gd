@@ -1187,6 +1187,34 @@ static func _progress_text(p: Dictionary) -> String:
 
 # --- Loading ---------------------------------------------------------------
 
+## Runs [code]cloud.warm_content[/code] and returns its loader, or null if the cloud is freed
+## or the warm fails. Awaiting a coroutine of a freed object never returns, so it runs in a
+## detached call and this polls; the caller then falls back to a plain load().
+func _warm(cloud: Object, keys: PackedStringArray, gen: int) -> Variant:
+	var state := {"done": false, "loader": null}
+	_warm_run(cloud, keys, state)
+	while not state["done"]:
+		if not is_instance_valid(cloud) or gen != _load_gen or not is_inside_tree():
+			return null
+		await get_tree().process_frame
+	return state["loader"]
+
+
+func _warm_run(cloud: Object, keys: PackedStringArray, state: Dictionary) -> void:
+	var on_progress := func(done: int, total: int) -> void:
+		if total > 0:
+			download_progress.emit(float(done) / float(total), "Preparing the game…")
+	var wants_progress := false
+	for m in cloud.get_method_list():
+		if m["name"] == "warm_content":
+			wants_progress = (m["args"] as Array).size() >= 4
+	if wants_progress:
+		state["loader"] = await cloud.call("warm_content", get_tree(), keys, false, on_progress)
+	else:
+		state["loader"] = await cloud.call("warm_content", get_tree(), keys)
+	state["done"] = true
+
+
 ## The server telling us which scene to load.
 ##
 ## [b]This yields.[/b] It used to load, instantiate and add the scene in one call, so a
@@ -1264,7 +1292,7 @@ func _on_load_game(_peer_id: int, info: Dictionary) -> void:
 	var warmed: Variant = null
 	var cloud := DotRegistry.get_service(cloud_service)
 	if content_key != "" and cloud != null and cloud.has_method("warm_content") and is_inside_tree():
-		warmed = await cloud.call("warm_content", get_tree(), PackedStringArray([content_key]) + content_extra)
+		warmed = await _warm(cloud, PackedStringArray([content_key]) + content_extra, gen)
 		if gen != _load_gen or not is_inside_tree():
 			return
 
