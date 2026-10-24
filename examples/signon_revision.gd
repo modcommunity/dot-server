@@ -50,7 +50,7 @@ const PORT := 27717
 ## How many checks a clean run makes. A section that aborts part-way stops adding checks,
 ## and the section counter cannot see that when the abort comes after the section
 ## announced itself — so the total is asserted too.
-const CHECKS := 138
+const CHECKS := 141
 
 var _entered := 0
 var _completed := 0
@@ -96,6 +96,7 @@ func _run() -> void:
 		await _test_a_required_kind_the_client_lacks()
 		await _test_a_secret_never_rides_udp()
 		await _test_introspect_refuses_a_server_not_ours()
+		await _test_a_ticket_is_asked_for_by_the_dialled_address()
 		await _test_the_profile_stage()
 
 	_teardown()
@@ -961,14 +962,62 @@ func _test_introspect_refuses_a_server_not_ours() -> void:
 	_done()
 
 
+## A ticket server: the client must ask for its ticket by the address it dialled,
+## never by an id the server announced (a hostile server would name a victim's).
+## Armed by asking by [code]server_id[/code]: the address check fails.
+func _test_a_ticket_is_asked_for_by_the_dialled_address() -> void:
+	_section("a ticket is asked for by the address the client dialled")
+
+	var seen: Array[Dictionary] = []
+	var server_auth := _AuthStandIn.new()
+	server_auth.strategy = "ticket"
+	server_auth.on_authenticate = func(credential: Dictionary) -> void:
+		seen.append(credential.duplicate())
+	var client_auth := _TicketStandIn.new()
+	DotRegistry.register(&"dot_auth_server", server_auth)
+	DotRegistry.register(&"dot_auth_client", client_auth)
+
+	var link := _new_link("Ticketed", func(l: DotClientLink) -> void:
+		l.transport_preference = "ws")
+	await _join(link)
+
+	_check(client_auth.addresses == ["127.0.0.1:%d" % PORT],
+		"the ticket was asked for by the dialled address", str(client_auth.addresses))
+	_check(client_auth.ids.is_empty(), "never by an id the server announced", str(client_auth.ids))
+	_check(seen.size() == 1 and str(seen[0].get("ticket", "")) == _TicketStandIn.TICKET
+			and str(seen[0].get("access_token", "")) == "",
+		"and the server got the ticket and no token", str(seen))
+
+	DotRegistry.unregister_instance(&"dot_auth_server", server_auth)
+	DotRegistry.unregister_instance(&"dot_auth_client", client_auth)
+	_drop_link(link)
+	_done()
+
+
+## dot-auth's client half for tickets: records what it was asked by.
+class _TicketStandIn extends RefCounted:
+	const TICKET := "ticket-for-the-test"
+	var addresses: Array[String] = []
+	var ids: Array[String] = []
+
+	func request_ticket_for_address(address: String) -> DotResult:
+		addresses.append(address)
+		return DotResult.success(TICKET)
+
+	func request_ticket(_issuer: String, server_id: String) -> DotResult:
+		ids.append(server_id)
+		return DotResult.success(TICKET)
+
+
 ## dot-auth's server half, as far as dot-server asks: a strategy and a verdict.
 class _AuthStandIn extends RefCounted:
 	const AUDIENCE := "server:7"
 	var on_authenticate: Callable
 	var audience: String = AUDIENCE
+	var strategy: String = "introspect"
 
 	func strategy_name() -> String:
-		return "introspect"
+		return strategy
 
 	func join_audience() -> String:
 		return audience

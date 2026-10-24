@@ -878,36 +878,35 @@ func _attach_credential(payload: Dictionary, strategy: String) -> bool:
 	return true
 
 
-## A connect ticket for [member server_id] from the client-side issuer, when both
-## are known. Returns whether one was attached.
+## A connect ticket for the server this client DIALLED. The address is the one passed
+## to [method connect_to_server], never what the server announced: a hostile server
+## naming another's id would get a ticket valid there. An older dot-auth without
+## `request_ticket_for_address` asks by the announced [member server_id] instead.
+## Returns whether one was attached.
 func _attach_ticket(payload: Dictionary, auth: Object) -> bool:
-	if server_id == "":
-		DotLog.warn(
-			CHANNEL,
-			"the server asked for a ticket but named no server_id"
-		)
+	var ticket: Variant = null
+	if auth.has_method("request_ticket_for_address"):
+		if _last_address.strip_edges() == "":
+			return false
+		ticket = await auth.call("request_ticket_for_address", _last_address.strip_edges())
+	elif auth.has_method("request_ticket"):
+		var issuer := _issuer_url()
+		if issuer == "" or server_id == "":
+			DotLog.warn(CHANNEL, "cannot ask for a ticket: no issuer or no server_id")
+			return false
+		ticket = await auth.call("request_ticket", issuer, server_id)
+	else:
 		return false
 
-	if not auth.has_method("request_ticket"):
-		return false
-
-	# The issuer URL is a client-side setting: it is the publisher's
-	# service, not the game server's, so the game server must not be able
-	# to name it.
-	var issuer := _issuer_url()
-	if issuer == "":
-		DotLog.warn(
-			CHANNEL,
-			"no ticket issuer is configured; cannot authenticate"
-		)
-		return false
-
-	var ticket: Variant = await auth.call(
-		"request_ticket", issuer, server_id
-	)
 	if ticket is DotResult and (ticket as DotResult).ok:
 		payload["ticket"] = str((ticket as DotResult).value)
 		return true
+	var err: DotError = (ticket as DotResult).error if ticket is DotResult else null
+	DotLog.warn(CHANNEL, "no connect ticket for this server", {
+		"address": _last_address,
+		"why": err.message if err != null else "unexpected reply",
+		"code": err.detail if err != null else "",
+	})
 	return false
 
 
@@ -930,10 +929,9 @@ func _attach_introspect(payload: Dictionary, auth: Object) -> bool:
 		)
 		return false
 
-	# Not one of ours: a connect ticket if this build has an issuer.
-	if _issuer_url() != "" and server_id != "":
-		if await _attach_ticket(payload, auth):
-			return true
+	# Not one of ours: a connect ticket for the address we dialled.
+	if await _attach_ticket(payload, auth):
+		return true
 
 	_refuse_introspect(
 		"This server asks for your account sign-in, which this game only gives to its own servers.",
