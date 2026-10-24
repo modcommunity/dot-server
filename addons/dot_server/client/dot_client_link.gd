@@ -214,6 +214,7 @@ var server_hostname: String = ""
 ## The backbone target an INTROSPECT server says a join token must name
 ## (`server:<id>`), from the handshake. Empty for a server that does not say.
 var server_join_audience: String = ""
+var _ticket_nonce := ""
 
 ## The addon versions the server runs, from the handshake: `{dir, repo, id, version}` per
 ## addon, as [member DotServer.addon_set] sends them. Empty for a server that says nothing.
@@ -692,6 +693,7 @@ func _on_challenge(_peer_id: int, challenge: Dictionary) -> void:
 	server_hostname = str(challenge.get("hostname", ""))
 	server_id = str(challenge.get("server_id", ""))
 	server_join_audience = str(challenge.get("join_audience", ""))
+	_ticket_nonce = str(challenge.get("ticket_nonce", ""))
 	var addons: Variant = challenge.get("addons", [])
 	server_addons = (addons as Array).duplicate(true) if addons is Array else []
 
@@ -882,13 +884,18 @@ func _attach_credential(payload: Dictionary, strategy: String) -> bool:
 ## to [method connect_to_server], never what the server announced: a hostile server
 ## naming another's id would get a ticket valid there. An older dot-auth without
 ## `request_ticket_for_address` asks by the announced [member server_id] instead.
-## Returns whether one was attached.
+## The server's challenge nonce binds the ticket to this connection. Returns whether
+## one was attached.
 func _attach_ticket(payload: Dictionary, auth: Object) -> bool:
 	var ticket: Variant = null
 	if auth.has_method("request_ticket_for_address"):
-		if _last_address.strip_edges() == "":
+		var dialled := _last_address.strip_edges()
+		if dialled == "":
 			return false
-		ticket = await auth.call("request_ticket_for_address", _last_address.strip_edges())
+		if _ticket_nonce != "" and auth.get_method_argument_count("request_ticket_for_address") >= 3:
+			ticket = await auth.call("request_ticket_for_address", dialled, "", _ticket_nonce)
+		else:
+			ticket = await auth.call("request_ticket_for_address", dialled)
 	elif auth.has_method("request_ticket"):
 		var issuer := _issuer_url()
 		if issuer == "" or server_id == "":

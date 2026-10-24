@@ -50,7 +50,7 @@ const PORT := 27717
 ## How many checks a clean run makes. A section that aborts part-way stops adding checks,
 ## and the section counter cannot see that when the abort comes after the section
 ## announced itself — so the total is asserted too.
-const CHECKS := 141
+const CHECKS := 149
 
 var _entered := 0
 var _completed := 0
@@ -97,6 +97,7 @@ func _run() -> void:
 		await _test_a_secret_never_rides_udp()
 		await _test_introspect_refuses_a_server_not_ours()
 		await _test_a_ticket_is_asked_for_by_the_dialled_address()
+		await _test_an_account_holds_one_seat()
 		await _test_the_profile_stage()
 
 	_teardown()
@@ -987,6 +988,11 @@ func _test_a_ticket_is_asked_for_by_the_dialled_address() -> void:
 	_check(seen.size() == 1 and str(seen[0].get("ticket", "")) == _TicketStandIn.TICKET
 			and str(seen[0].get("access_token", "")) == "",
 		"and the server got the ticket and no token", str(seen))
+	_check(client_auth.nonces.size() == 1 and client_auth.nonces[0].length() >= 16,
+		"the ticket was bound to the challenge's nonce", str(client_auth.nonces))
+	_check(server_auth.nonces == client_auth.nonces and not seen.is_empty()
+			and not seen[0].has("ticket_nonce"),
+		"and the server checked it against its own copy, not the client's", str(server_auth.nonces))
 
 	DotRegistry.unregister_instance(&"dot_auth_server", server_auth)
 	DotRegistry.unregister_instance(&"dot_auth_client", client_auth)
@@ -999,9 +1005,11 @@ class _TicketStandIn extends RefCounted:
 	const TICKET := "ticket-for-the-test"
 	var addresses: Array[String] = []
 	var ids: Array[String] = []
+	var nonces: Array[String] = []
 
-	func request_ticket_for_address(address: String) -> DotResult:
+	func request_ticket_for_address(address: String, _issuer := "", nonce := "") -> DotResult:
 		addresses.append(address)
+		nonces.append(nonce)
 		return DotResult.success(TICKET)
 
 	func request_ticket(_issuer: String, server_id: String) -> DotResult:
@@ -1015,6 +1023,7 @@ class _AuthStandIn extends RefCounted:
 	var on_authenticate: Callable
 	var audience: String = AUDIENCE
 	var strategy: String = "introspect"
+	var nonces: Array[String] = []
 
 	func strategy_name() -> String:
 		return strategy
@@ -1022,9 +1031,61 @@ class _AuthStandIn extends RefCounted:
 	func join_audience() -> String:
 		return audience
 
-	func authenticate(credential: Dictionary, _address: String) -> DotResult:
+	func authenticate(credential: Dictionary, _address: String, connection_nonce := "") -> DotResult:
+		nonces.append(connection_nonce)
 		on_authenticate.call(credential)
 		return DotResult.fail(DotError.CODE_AUTH, "stand-in refuses everybody")
+
+
+## Lets everybody in as the same account, for `sv_single_seat`.
+class _SameAccountStandIn extends RefCounted:
+	func strategy_name() -> String:
+		return "local"
+
+	func authenticate(_credential: Dictionary, _address: String, _nonce := "") -> DotResult:
+		return DotResult.success(_Account.new())
+
+
+class _Account extends RefCounted:
+	var uid := "tmc:the-same-account"
+	var display_name := "Twin"
+	var is_guest := false
+
+
+## [b]One account, one seat:[/b] signing in again replaces the older connection, so a
+## player whose old connection is still timing out comes straight back. Armed by
+## `sv_single_seat 0`, under which both stay.
+func _test_an_account_holds_one_seat() -> void:
+	_section("an account signing in again replaces its older connection")
+
+	var auth := _SameAccountStandIn.new()
+	DotRegistry.register(&"dot_auth_server", auth)
+	var same := func() -> int:
+		return _server.sessions().filter(func(x: DotClientSession) -> bool:
+			return x.is_active() and x.uid() == "tmc:the-same-account").size()
+
+	var first := _new_link("TwinA", func(l: DotClientLink) -> void: l.transport_preference = "ws")
+	var lost := [""]
+	first.disconnected.connect(func(reason: String) -> void: lost[0] = reason)
+	_check(await _join(first) == "", "the account joins")
+	var second := _new_link("TwinB", func(l: DotClientLink) -> void: l.transport_preference = "ws")
+	_check(await _join(second) == "", "and joins again from another connection")
+	await _until(func() -> bool: return lost[0] != "", 3.0)
+	_check(same.call() == 1, "leaving one seat (%d)" % same.call())
+	_check(lost[0] != "", "and the older connection was told why", lost[0])
+
+	_server.console.set_cvar("sv_single_seat", "0")
+	var third := _new_link("TwinC", func(l: DotClientLink) -> void: l.transport_preference = "ws")
+	_check(await _join(third) == "", "with sv_single_seat 0 a third joins")
+	_check(same.call() == 2, "and both seats stay (%d)" % same.call())
+	_server.console.set_cvar("sv_single_seat", "1")
+
+	DotRegistry.unregister_instance(&"dot_auth_server", auth)
+	_drop_link(first)
+	_drop_link(second)
+	_drop_link(third)
+	await _settle(0.5)
+	_done()
 
 
 ## dot-auth's client half: an access token it must never send, and a join token

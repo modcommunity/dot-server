@@ -243,6 +243,7 @@ var _cv_password: DotConVar
 var _cv_allow_web: DotConVar
 var _cv_allow_desktop: DotConVar
 var _cv_allow_mobile: DotConVar
+var _cv_single_seat: DotConVar
 var _cv_maxplayers: DotConVar
 var _cv_cheats: DotConVar
 var _cv_tickrate: DotConVar
@@ -1462,7 +1463,16 @@ func _handshake_fields(session: DotClientSession) -> Dictionary:
 		# The strategy tells the client which credential to send. Without it a
 		# client would have to guess, or send everything it has.
 		"auth": _auth_strategy_name(),
+		"ticket_nonce": _ticket_nonce_for(session),
 	}
+
+
+## The client asks for a ticket bound to this, so one copied off the wire is refused
+## on every other connection.
+func _ticket_nonce_for(session: DotClientSession) -> String:
+	if session.ticket_nonce == "":
+		session.ticket_nonce = DotHash.random_token(16)
+	return session.ticket_nonce
 
 
 func _auth_strategy_name() -> String:
@@ -1571,6 +1581,8 @@ func _on_credentials(peer_id: int, payload: Dictionary) -> void:
 		)
 		_reject_session(session, admitted.error.message)
 		return
+
+	_take_seat(session)
 
 	if not _claim_slot(session):
 		return
@@ -1751,9 +1763,12 @@ func _authenticate(
 		"name": session.display_name,
 	}
 
-	var res: Variant = await auth.call(
-		"authenticate", credential, session.address
-	)
+	# Our own copy of the challenge nonce, never the client's; an older dot-auth takes two.
+	var res: Variant
+	if auth.get_method_argument_count("authenticate") >= 3:
+		res = await auth.call("authenticate", credential, session.address, session.ticket_nonce)
+	else:
+		res = await auth.call("authenticate", credential, session.address)
 
 	if not (res is DotResult):
 		DotLog.error(
@@ -1782,6 +1797,22 @@ func _guest_identity(
 	return DotGuestIdentity.from_device(
 		str(payload.get("device_id", "")), session.display_name
 	)
+
+
+## Under `sv_single_seat`, an account signing in again replaces its older connection:
+## newest wins, so a player whose old connection is still timing out can come back.
+func _take_seat(session: DotClientSession) -> void:
+	if _cv_single_seat == null or not _cv_single_seat.get_bool() or not session.is_account():
+		return
+	var uid := session.uid()
+	if uid == "":
+		return
+	for other in sessions():
+		if other != session and other.is_active() and other.is_authenticated() and other.uid() == uid:
+			DotLog.info(CHANNEL, "account signed in again; replacing its older connection", {
+				"user": session.label(), "old_userid": other.userid,
+			})
+			kick(other, "You signed in from another connection.")
 
 
 ## Enforces the slot limit, honouring reserved slots.
@@ -2819,6 +2850,12 @@ func _register_cvars() -> void:
 	# speaks the same WebSocket protocol, so nothing about a desktop or a browser
 	# player needs turning on. REPLICATED so the query answer and a listing can say
 	# which are open before anybody tries to join.
+	_cv_single_seat = console.cvar(
+		"sv_single_seat", "1",
+		"One connection per account: signing in again replaces the older connection.",
+		DotConVar.FLAG_ARCHIVE | DotConVar.FLAG_NOTIFY
+	)
+
 	_cv_allow_web = console.cvar(
 		"sv_allow_web", "1",
 		"Admit players in a web browser.",

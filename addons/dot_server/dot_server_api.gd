@@ -42,5 +42,8 @@ extends RefCounted
 # 12: DotAdminCfg.load_groups and load_users read cfg/addons/dot_server/groups.yml and
 #    permissions.yml and the operator's cfg/server/addons/dot_server/, with the flat cfg/<file>.yml as
 #    a shim until 2026-12-31. Needs dot-core API level 16.
-const LEVEL := 12
+# 13: the challenge carries ticket_nonce and the server passes it to dot-auth's
+#    authenticate (API 8) so a copied connect ticket is refused; DotClientSession.ticket_nonce;
+#    sv_single_seat (default 1): an account signing in again replaces its older connection.
+const LEVEL := 13
 const OLDEST := 1

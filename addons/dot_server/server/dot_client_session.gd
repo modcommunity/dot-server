@@ -80,6 +80,9 @@ var display_name: String = "unnamed"
 
 var address: String = ""
 
+## Sent in this connection's challenge; a connect ticket bound to it is refused on any other.
+var ticket_nonce: String = ""
+
 ## What kind of client this is -- `web`, `desktop` or `mobile` -- as it said at signon.
 ## Empty for a shell exported before clients said. See [method DotServer.platform_refusal_for].
 var platform: String = ""

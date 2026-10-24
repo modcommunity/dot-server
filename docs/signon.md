@@ -80,6 +80,10 @@ The envelope was the last coordinated protocol break: a client exported before i
 - **The bases ride with it** because a desktop client otherwise learns the content origin only from the first `content.sync`, after the challenge.
 - Both are fields, so no revision moves; an empty list sends neither.
 
+## One seat per account
+
+`sv_single_seat` (default 1): when an account (not a guest) finishes authenticating while another active session holds the same `uid`, the older session is kicked with a reason, before the slot check, so it frees its slot. Newest wins because the usual second sign-in is a player whose old connection has not timed out yet. The site keeps no cross-server seat table; dot-auth's issuer does (`single_session`) for a publisher that wants one.
+
 ## The round trip is known as the join completes
 
 `DotClientLink` sends a heartbeat the moment it is playing and three more a quarter of a second apart (`EARLY_HEARTBEATS`, `EARLY_HEARTBEAT_SEC`), then every `heartbeat_interval_sec`. Every game's netcode clock takes its input lead from the round trip; when the first heartbeat left two seconds after joining, the first seconds of commands arrived after their tick. `rtt_ms()` is the best figure the link has: ENet's own `PEER_ROUND_TRIP_TIME` on UDP, the heartbeat's otherwise, 0 before either. `signon_revision` asserts the round trip is known within a second of joining.
