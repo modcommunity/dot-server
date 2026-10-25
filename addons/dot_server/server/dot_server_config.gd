@@ -187,6 +187,11 @@ extends DotConfig
 ## where the library cannot load dot-net falls back to GDScript and logs why.
 @export var net_native: bool = false
 
+## Also run the interest phase (relevance, scores, cap, budget) in the native core (cvar
+## [code]net_native_interest[/code]; needs [member net_native]). Off by default. A strategy the core
+## cannot port exactly (a subclass, a grid, always-on tags) stays in GDScript.
+@export var net_native_interest: bool = false
+
 ## Frames per second while hibernating, on a headless server. NOT the tickrate.
 ##
 ## Every socket this server owns -- the query and A2S listeners, the game transport, RCON

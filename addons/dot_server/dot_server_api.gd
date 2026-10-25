@@ -47,5 +47,7 @@ extends RefCounted
 #    sv_single_seat (default 1): an account signing in again replaces its older connection.
 # 14: DotServerConfig.net_native (cvar net_native): dot-net's native snapshot core, followed
 #    by dot-game's wiring. Nothing on the wire.
-const LEVEL := 14
+# 15: DotServerConfig.net_native_interest (cvar net_native_interest): the interest phase in the
+#    native core too (needs net_native). Nothing on the wire.
+const LEVEL := 15
 const OLDEST := 1

@@ -3062,6 +3062,14 @@ func _register_cvars() -> void:
 		func(_old: String, value: String) -> void:
 			config.net_native = value.to_int() != 0
 	)
+	console.cvar(
+		"net_native_interest", "1" if config.net_native_interest else "0",
+		"With net_native, also pick each peer's relevant entities in the native library (GDScript for a strategy it cannot port).",
+		DotConVar.FLAG_ARCHIVE
+	).changed.connect(
+		func(_old: String, value: String) -> void:
+			config.net_native_interest = value.to_int() != 0
+	)
 
 
 ## Reads cvars back into the config after server.cfg has run.
@@ -3088,6 +3096,7 @@ func _apply_cvars_to_config() -> void:
 	config.threads_net = console.get_bool("sv_threads_net", config.threads_net)
 	config.threads_npc = console.get_bool("sv_threads_npc", config.threads_npc)
 	config.net_native = console.get_bool("net_native", config.net_native)
+	config.net_native_interest = console.get_bool("net_native_interest", config.net_native_interest)
 
 
 func _register_commands() -> void:
