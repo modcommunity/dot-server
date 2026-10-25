@@ -449,13 +449,14 @@ func status_line() -> String:
 	if backgrounded:
 		flags += "B"
 
-	return "# %-4d %-20s %-10s %-6s %-5s %-4s %s" % [
+	return "# %-4d %-20s %-10s %-6s %-5s %-4s %-22s %s" % [
 		userid,
 		display_name.substr(0, 20),
 		state_name().to_lower(),
 		clock,
 		str(ping_ms) if ping_ms >= 0 else "-",
 		flags,
+		uid() if uid() != "" else "-",
 		address,
 	]
 

@@ -3127,7 +3127,7 @@ func status_lines() -> PackedStringArray:
 		])
 
 	out.append("")
-	out.append("# userid name                 state      time   ping  flags addr")
+	out.append("# userid name                 state      time   ping  flags uid                    addr")
 
 	for session in sessions():
 		out.append(session.status_line())

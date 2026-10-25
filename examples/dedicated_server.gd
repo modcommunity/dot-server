@@ -814,8 +814,8 @@ func _test_connection_limits() -> void:
 ## is used on are named in one word.
 func _status_flags(session: DotClientSession) -> String:
 	var fields := session.status_line().split(" ", false)
-	# "# userid name state time ping [flags] addr"
-	return fields[6] if fields.size() >= 8 else ""
+	# "# userid name state time ping [flags] uid addr"
+	return fields[6] if fields.size() >= 9 else ""
 
 
 func _test_game_ids() -> void:
