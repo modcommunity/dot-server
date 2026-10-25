@@ -182,6 +182,11 @@ extends DotConfig
 ## [method npc_workers].
 @export var threads_npc: bool = false
 
+## Build snapshots in dot-net's native core (cvar [code]net_native[/code], live from the next
+## snapshot). Off by default; the game's wiring ORs it into [code]DotNetConfig.native[/code], and
+## where the library cannot load dot-net falls back to GDScript and logs why.
+@export var net_native: bool = false
+
 ## Frames per second while hibernating, on a headless server. NOT the tickrate.
 ##
 ## Every socket this server owns -- the query and A2S listeners, the game transport, RCON

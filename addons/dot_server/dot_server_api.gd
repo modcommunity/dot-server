@@ -45,5 +45,7 @@ extends RefCounted
 # 13: the challenge carries ticket_nonce and the server passes it to dot-auth's
 #    authenticate (API 8) so a copied connect ticket is refused; DotClientSession.ticket_nonce;
 #    sv_single_seat (default 1): an account signing in again replaces its older connection.
-const LEVEL := 13
+# 14: DotServerConfig.net_native (cvar net_native): dot-net's native snapshot core, followed
+#    by dot-game's wiring. Nothing on the wire.
+const LEVEL := 14
 const OLDEST := 1
