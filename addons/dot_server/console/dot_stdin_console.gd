@@ -11,6 +11,9 @@ extends Node
 ## foreground, typing `status` into it, got silence: nothing in the project read stdin at
 ## all, so the characters were the shell echoing and the server never saw a byte.
 ##
+## [b]A helper process on Linux and macOS, a thread elsewhere and for a file.[/b] See
+## [method _start_tap] for why a blocked thread cannot be allowed to outlive `quit`.
+##
 ## [b]A thread, because the engine only offers a blocking read.[/b] `OS` exposes
 ## `read_string_from_stdin` and nothing that polls, so the choice is a thread or a
 ## server that stops simulating between keystrokes. Lines are run on the main thread,
@@ -41,6 +44,9 @@ const BUFFER := 4096
 ## on its own is a line; a closed terminal or a file that ran out returns "" immediately
 ## and forever. Sixty-four in a row is a file or a hangup, not a person.
 const EOF_EMPTY_READS := 64
+
+## Seconds between looks at the tap file (see [method _start_tap]).
+const TAP_POLL_SEC := 0.1
 
 ## Where typed lines are attributed from.
 ##
@@ -79,6 +85,11 @@ var server: DotServer = null
 var _thread: Thread = null
 var _stop := false
 var _empty_reads := 0
+var _tap_pid := -1
+var _tap_path := ""
+var _tap_offset := 0
+var _tap_partial := ""
+var _tap_clock := 0.0
 
 
 ## Starts reading, or explains why it will not.
@@ -115,6 +126,13 @@ func setup(p_server: DotServer) -> DotResult:
 		DotLog.info(CHANNEL, "no threads on this platform; console input is off")
 		return DotResult.success(false)
 
+	if kind != OS.STD_HANDLE_FILE and _start_tap():
+		set_process(true)
+		DotLog.info(CHANNEL, "console input is on; type a command and press enter", {
+			"stdin": kind, "reader": "helper process"
+		})
+		return DotResult.success(true)
+
 	if not _start_read():
 		return DotResult.fail(
 			DotError.CODE_INTERNAL, "Could not start the stdin reader thread."
@@ -144,7 +162,11 @@ static func should_read(kind: int, pipes: bool) -> bool:
 	return false
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	if _tap_pid > 0:
+		_poll_tap(delta)
+		return
+
 	if _thread == null or _thread.is_alive():
 		return
 
@@ -183,6 +205,70 @@ func _start_read() -> bool:
 		return false
 
 	return true
+
+
+## Reads stdin through a helper process instead of a thread, where there is a shell.
+##
+## [b]A thread blocked in the engine's read keeps the process from exiting.[/b] The read
+## holds stdio's lock on stdin, and the C library takes that lock when the process ends:
+## `quit` (or dot-cloud's auto-update `quit(75)`) on a terminal or an open pipe, which is
+## what a panel attaches, then hangs until a key is pressed, the supervisor kills it, and
+## the restart code never arrives. The helper (`cat`) inherits stdin, appends what it
+## reads to a file, and is killed in [method _exit_tree]; nothing of ours is ever blocked.
+func _start_tap() -> bool:
+	if OS.get_name() not in ["Linux", "FreeBSD", "NetBSD", "OpenBSD", "macOS"]:
+		return false
+	if not FileAccess.file_exists("/bin/sh"):
+		return false
+
+	var dir := OS.get_user_data_dir()
+	DirAccess.make_dir_recursive_absolute(dir)
+	_tap_path = dir.path_join("stdin-%d.tap" % OS.get_process_id())
+	var f := FileAccess.open(_tap_path, FileAccess.WRITE)
+	if f == null:
+		return false
+	f.close()
+
+	_tap_pid = OS.create_process("/bin/sh", ["-c", "exec cat >> \"$1\"", "sh", _tap_path])
+	if _tap_pid <= 0:
+		_tap_pid = -1
+		DirAccess.remove_absolute(_tap_path)
+		return false
+	_tap_offset = 0
+	_tap_partial = ""
+	return true
+
+
+func _poll_tap(delta: float) -> void:
+	_tap_clock += delta
+	if _tap_clock < TAP_POLL_SEC:
+		return
+	_tap_clock = 0.0
+
+	var alive := OS.is_process_running(_tap_pid)
+	var f := FileAccess.open(_tap_path, FileAccess.READ)
+	var got := ""
+	if f != null:
+		var size := f.get_length()
+		if size > _tap_offset:
+			f.seek(_tap_offset)
+			got = f.get_buffer(size - _tap_offset).get_string_from_utf8()
+			_tap_offset = size
+		f.close()
+
+	if got != "":
+		_tap_partial += got
+		var lines := _tap_partial.split("\n")
+		_tap_partial = lines[lines.size() - 1]
+		lines.remove_at(lines.size() - 1)
+		for line in lines:
+			if line.strip_edges() != "":
+				_run(line)
+		return
+
+	if not alive:
+		set_process(false)
+		DotLog.info(CHANNEL, "end of input; console input is off")
 
 
 func _run(line: String) -> void:
@@ -225,18 +311,18 @@ func _run(line: String) -> void:
 func _exit_tree() -> void:
 	_stop = true
 
+	if _tap_pid > 0:
+		OS.kill(_tap_pid)
+		_tap_pid = -1
+		DirAccess.remove_absolute(_tap_path)
+		return
+
 	if _thread == null:
 		return
 
-	# [b]Joined only when it has already finished.[/b] A reader blocked in
-	# `read_string_from_stdin` cannot be woken -- the engine offers no way to cancel one
-	# -- so `wait_to_finish()` on it would hang the shutdown until somebody pressed
-	# enter, turning ctrl-c into a server that will not stop. Leaving it costs one
-	# "Thread object is being destroyed" warning at exit, and because the thread is in
-	# the engine's own read rather than a GDScript frame the process exits 0 (measured
-	# on a pty with script(1): `quit` and ctrl-c, Godot 4.7.2). After `quit` there is no
-	# blocked read at all: [method _process] does not start one once the server is down.
-	# On an open pipe nobody closes, see [member read_pipes].
+	# Joined only when finished: a blocked engine read cannot be cancelled, so joining it
+	# would make ctrl-c hang. This path is only a file, or a host with no shell (see
+	# _start_tap); a terminal or pipe never has a blocked thread to leave behind.
 	if not _thread.is_alive():
 		_thread.wait_to_finish()
 
@@ -245,7 +331,8 @@ func _exit_tree() -> void:
 
 func describe() -> Dictionary:
 	return {
-		"reading": _thread != null and _thread.is_alive(),
+		"reading": _tap_pid > 0 or (_thread != null and _thread.is_alive()),
+		"helper": _tap_pid > 0,
 		"stdin_type": OS.get_stdin_type(),
 		"read_pipes": read_pipes,
 		"empty_reads": _empty_reads,
