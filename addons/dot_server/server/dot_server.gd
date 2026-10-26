@@ -25,6 +25,7 @@ extends Node
 ##
 ## Registers itself as [code]dot_server[/code] in [DotRegistry].
 
+const Cvars := preload("dot_server_cvars.gd")
 const CHANNEL := "server"
 const SERVICE := &"dot_server"
 
@@ -1545,22 +1546,8 @@ func _on_credentials(peer_id: int, payload: Dictionary) -> void:
 		_reject_session(session, platform_refusal)
 		return
 
-	var server_password := _cv_password.get_string()
-	if server_password != "":
-		var supplied := str(payload.get("password", ""))
-		if not DotHash.constant_time_equal(
-			supplied.to_utf8_buffer(), server_password.to_utf8_buffer()
-		):
-			# Checked before authentication so an unauthenticated client cannot use
-			# the auth path to probe anything, and after the name so the log line
-			# says who tried.
-			DotLog.info(
-				CHANNEL,
-				"wrong server password",
-				{"userid": session.userid, "from": session.address}
-			)
-			_reject_session(session, "Incorrect server password.")
-			return
+	if _password_refused(session, payload):
+		return
 
 	var identity := await _authenticate(session, payload)
 
@@ -1603,6 +1590,20 @@ func _on_credentials(peer_id: int, payload: Dictionary) -> void:
 	)
 
 	_enter_profile(session)
+
+
+## True (and the session rejected) when the server has a password and the payload's differs.
+## Checked before authentication so an unauthenticated client cannot probe the auth path.
+func _password_refused(session: DotClientSession, payload: Dictionary) -> bool:
+	var server_password := _cv_password.get_string()
+	if server_password == "":
+		return false
+	var supplied := str(payload.get("password", ""))
+	if DotHash.constant_time_equal(supplied.to_utf8_buffer(), server_password.to_utf8_buffer()):
+		return false
+	DotLog.info(CHANNEL, "wrong server password", {"userid": session.userid, "from": session.address})
+	_reject_session(session, "Incorrect server password.")
+	return true
 
 
 # --- The PROFILE stage -------------------------------------------------------
@@ -2934,61 +2935,7 @@ func _register_cvars() -> void:
 		DotConVar.FLAG_ARCHIVE
 	)
 
-	# Registered here, before server.cfg runs, so a config file can turn either
-	# query protocol on or off — the same layering promise every other setting
-	# makes. At runtime they stop the listener answering rather than closing its
-	# socket, so toggling one back on is immediate.
-	console.cvar(
-		"sv_query",
-		"1" if config.query_enabled else "0",
-		"Answer dot query protocol requests.",
-		DotConVar.FLAG_ARCHIVE
-	)
-
-	console.cvar(
-		"sv_a2s",
-		"1" if config.a2s_enabled else "0",
-		"Answer A2S query requests.",
-		DotConVar.FLAG_ARCHIVE
-	)
-
-	console.cvar(
-		"sv_query_players",
-		config.query_player_detail,
-		"How much of the player list a query may see: full, names, count or none.",
-		DotConVar.FLAG_ARCHIVE
-	).with_validator(
-		func(value: String) -> DotResult:
-			if ["full", "names", "count", "none"].has(value):
-				return DotResult.success(value)
-			return DotResult.fail(
-				DotError.CODE_INVALID,
-				"sv_query_players must be full, names, count or none.",
-				"got '%s'" % value
-			)
-	)
-
-	console.cvar(
-		"sv_reserved_slots",
-		str(config.reserved_slots),
-		"Slots kept for players with the reservation flag.",
-		DotConVar.FLAG_ARCHIVE
-	).with_range(0, 64)
-
-	# Live, not startup-only: an operator turns this on because something is happening
-	# right now, and a limit they have to restart to apply is one that arrives after the
-	# server has already been filled.
-	console.cvar(
-		"sv_max_connections_per_ip",
-		str(config.max_connections_per_ip),
-		"Simultaneous connections allowed from one address. 0 for no limit.",
-		DotConVar.FLAG_ARCHIVE
-	).with_range(0, 64).changed.connect(
-		func(_old: String, value: String) -> void:
-			config.max_connections_per_ip = value.to_int()
-			if address_guard != null:
-				address_guard.limit = value.to_int()
-	)
+	Cvars.register_query(self)
 
 	# Applying the cvar to the live config keeps the two views from drifting: a
 	# reader of config.max_players must not see a stale value after an admin
@@ -3025,51 +2972,7 @@ func _register_cvars() -> void:
 			else:
 				config.hibernate_when_empty = value.to_int() != 0
 	)
-
-
-	# [b]Threads: live, and only the count and the opt-ins.[/b] The config is what the game's
-	# wiring reads each snapshot or tick (net_snapshot_workers, npc_workers), so writing it is
-	# the whole of "apply". The physics engine is not here: it is fixed before any script runs.
-	console.cvar(
-		"sv_worker_threads", str(config.worker_threads),
-		"Worker threads each threaded subsystem may use. -1 automatic (cores less one, at most 8; set it when several servers share a machine), 0 runs everything on the main thread.",
-		DotConVar.FLAG_ARCHIVE
-	).with_range(-1, 64).changed.connect(
-		func(_old: String, value: String) -> void:
-			config.worker_threads = value.to_int()
-	)
-	console.cvar(
-		"sv_threads_net", "1" if config.threads_net else "0",
-		"Build each player's snapshot on worker threads (sv_worker_threads of them).",
-		DotConVar.FLAG_ARCHIVE
-	).changed.connect(
-		func(_old: String, value: String) -> void:
-			config.threads_net = value.to_int() != 0
-	)
-	console.cvar(
-		"sv_threads_npc", "1" if config.threads_npc else "0",
-		"Run NPC decisions and path searches on worker threads, for brains that support it.",
-		DotConVar.FLAG_ARCHIVE
-	).changed.connect(
-		func(_old: String, value: String) -> void:
-			config.threads_npc = value.to_int() != 0
-	)
-	console.cvar(
-		"net_native", "1" if config.net_native else "0",
-		"Build snapshots in dot-net's native library (same bytes; GDScript if it cannot load).",
-		DotConVar.FLAG_ARCHIVE
-	).changed.connect(
-		func(_old: String, value: String) -> void:
-			config.net_native = value.to_int() != 0
-	)
-	console.cvar(
-		"net_native_interest", "1" if config.net_native_interest else "0",
-		"With net_native, also pick each peer's relevant entities in the native library (GDScript for a strategy it cannot port).",
-		DotConVar.FLAG_ARCHIVE
-	).changed.connect(
-		func(_old: String, value: String) -> void:
-			config.net_native_interest = value.to_int() != 0
-	)
+	Cvars.register_threads(self)
 
 
 ## Reads cvars back into the config after server.cfg has run.

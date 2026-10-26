@@ -552,21 +552,9 @@ func _swap_to(descriptor: DotGameDescriptor) -> DotResult:
 
 	_current = descriptor
 
-	# The game's own cvars, then the per-game config, so an operator can set
-	# different rules per map without a module. The usual per-map cfg convention.
-	#
-	# [b]`descriptor.cvars` was declared and applied by nothing.[/b] The identifier
-	# occurred exactly once in this repository — the export on DotGameDescriptor,
-	# documented as "cvars applied when this game loads" — which is this family's own
-	# mechanical detector for a setting nothing reads. A `cvars:` block in a game
-	# descriptor was documented behaviour that did not exist, and it failed the way
-	# those always do: silently, with the server running the previous game's rules
-	# under the new game's name.
-	#
-	# Through `set_cvar` rather than by writing anything directly, because the console
-	# is the validator, the range clamp and the change notification — a game that set
-	# `sv_gravity` behind the console's back would move nobody, since what reaches the
-	# simulation is the `changed` signal.
+	# The game's own cvars, then the per-game config (the usual per-map cfg convention). Through
+	# `set_cvar`, so the console's validator, clamp and `changed` signal apply: a direct write
+	# would move nobody, since the simulation hears the signal.
 	_apply_descriptor_cvars(descriptor, false)
 
 	if server.console != null:

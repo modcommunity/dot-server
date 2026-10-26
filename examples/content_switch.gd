@@ -1,50 +1,17 @@
 extends Node
 
-## Changing to a game whose content is DELIVERED, with a real client attached.
+## Changing to a game whose content is DELIVERED, with a real client attached. Exits non-zero
+## on any failure: [code]godot --headless --path . res://examples/content_switch.tscn[/code]
 ##
-## [codeblock]
-## godot --headless --path . res://examples/content_switch.tscn
-## [/codeblock]
+## Every other suite switches between games shipped in the build, where `manifest_url` is empty
+## and [method DotGameManager.change_game] skips the whole content sync: announce, download,
+## per-client readiness wait, timeout and re-load. This file is the first thing to run them.
+## It guards: the server fetching its own content, a client reporting the right key during a
+## sync (deliberately the OLD game's) not being kicked, a stale content key not passing for
+## ready on the second change to a game, and the progress subscription being made only once.
 ##
-## Exits non-zero on any failure.
-##
-## [b]Why this exists when the family already switches games under a live client.[/b]
-## Every game in every suite in this family ships inside its build. `manifest_url` is
-## empty for all of them, and [method DotGameManager.change_game] skips the whole of
-## [method DotGameManager._sync_clients] when it is — so the announce, the download, the
-## per-client readiness wait, the timeout and the re-load were the four hundred lines
-## that nothing had ever executed. Everything below the first section is a code path
-## that this file is the first thing to reach, which is this family's own recurring
-## lesson: [i]a code path only one deployment shape reaches is a code path nothing has
-## run.[/i]
-##
-## It found four, all parse-clean and none of which produced an error where it was
-## written:
-##
-## - [b]The server never fetched its own content.[/b] `change_game` announced the pack,
-##   waited for every client to download it, and then loaded
-##   [code]res://dot_cloud/<id>/<version>/<scene>[/code] — a path that exists only
-##   because something mounted the pack, and nothing on the server ever did. A
-##   delivered game could not be loaded at all; it failed with "the game scene is
-##   missing" and restored the previous game, which reads as a bad scene name.
-## - [b]Every client was kicked the moment it did the right thing.[/b]
-##   `report_content_ready` compared the key a client reported against
-##   [method DotGameManager.current_content_key] — and for the whole of a sync that is
-##   deliberately the OLD game, because the point of the sync is that clients get the
-##   new content before the server swaps. The correct answer looked wrong and the
-##   client was dropped with "Your game content does not match the server's."
-## - [b]A stale content key made a client look ready before it had been told.[/b]
-##   `content_key` was never cleared when a sync began, so on the second change TO a
-##   game a client had already played, the wait loop matched on the first pass and the
-##   swap went out to clients still downloading.
-## - [b]The download progress subscription was made again on every change.[/b] A fresh
-##   lambda is a fresh [Callable], so the `is_connected` guard never matched its own
-##   handler.
-##
-## Two [MultiplayerAPI] instances in one process, scoped with
-## [method SceneTree.set_multiplayer], because there is one [member SceneTree.multiplayer]
-## and both halves want it. Both link nodes are named [code]Server[/code] — RPCs are
-## routed by node path relative to each API root, so the name is the routing.
+## Two [MultiplayerAPI] instances in one process (one [member SceneTree.multiplayer] is not
+## enough), with both link nodes named [code]Server[/code]: RPCs route by node path.
 
 const DATA := "user://dot_server_content_switch"
 const DIST := DATA + "/dist"

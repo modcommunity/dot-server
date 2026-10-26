@@ -1,10 +1,7 @@
 extends Node
 
 ## The yml layout of dot-server's group and permission files: new path, flat shim, operator layer.
-##
-## [codeblock]
-## timeout 120 godot --headless --path . res://examples/cfg_selftest.tscn
-## [/codeblock]
+## Run: [code]godot --headless --path . res://examples/cfg_selftest.tscn[/code]
 
 const FOLDER := "dot_server"
 const LEGACY := "user://dot_server_cfg_selftest_legacy"

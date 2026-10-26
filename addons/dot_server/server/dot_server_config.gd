@@ -122,38 +122,20 @@ extends DotConfig
 
 ## Seconds of silence allowed a client that has announced its tab is in the background.
 ##
-## [b]A browser stops the Godot main loop for a hidden tab.[/b] It stops calling
-## [code]requestAnimationFrame[/code], so [code]_process[/code], every [Timer] and the
-## multiplayer poll all stop together: the client sends no heartbeat and reads nothing
-## while its socket stays open. Under [member client_timeout_sec] alone, switching tabs
-## for a minute is indistinguishable from a machine that died, and the player is dropped.
-##
-## A client announces the switch on its way out and asks for a budget; this is the
-## ceiling on what it gets. 0 refuses the grace entirely and restores the old
-## behaviour.
-##
-## [b]Do not set this to an hour.[/b] The server goes on sending to a client that is
-## not reading, and those bytes queue — in the game's own per-peer send, and then in
-## the socket. The longer the grace, the bigger the burst the player gets on their way
-## back in, and the more a parked tab costs everybody still playing. Minutes, not
-## tens of minutes.
+## A browser stops the main loop for a hidden tab: no heartbeat, no reads, socket open. The
+## client asks for a budget and this is the ceiling; 0 refuses grace entirely.
+## [b]Keep it to minutes[/b]: the server keeps queueing sends to a client that is not reading.
 @export_range(0.0, 1800.0, 15.0) var background_grace_max_sec: float = 300.0
 
 @export_group("Hibernation")
 
-## Reduce tick processing when nobody is connected.
+## Reduce tick processing when nobody is connected (cvar `sv_hibernate_when_empty`, live).
 ##
-## An empty dedicated server has nothing to simulate, and a box hosting twelve of
-## them should not spend twelve cores on it. The cvar is `sv_hibernate_when_empty`, live.
-##
-## [b]On (the default), an empty server is idle[/b]: from boot and from the moment the last
-## player leaves it ticks at [member hibernate_tickrate], and whatever follows
-## [signal DotServer.hibernation_changed] — a map's time limit, a vote's clock — stops
-## counting and starts again from its configured value when somebody joins.
-##
-## [b]Off, an empty server keeps playing.[/b] Its clocks run, and when a map's time is up
-## with nobody to vote, dot-vote draws the next map at random from what the ballot would
-## have offered ([code]DotVoteRules.empty_choice[/code]) and the server carries on.
+## [b]On (the default)[/b], an empty server ticks at [member hibernate_tickrate] and whatever
+## follows [signal DotServer.hibernation_changed] (a map's time limit, a vote's clock) waits
+## and restarts from its configured value when somebody joins.
+## [b]Off[/b], its clocks run, and with nobody to vote dot-vote draws the next map at random
+## ([code]DotVoteRules.empty_choice[/code]).
 @export var hibernate_when_empty: bool = true
 
 ## Ticks per second while hibernating.

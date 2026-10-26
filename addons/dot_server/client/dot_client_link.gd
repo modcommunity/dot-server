@@ -25,6 +25,7 @@ extends Node
 ## [/codeblock]
 
 const CHANNEL := "client"
+const Credentials := preload("dot_client_credentials.gd")
 const SERVICE := &"dot_client_link"
 const CHANNEL_CONTROL := DotTransport.Channel.CONTROL
 const CHANNEL_EVENT := DotTransport.Channel.EVENT
@@ -292,6 +293,8 @@ var _visibility_key: String = ""
 
 ## The cloud progress subscription, kept so it is only ever made once.
 var _progress_handler: Callable = Callable()
+
+var _creds := Credentials.new(self)
 
 ## The kinds this client knows, and what the server it is talking to knows. See
 ## [DotEnvelope]. A kind this client does not handle is dropped with a DEBUG line; one the
@@ -755,8 +758,7 @@ func _on_challenge(_peer_id: int, challenge: Dictionary) -> void:
 			"why": adopted.error.message, "detail": adopted.error.detail,
 		})
 
-	# Challenged, so the connection is a conversation rather than a socket. Whatever
-	# fails after this has a stage of its own to be reported against.
+	# Challenged: whatever fails after this is reported against its own stage.
 	if _signon_watchdog != null:
 		_signon_watchdog.stop()
 
@@ -776,7 +778,7 @@ func _on_challenge(_peer_id: int, challenge: Dictionary) -> void:
 		"name": player_name,
 		# Stable per install, so a guest can be muted or kicked for a session
 		# without anything that survives a reinstall.
-		"device_id": _device_id(),
+		"device_id": Credentials.device_id(),
 		# What this client can say and hear. The server decides from it whether the two
 		# can play; see [DotEnvelope].
 		"kinds": envelope.advert(),
@@ -792,7 +794,7 @@ func _on_challenge(_peer_id: int, challenge: Dictionary) -> void:
 	var strategy := str(challenge.get("auth", "none")).to_lower()
 	if not _may_send_credential_here(strategy):
 		return
-	if not await _attach_credential(payload, strategy):
+	if not await _creds.attach_credential(payload, strategy):
 		return
 
 	send_kind(DotEnvelope.CREDENTIALS, payload)
@@ -841,159 +843,11 @@ static func platform_kind() -> String:
 	return "desktop"
 
 
-## Adds whatever credential the server's strategy asks for.
-##
-## Deliberately sends only what was asked. A client that volunteers its access token
-## to a server requesting a ticket would defeat the point of tickets — see
-## dot-auth's docs/tickets.md.
-##
-## [b]An INTROSPECT server never gets the account's access token.[/b] Anything handed
-## to a game server reaches its operator, and that token works on every app route
-## for an hour. The client mints a single-use join token for the audience the server
-## announced, and only when that audience is on [member DotAuthConfig.first_party_audiences];
-## otherwise it falls back to a connect ticket, and with no issuer it refuses the join
-## in words. Returns false when it has already failed the join and disconnected.
-func _attach_credential(payload: Dictionary, strategy: String) -> bool:
-	var auth := DotRegistry.get_service(auth_service)
-
-	if auth == null:
-		if strategy != "none" and strategy != "anonymous":
-			DotLog.warn(
-				CHANNEL,
-				"this server wants authentication but dot-auth is not installed",
-				{"strategy": strategy}
-			)
-		return true
-
-	match strategy:
-		"ticket":
-			await _attach_ticket(payload, auth)
-
-		"introspect":
-			return await _attach_introspect(payload, auth)
-
-		"local":
-			# Username and password for a LOCAL-strategy server come from a UI this
-			# node does not own; a game sets them before connecting.
-			pass
-
-	return true
-
-
-## A connect ticket for the server this client DIALLED. The address is the one passed
-## to [method connect_to_server], never what the server announced: a hostile server
-## naming another's id would get a ticket valid there. An older dot-auth without
-## `request_ticket_for_address` asks by the announced [member server_id] instead.
-## The server's challenge nonce binds the ticket to this connection. Returns whether
-## one was attached.
-func _attach_ticket(payload: Dictionary, auth: Object) -> bool:
-	var ticket: Variant = null
-	if auth.has_method("request_ticket_for_address"):
-		var dialled := _last_address.strip_edges()
-		if dialled == "":
-			return false
-		if _ticket_nonce != "" and auth.get_method_argument_count("request_ticket_for_address") >= 3:
-			ticket = await auth.call("request_ticket_for_address", dialled, "", _ticket_nonce)
-		else:
-			ticket = await auth.call("request_ticket_for_address", dialled)
-	elif auth.has_method("request_ticket"):
-		var issuer := _issuer_url()
-		if issuer == "" or server_id == "":
-			DotLog.warn(CHANNEL, "cannot ask for a ticket: no issuer or no server_id")
-			return false
-		ticket = await auth.call("request_ticket", issuer, server_id)
-	else:
-		return false
-
-	if ticket is DotResult and (ticket as DotResult).ok:
-		payload["ticket"] = str((ticket as DotResult).value)
-		return true
-	var err: DotError = (ticket as DotResult).error if ticket is DotResult else null
-	DotLog.warn(CHANNEL, "no connect ticket for this server", {
-		"address": _last_address,
-		"why": err.message if err != null else "unexpected reply",
-		"code": err.detail if err != null else "",
-	})
-	return false
-
-
-func _attach_introspect(payload: Dictionary, auth: Object) -> bool:
-	var audience := server_join_audience
-
-	# First-party: a join token. A server that lies about its audience gains nothing
-	# — the backbone spends the token only for the credential that audience names.
-	if audience != "" and auth.has_method("is_first_party") \
-			and bool(auth.call("is_first_party", audience)) \
-			and auth.has_method("request_join_token"):
-		var minted: Variant = await auth.call("request_join_token", audience)
-		if minted is DotResult and (minted as DotResult).ok:
-			payload["access_token"] = str((minted as DotResult).value)
-			return true
-		var err: DotError = (minted as DotResult).error if minted is DotResult else null
-		_refuse_introspect(
-			err.message if err != null else "Could not get a sign-in for this server.",
-			"join token mint failed for %s" % audience
-		)
-		return false
-
-	# Not one of ours: a connect ticket for the address we dialled.
-	if await _attach_ticket(payload, auth):
-		return true
-
-	_refuse_introspect(
-		"This server asks for your account sign-in, which this game only gives to its own servers.",
-		"introspect refused: audience %s is not first-party and no ticket was available" % (
-			audience if audience != "" else "(not announced)"
-		)
-	)
-	return false
-
-
-func _refuse_introspect(message: String, detail: String) -> void:
-	var err := DotError.make(DotError.CODE_FORBIDDEN, message, detail)
-	DotLog.warn(CHANNEL, "not signing in to this server", {
-		"why": detail, "host": server_hostname,
-	})
-	_fail(err)
-	disconnect_from_server(err.message)
-
-
 func _rejoin_over_websocket() -> void:
 	_secure_rejoin = true
 	disconnect_from_server()
 	await connect_to_server(_last_address, _password)
 	_secure_rejoin = false
-
-
-func _issuer_url() -> String:
-	var auth := DotRegistry.get_service(auth_service)
-	if auth == null:
-		return ""
-	var config: Variant = auth.get("config")
-	if config == null:
-		return ""
-	var url: Variant = config.get("ticket_issuer_url")
-	return str(url) if url != null else ""
-
-
-static func _device_id() -> String:
-	# Asked of DotPlatform rather than of the OS. `OS.get_unique_id()` does not fail
-	# quietly on web and iOS -- it pushes an engine error and THEN returns "" -- so the
-	# emptiness check below, which is correct, still printed a red line on the page of
-	# every browser client before taking the branch it was written for.
-	var unique := DotPlatform.unique_id()
-	if unique != "":
-		return unique
-	# Web and some sandboxes have no unique id. A stored random value is stable
-	# enough for the session-scoped uses this has.
-	var path := "user://dot_device_id"
-	if FileAccess.file_exists(path):
-		var read := DotPaths.read_text(path)
-		if read.ok and str(read.value) != "":
-			return str(read.value)
-	var generated := DotHash.random_hex(16)
-	DotPaths.write_text(path, generated)
-	return generated
 
 
 # --- Content ---------------------------------------------------------------
@@ -1302,26 +1156,9 @@ func _on_load_game(_peer_id: int, info: Dictionary) -> void:
 			return
 
 	var t0 := Time.get_ticks_usec()
-	var packed: Resource = null
-	if is_inside_tree() and DotPlatform.has_threads() \
-			and ResourceLoader.load_threaded_request(resolved) == OK:
-		while true:
-			var progress: Array = []
-			var status := ResourceLoader.load_threaded_get_status(resolved, progress)
-			if status == ResourceLoader.THREAD_LOAD_IN_PROGRESS:
-				if progress.size() > 0:
-					download_progress.emit(float(progress[0]), "Loading…")
-				await get_tree().process_frame
-				if gen != _load_gen or not is_inside_tree():
-					return
-				continue
-			if status == ResourceLoader.THREAD_LOAD_LOADED:
-				packed = ResourceLoader.load_threaded_get(resolved)
-			break
-		if gen != _load_gen:
-			return
-	else:
-		packed = load(resolved)
+	var packed: Variant = await _load_scene_resource(resolved, gen)
+	if packed is bool:
+		return
 	var t1 := Time.get_ticks_usec()
 	if not (packed is PackedScene):
 		_fail(DotError.make(
@@ -1366,6 +1203,30 @@ func _on_load_game(_peer_id: int, info: Dictionary) -> void:
 
 	send_kind(DotEnvelope.LOADED)
 	_enter_playing()
+
+
+## Loads the scene at [param resolved], threaded where the platform has threads and
+## reporting progress. Returns the resource (null if it failed), or [code]false[/code] when
+## the load was superseded or the link left the tree.
+func _load_scene_resource(resolved: String, gen: int) -> Variant:
+	if not (is_inside_tree() and DotPlatform.has_threads()
+			and ResourceLoader.load_threaded_request(resolved) == OK):
+		return load(resolved)
+	var packed: Resource = null
+	while true:
+		var progress: Array = []
+		var status := ResourceLoader.load_threaded_get_status(resolved, progress)
+		if status == ResourceLoader.THREAD_LOAD_IN_PROGRESS:
+			if progress.size() > 0:
+				download_progress.emit(float(progress[0]), "Loading…")
+			await get_tree().process_frame
+			if gen != _load_gen or not is_inside_tree():
+				return false
+			continue
+		if status == ResourceLoader.THREAD_LOAD_LOADED:
+			packed = ResourceLoader.load_threaded_get(resolved)
+		break
+	return false if gen != _load_gen else packed
 
 
 ## Everything that has to happen once the join is complete.

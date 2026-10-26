@@ -45,6 +45,8 @@ extends Node
 ## godot --headless --path . res://examples/signon_revision.tscn
 ## [/codeblock]
 
+const StandIns := preload("selftest/signon_stand_ins.gd")
+const Profile := preload("selftest/signon_profile.gd")
 const PORT := 27717
 
 ## How many checks a clean run makes. A section that aborts part-way stops adding checks,
@@ -98,7 +100,7 @@ func _run() -> void:
 		await _test_introspect_refuses_a_server_not_ours()
 		await _test_a_ticket_is_asked_for_by_the_dialled_address()
 		await _test_an_account_holds_one_seat()
-		await _test_the_profile_stage()
+		await Profile.new(self).run()
 
 	_teardown()
 
@@ -900,11 +902,11 @@ func _test_a_secret_never_rides_udp() -> void:
 	_section("a sign-in that sends a secret never sends it over UDP")
 
 	var seen: Array[Dictionary] = []
-	var server_auth := _AuthStandIn.new()
+	var server_auth := StandIns._AuthStandIn.new()
 	server_auth.on_authenticate = func(credential: Dictionary) -> void:
 		var counts: Dictionary = _server.multiplayer.multiplayer_peer.call("peer_counts")
 		seen.append({"token": credential.get("access_token", ""), "enet": counts["enet"]})
-	var client_auth := _TokenStandIn.new()
+	var client_auth := StandIns._TokenStandIn.new()
 	DotRegistry.register(&"dot_auth_server", server_auth)
 	DotRegistry.register(&"dot_auth_client", client_auth)
 
@@ -914,13 +916,13 @@ func _test_a_secret_never_rides_udp() -> void:
 
 	_check(link.transport_used == "websocket", "the client rejoined over WebSocket (%s)" % link.transport_used)
 	var over_udp := seen.filter(func(c: Dictionary) -> bool: return c["enet"] > 0)
-	var with_join := seen.filter(func(c: Dictionary) -> bool: return c["token"] == _TokenStandIn.JOIN)
-	var with_secret := seen.filter(func(c: Dictionary) -> bool: return c["token"] == _TokenStandIn.SECRET)
+	var with_join := seen.filter(func(c: Dictionary) -> bool: return c["token"] == StandIns._TokenStandIn.JOIN)
+	var with_secret := seen.filter(func(c: Dictionary) -> bool: return c["token"] == StandIns._TokenStandIn.SECRET)
 	_check(over_udp.is_empty(), "no credentials at all arrived while it was on ENet (%d)" % over_udp.size())
 	_check(with_join.size() == 1, "and a join token arrived once, over WebSocket")
 	_check(with_secret.is_empty(), "and the account's access token never arrived at all")
 	_check(
-		client_auth.minted_for == [_AuthStandIn.AUDIENCE],
+		client_auth.minted_for == [StandIns._AuthStandIn.AUDIENCE],
 		"minted for the audience the server announced", str(client_auth.minted_for)
 	)
 
@@ -937,11 +939,11 @@ func _test_introspect_refuses_a_server_not_ours() -> void:
 	_section("an introspect server not on the first-party list never gets a token")
 
 	var seen: Array[Dictionary] = []
-	var server_auth := _AuthStandIn.new()
+	var server_auth := StandIns._AuthStandIn.new()
 	server_auth.audience = "server:999"
 	server_auth.on_authenticate = func(credential: Dictionary) -> void:
 		seen.append(credential.duplicate())
-	var client_auth := _TokenStandIn.new()
+	var client_auth := StandIns._TokenStandIn.new()
 	DotRegistry.register(&"dot_auth_server", server_auth)
 	DotRegistry.register(&"dot_auth_client", client_auth)
 
@@ -970,11 +972,11 @@ func _test_a_ticket_is_asked_for_by_the_dialled_address() -> void:
 	_section("a ticket is asked for by the address the client dialled")
 
 	var seen: Array[Dictionary] = []
-	var server_auth := _AuthStandIn.new()
+	var server_auth := StandIns._AuthStandIn.new()
 	server_auth.strategy = "ticket"
 	server_auth.on_authenticate = func(credential: Dictionary) -> void:
 		seen.append(credential.duplicate())
-	var client_auth := _TicketStandIn.new()
+	var client_auth := StandIns._TicketStandIn.new()
 	DotRegistry.register(&"dot_auth_server", server_auth)
 	DotRegistry.register(&"dot_auth_client", client_auth)
 
@@ -985,7 +987,7 @@ func _test_a_ticket_is_asked_for_by_the_dialled_address() -> void:
 	_check(client_auth.addresses == ["127.0.0.1:%d" % PORT],
 		"the ticket was asked for by the dialled address", str(client_auth.addresses))
 	_check(client_auth.ids.is_empty(), "never by an id the server announced", str(client_auth.ids))
-	_check(seen.size() == 1 and str(seen[0].get("ticket", "")) == _TicketStandIn.TICKET
+	_check(seen.size() == 1 and str(seen[0].get("ticket", "")) == StandIns._TicketStandIn.TICKET
 			and str(seen[0].get("access_token", "")) == "",
 		"and the server got the ticket and no token", str(seen))
 	_check(client_auth.nonces.size() == 1 and client_auth.nonces[0].length() >= 16,
@@ -1000,65 +1002,13 @@ func _test_a_ticket_is_asked_for_by_the_dialled_address() -> void:
 	_done()
 
 
-## dot-auth's client half for tickets: records what it was asked by.
-class _TicketStandIn extends RefCounted:
-	const TICKET := "ticket-for-the-test"
-	var addresses: Array[String] = []
-	var ids: Array[String] = []
-	var nonces: Array[String] = []
-
-	func request_ticket_for_address(address: String, _issuer := "", nonce := "") -> DotResult:
-		addresses.append(address)
-		nonces.append(nonce)
-		return DotResult.success(TICKET)
-
-	func request_ticket(_issuer: String, server_id: String) -> DotResult:
-		ids.append(server_id)
-		return DotResult.success(TICKET)
-
-
-## dot-auth's server half, as far as dot-server asks: a strategy and a verdict.
-class _AuthStandIn extends RefCounted:
-	const AUDIENCE := "server:7"
-	var on_authenticate: Callable
-	var audience: String = AUDIENCE
-	var strategy: String = "introspect"
-	var nonces: Array[String] = []
-
-	func strategy_name() -> String:
-		return strategy
-
-	func join_audience() -> String:
-		return audience
-
-	func authenticate(credential: Dictionary, _address: String, connection_nonce := "") -> DotResult:
-		nonces.append(connection_nonce)
-		on_authenticate.call(credential)
-		return DotResult.fail(DotError.CODE_AUTH, "stand-in refuses everybody")
-
-
-## Lets everybody in as the same account, for `sv_single_seat`.
-class _SameAccountStandIn extends RefCounted:
-	func strategy_name() -> String:
-		return "local"
-
-	func authenticate(_credential: Dictionary, _address: String, _nonce := "") -> DotResult:
-		return DotResult.success(_Account.new())
-
-
-class _Account extends RefCounted:
-	var uid := "tmc:the-same-account"
-	var display_name := "Twin"
-	var is_guest := false
-
-
 ## [b]One account, one seat:[/b] signing in again replaces the older connection, so a
 ## player whose old connection is still timing out comes straight back. Armed by
 ## `sv_single_seat 0`, under which both stay.
 func _test_an_account_holds_one_seat() -> void:
 	_section("an account signing in again replaces its older connection")
 
-	var auth := _SameAccountStandIn.new()
+	var auth := StandIns._SameAccountStandIn.new()
 	DotRegistry.register(&"dot_auth_server", auth)
 	var same := func() -> int:
 		return _server.sessions().filter(func(x: DotClientSession) -> bool:
@@ -1088,172 +1038,9 @@ func _test_an_account_holds_one_seat() -> void:
 	_done()
 
 
-## dot-auth's client half: an access token it must never send, and a join token
-## minted only for a first-party audience.
-class _TokenStandIn extends RefCounted:
-	const SECRET := "bearer-secret-for-the-test"
-	const JOIN := "tmc_jt_join-token-for-the-test"
-	var minted_for: Array[String] = []
-
-	func valid_access_token() -> DotResult:
-		return DotResult.success(SECRET)
-
-	func is_first_party(audience: String) -> bool:
-		return audience == _AuthStandIn.AUDIENCE
-
-	func request_join_token(audience: String) -> DotResult:
-		minted_for.append(audience)
-		return DotResult.success(JOIN)
-
-
 # --- Harness ---------------------------------------------------------------
 
 var _links: Dictionary = {}
-# --- 9. The PROFILE stage ---------------------------------------------------
-
-## [b]A module can hold a player between authentication and content, and refuse them
-## before anybody sees them.[/b] Before the stage, the only place a platform could decide
-## about a player was off `client_state_changed`, after the spawn: a refusal was a kick of
-## somebody already in the world, and admission drew everybody as a guest first.
-##
-## Over the real socket, because the claim being tested is about what a CLIENT sees: a
-## held client hears nothing that moves it towards the game (it waits in its own
-## AUTHENTICATING phase, which is also why a client built before the stage still joins),
-## a client claiming to have loaded early does not appear, and a refused one reads the
-## module's sentence and never spawned.
-func _test_the_profile_stage() -> void:
-	_section("a module holds a joining player in PROFILE, and may refuse them unseen")
-
-	# A replay keeps `int(session.state)`, so the stage went on the end of the enum. The
-	# numbers already in records must not have moved.
-	_check(
-		DotClientSession.State.CONNECTING == 0 and DotClientSession.State.AUTHENTICATING == 1
-			and DotClientSession.State.DOWNLOADING == 2 and DotClientSession.State.LOADING == 3
-			and DotClientSession.State.SPAWNED == 4 and DotClientSession.State.REJECTED == 5
-			and DotClientSession.State.DISCONNECTED == 6 and DotClientSession.State.PROFILE == 7,
-		"no stage a record already holds was renumbered"
-	)
-
-	# Each joiner's states as the server announced them, and who the server spawned.
-	var trails: Dictionary = {}
-	var spawned_names: Array[String] = []
-	var holder := func(session: DotClientSession) -> void:
-		if not trails.has(session.display_name):
-			trails[session.display_name] = []
-		(trails[session.display_name] as Array).append(session.state_name())
-		if session.state == DotClientSession.State.PROFILE and session.display_name.begins_with("Held"):
-			_server.hold_profile(session, "test")
-	var on_spawn := func(session: DotClientSession) -> void:
-		spawned_names.append(session.display_name)
-	_server.client_state_changed.connect(holder)
-	_server.client_spawned.connect(on_spawn)
-
-	# Nobody holds an ordinary player: the stage costs them nothing.
-	var passer := _new_link("Passer", Callable())
-	var passed := await _join(passer)
-	_check(passed == "", "with nobody holding, a player passes straight through", passed)
-	var trail: Array = trails.get("Passer", [])
-	_check(
-		trail.find("PROFILE") >= 0 and trail.find("PROFILE") < trail.find("LOADING"),
-		"and did pass through it, before content (%s)" % ", ".join(trail)
-	)
-	var passer_session := _server.session_of(_peer_of("Passer"))
-	_check(
-		passer_session != null and not _server.hold_profile(passer_session, "test")
-			and passer_session.profile_holds.is_empty(),
-		"a player already past the stage cannot be held"
-	)
-
-	# Held: in the stage, and nothing moves it on.
-	var held := _new_link("HeldA", Callable())
-	var _connecting: DotResult = await held.connect_to_server("127.0.0.1:%d" % PORT)
-	var reached := await _until(func() -> bool:
-		var s := _server.session_of(_peer_of("HeldA"))
-		return s != null and s.state == DotClientSession.State.PROFILE, 5.0)
-	var held_session := _server.session_of(_peer_of("HeldA"))
-	_check(
-		reached and held_session != null and held_session.profile_holds == PackedStringArray(["test"]),
-		"a module's hold keeps the player in PROFILE, naming who holds it",
-		held_session.state_name() if held_session != null else "no session"
-	)
-	await _settle(0.75)
-	var held_outcome: Array = _outcomes["HeldA"]
-	_check(
-		held_session.state == DotClientSession.State.PROFILE and not held_outcome[0]
-			and not spawned_names.has("HeldA"),
-		"and it stays there: no content, no load, no spawn on either end"
-	)
-	_check(
-		held.phase == DotClientLink.Phase.AUTHENTICATING,
-		"the client waits in its own signing-in phase, as a client older than the stage would (%s)" % DotClientLink.phase_name(held.phase)
-	)
-
-	# A client that claims to have loaded without being sent a game must not appear.
-	held.send_kind(DotEnvelope.LOADED, {})
-	await _settle(0.3)
-	_check(
-		held_session.state == DotClientSession.State.PROFILE and not spawned_names.has("HeldA"),
-		"a held client that says it has loaded is not spawned"
-	)
-
-	_server.release_profile(held_session, "test")
-	var released := await _until(func() -> bool: return held_outcome[0] and spawned_names.has("HeldA"), 5.0)
-	_check(released and held_session.state == DotClientSession.State.SPAWNED,
-		"the last release sends the player on, and they spawn")
-	_check(held_session.profile_holds.is_empty(), "with no hold left on the session")
-	trail = trails.get("HeldA", [])
-	_check(
-		trail.find("PROFILE") >= 0 and trail.find("PROFILE") < trail.find("SPAWNED"),
-		"through PROFILE, then content (%s)" % ", ".join(trail)
-	)
-
-	# Refused while held: told why, and never in the game.
-	var refused := _new_link("HeldB", Callable())
-	_connecting = await refused.connect_to_server("127.0.0.1:%d" % PORT)
-	await _until(func() -> bool:
-		var s := _server.session_of(_peer_of("HeldB"))
-		return s != null and s.state == DotClientSession.State.PROFILE, 5.0)
-	var refused_session := _server.session_of(_peer_of("HeldB"))
-	_check(
-		refused_session != null and _server.refuse_profile(refused_session, "Make an avatar first."),
-		"a module can refuse a player it holds"
-	)
-	var refused_outcome: Array = _outcomes["HeldB"]
-	var heard := await _until(func() -> bool: return refused_outcome[1] != "", 5.0)
-	_check(heard and refused_outcome[1] == "Make an avatar first.",
-		"and the client reads the module's own sentence", str(refused_outcome[1]))
-	_check(
-		not refused_outcome[0] and not spawned_names.has("HeldB") and _peer_of("HeldB") == 0
-			and refused_session.state == DotClientSession.State.REJECTED,
-		"and was never spawned, and the server has no session for them"
-	)
-	_check(
-		passer_session != null and not _server.refuse_profile(passer_session, "too late"),
-		"a player past the stage cannot be refused in it; that would be a kick"
-	)
-
-	# A hold nobody releases costs the player their join, never the server a slot.
-	var budget := _server.config.profile_timeout_sec
-	_server.config.profile_timeout_sec = 0.5
-	var stuck := _new_link("HeldC", Callable())
-	_connecting = await stuck.connect_to_server("127.0.0.1:%d" % PORT)
-	var stuck_outcome: Array = _outcomes["HeldC"]
-	var dropped := await _until(func() -> bool: return stuck_outcome[1] != "", 5.0)
-	_server.config.profile_timeout_sec = budget
-	_check(
-		dropped and str(stuck_outcome[1]).contains("setting up a profile"),
-		"a hold never released times out on the stage's own budget, in words",
-		str(stuck_outcome[1])
-	)
-	_check(not spawned_names.has("HeldC") and _peer_of("HeldC") == 0, "and that player never appeared either")
-
-	_server.client_state_changed.disconnect(holder)
-	_server.client_spawned.disconnect(on_spawn)
-	for link in [passer, held, refused, stuck]:
-		await _drop_link(link)
-	_done()
-
-
 var _outcomes: Dictionary = {}
 var _playing_before_refusals: int = 0
 

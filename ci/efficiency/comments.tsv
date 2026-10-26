@@ -12,7 +12,7 @@ addons/dot_server/client/dot_client_chat.gd::history	1
 addons/dot_server/client/dot_client_chat.gd::long_block	1
 addons/dot_server/client/dot_client_link.gd::banner	13
 addons/dot_server/client/dot_client_link.gd::history	4
-addons/dot_server/client/dot_client_link.gd::long_block	47
+addons/dot_server/client/dot_client_link.gd::long_block	45
 addons/dot_server/console/dot_builtin_commands.gd::banner	13
 addons/dot_server/console/dot_builtin_commands.gd::long_block	10
 addons/dot_server/console/dot_cmd_context.gd::banner	3
@@ -34,7 +34,7 @@ addons/dot_server/game/dot_game_descriptor.gd::history	1
 addons/dot_server/game/dot_game_descriptor.gd::long_block	15
 addons/dot_server/game/dot_game_manager.gd::banner	5
 addons/dot_server/game/dot_game_manager.gd::history	2
-addons/dot_server/game/dot_game_manager.gd::long_block	26
+addons/dot_server/game/dot_game_manager.gd::long_block	25
 addons/dot_server/moderation/dot_address_guard.gd::long_block	6
 addons/dot_server/moderation/dot_audit_log.gd::banner	2
 addons/dot_server/moderation/dot_audit_log.gd::long_block	5
@@ -62,7 +62,7 @@ addons/dot_server/server/dot_client_session.gd::long_block	20
 addons/dot_server/server/dot_guest_identity.gd::long_block	2
 addons/dot_server/server/dot_server.gd::banner	14
 addons/dot_server/server/dot_server.gd::history	4
-addons/dot_server/server/dot_server.gd::long_block	77
+addons/dot_server/server/dot_server.gd::long_block	76
 addons/dot_server/server/dot_server_config.gd::history	3
 addons/dot_server/server/dot_server_config.gd::long_block	45
 addons/dot_server/vote/dot_vote_manager.gd::banner	4
@@ -78,7 +78,7 @@ examples/fixtures/mixed_world.gd::long_block	1
 examples/mixed_transports.gd::banner	9
 examples/mixed_transports.gd::history	1
 examples/mixed_transports.gd::long_block	2
-examples/signon_revision.gd::banner	11
+examples/signon_revision.gd::banner	10
 examples/signon_revision.gd::commented_code	1
 examples/signon_revision.gd::history	1
-examples/signon_revision.gd::long_block	13
+examples/signon_revision.gd::long_block	12
