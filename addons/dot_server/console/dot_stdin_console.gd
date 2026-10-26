@@ -86,6 +86,7 @@ var _thread: Thread = null
 var _stop := false
 var _empty_reads := 0
 var _tap_pid := -1
+var _tap_error := ""
 var _tap_path := ""
 var _tap_offset := 0
 var _tap_partial := ""
@@ -132,6 +133,13 @@ func setup(p_server: DotServer) -> DotResult:
 			"stdin": kind, "reader": "helper process"
 		})
 		return DotResult.success(true)
+
+	if kind != OS.STD_HANDLE_FILE and kind != OS.STD_HANDLE_CONSOLE:
+		# A blocked read thread on a pipe keeps the process from exiting (quit(75) is lost).
+		DotLog.warn(CHANNEL, "console input is off: the stdin helper process could not start", {
+			"reason": _tap_error
+		})
+		return DotResult.success(false)
 
 	if not _start_read():
 		return DotResult.fail(
@@ -217,8 +225,10 @@ func _start_read() -> bool:
 ## reads to a file, and is killed in [method _exit_tree]; nothing of ours is ever blocked.
 func _start_tap() -> bool:
 	if OS.get_name() not in ["Linux", "FreeBSD", "NetBSD", "OpenBSD", "macOS"]:
+		_tap_error = "no shell on this platform"
 		return false
-	if not FileAccess.file_exists("/bin/sh"):
+	if not FileAccess.file_exists("/bin/sh") or OS.get_environment("DOT_STDIN_NO_HELPER") != "":
+		_tap_error = "/bin/sh unavailable"
 		return false
 
 	var dir := OS.get_user_data_dir()
@@ -226,6 +236,7 @@ func _start_tap() -> bool:
 	_tap_path = dir.path_join("stdin-%d.tap" % OS.get_process_id())
 	var f := FileAccess.open(_tap_path, FileAccess.WRITE)
 	if f == null:
+		_tap_error = "cannot write %s" % _tap_path
 		return false
 	f.close()
 
@@ -233,6 +244,7 @@ func _start_tap() -> bool:
 	if _tap_pid <= 0:
 		_tap_pid = -1
 		DirAccess.remove_absolute(_tap_path)
+		_tap_error = "create_process failed"
 		return false
 	_tap_offset = 0
 	_tap_partial = ""
