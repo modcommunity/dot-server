@@ -165,14 +165,14 @@ extends DotConfig
 @export var threads_npc: bool = false
 
 ## Build snapshots in dot-net's native core (cvar [code]net_native[/code], live from the next
-## snapshot). Off by default; the game's wiring ORs it into [code]DotNetConfig.native[/code], and
+## snapshot). On by default (the GDScript path costs about 9 times as much at 100 players); the game's wiring ORs it into [code]DotNetConfig.native[/code], and
 ## where the library cannot load dot-net falls back to GDScript and logs why.
-@export var net_native: bool = false
+@export var net_native: bool = true
 
 ## Also run the interest phase (relevance, scores, cap, budget) in the native core (cvar
-## [code]net_native_interest[/code]; needs [member net_native]). Off by default. A strategy the core
+## [code]net_native_interest[/code]; needs [member net_native]). On by default. A strategy the core
 ## cannot port exactly (a subclass, a grid, always-on tags) stays in GDScript.
-@export var net_native_interest: bool = false
+@export var net_native_interest: bool = true
 
 ## Frames per second while hibernating, on a headless server. NOT the tickrate.
 ##
