@@ -1,4 +1,2 @@
 # duplication
 # Baselines only shrink: scripts/<gate> --update lowers or drops entries and refuses to add.
-examples/mixed_transports.gd	30
-examples/signon_revision.gd	30
