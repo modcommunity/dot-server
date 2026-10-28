@@ -52,9 +52,7 @@ var _client_side: Node = null
 var _client_cloud: Node = null
 var _link: DotClientLink = null
 
-# Captured through Arrays: GDScript lambdas capture locals by value, so a flag set
-# inside a signal handler stays false outside it and the test reports a failure for a
-# signal that fired perfectly.
+# Arrays, because a lambda captures locals by value: a flag set in a handler stays false outside.
 var _spawned := [false]
 var _refused := [""]
 var _games_seen: Array[String] = []
@@ -99,10 +97,8 @@ func _until(condition: Callable, seconds: float = 20.0) -> bool:
 	return bool(condition.call())
 
 
-## A named method rather than a lambda: a GDScript lambda's body ends at the newline,
-## so a two-line condition inside a call is a parse error — and a parse error makes the
-## scene fail to load and the process HANG rather than fail, which is the family's
-## documented process hazard reached from a third direction.
+## A named method, not a lambda: a two-line lambda condition is a parse error, and a parse
+## error makes the scene hang rather than fail.
 func _client_playing() -> bool:
 	return _server.sessions().size() > 0 \
 		and _server.sessions()[0].state == DotClientSession.State.SPAWNED
@@ -119,18 +115,13 @@ func _at_game(game_id: String) -> bool:
 
 
 
-## Publishes a real signed pack containing a real scene.
-##
-## Signed, not unsigned-with-the-check-off: a client that mounts content runs whatever
-## scripts are in it, and the refusal is the control. A test that turns it off is
-## testing a configuration nobody should ship.
+## Publishes a real signed pack containing a real scene, signed because the refusal of
+## unsigned content is the control.
 func _publish_content() -> bool:
 	_section("publishing a delivered game")
 
-	# A minimal scene with no script. A scene inside a pack may not use a
-	# `class_name` — a mounted pack's globals are NOT registered in the host, so
-	# every cross-file type reference in it fails to compile. That is measured, and
-	# it is why the games in dot-server-deploy are builtin.
+	# No script: a mounted pack's `class_name` globals are not registered in the host, so
+	# cross-file type references in a pack scene fail to compile.
 	var scene := (
 		"[gd_scene format=3]\n\n"
 		+ "[node name=\"DeliveredWorld\" type=\"Node\"]\n"
@@ -156,11 +147,8 @@ func _publish_content() -> bool:
 	publisher.signing_key_pem = str(pair["private"])
 	publisher.signing_key_id = "test"
 
-	# Where the publisher writes is where the manifest is fetched from, and the two
-	# have to agree with DotCloudClient.manifest_url_template for `ensure` to find it
-	# by id and version. dot-server names a URL outright, so only this test's own
-	# layout depends on it — but keeping them the same is what makes the id-and-
-	# version form and the URL form address one file.
+	# Must agree with DotCloudClient.manifest_url_template so `ensure` finds the pack by id
+	# and version as well as by URL.
 	var out := "%s/%s/%s" % [DIST, PACK_ID, PACK_VERSION]
 
 	var published := publisher.publish(SOURCE, out)
@@ -182,10 +170,8 @@ func _publish_content() -> bool:
 		"with its objects beside it"
 	)
 
-	# The manifest is a `user://` path, and until DotCloudClient learned to read one
-	# it went through HTTPRequest, which cannot fetch `user://` or `res://` at all. So
-	# a deployment serving content off the disk — which is what local_search_dirs is —
-	# could reach every object in a pack and not the one document naming them.
+	# HTTPRequest cannot fetch `user://`, so a disk-served manifest needs the client to read
+	# local paths itself.
 	_check(
 		DotCloudClient.is_local_manifest_url(_manifest_url),
 		"and the client recognises it as a local path rather than a URL"
@@ -223,12 +209,8 @@ func _publish_side_packs(pair: Dictionary) -> void:
 	_check(srv_published.ok, "a server-only pack publishes beside them", str(srv_published.error))
 
 
-## A cloud client fed from the published directory on disk.
-##
-## [param scope] keeps the two apart in [DotRegistry]: both halves run in this one
-## process and the second would otherwise displace the first, which is exactly the
-## case `service_scope` exists for. The server's is the scoped one, because everything
-## that resolves the service by its plain name is client-side.
+## A cloud client fed from the published directory. [param scope] keeps the two halves apart
+## in [DotRegistry]; the server's is the scoped one.
 func _make_cloud(cache: String, public_key: String, scope: StringName) -> Node:
 	var config := DotCloudConfig.new()
 	config.cache_dir = cache
@@ -242,8 +224,7 @@ func _make_cloud(cache: String, public_key: String, scope: StringName) -> Node:
 	cloud.config_file = ""
 	cloud.local_search_dirs = PackedStringArray([
 		"%s/%s/%s" % [DIST, PACK_ID, PACK_VERSION],
-		# The dependency is found BY ID, through `{base}/{id}/{version}/manifest.json`,
-		# so its base is the root the packs are published under, not a pack's folder.
+		# A dependency is resolved by id under `{base}/{id}/{version}`, so its base is the root.
 		DIST,
 	])
 	cloud.service_scope = scope
@@ -262,10 +243,8 @@ func _boot_config() -> DotServerConfig:
 	config.a2s_enabled = false
 	config.query_enabled = false
 	config.hibernate_when_empty = false
-	# What the server will tell clients about where its content lives. Not a real
-	# host: the point of the check below is that the address REACHES the client's
-	# content layer, and this pack is served out of a local search directory, so a
-	# base that nothing dials proves the delivery without depending on a network.
+	# Not a real host: the pack is served from a local directory, and the check is only that
+	# the address reaches the client's content layer.
 	config.content_base_urls = PackedStringArray([CONTENT_BASE])
 	config.admins_path = DATA.path_join("admins.json")
 	config.bans_path = DATA.path_join("bans.json")
@@ -290,10 +269,8 @@ func _add_boot_games() -> void:
 	delivered.content_id = PACK_ID
 	delivered.version = PACK_VERSION
 	delivered.manifest_url = _manifest_url
-	# Relative, so it resolves under the mount prefix on the server AND under the
-	# client's own mount prefix. An absolute path here is refused by
-	# DotClientLink._resolve_scene, correctly — a server that could name one could
-	# ask a client to load any scene in its build.
+	# Relative, so it resolves under each side's mount prefix; DotClientLink refuses an
+	# absolute path.
 	delivered.scene = PACK_SCENE
 	delivered.client_scene = PACK_SCENE
 	delivered.dependencies = PackedStringArray(["%s@%s" % [DEP_ID, DEP_VERSION]])
@@ -363,15 +340,9 @@ func _boot() -> bool:
 
 	var config := _boot_config()
 
-	# [b]Each half gets its own MultiplayerAPI, scoped to its own subtree.[/b] Godot
-	# addresses an RPC by the receiver's node path relative to its API root, which
-	# defaults to `/root` — so a DotServer at `/root/ContentSwitch/Server` sends calls
-	# addressed to "ContentSwitch/Server" and a DotClientLink at
-	# `/root/ContentSwitch/ClientSide/Server` answers every one with `Node not found`,
-	# the handshake included, whose only symptom is a timeout. Scoped, both ends send
-	# and expect "Server" and neither has to know the other's scene.
-	#
-	# Scoped before boot(), because boot() is what assigns the peer.
+	# Each half gets its own MultiplayerAPI, because an RPC is addressed by node path from the
+	# API root and the two Server nodes sit at different paths (`Node not found`, then a
+	# timeout). Scoped before boot(), which assigns the peer.
 	var server_side := Node.new()
 	server_side.name = "ServerSide"
 	add_child(server_side)
@@ -400,10 +371,8 @@ func _boot() -> bool:
 	_server.auto_boot = false
 	server_side.add_child(_server)
 
-	# Added under the server's half of the tree so the scoped registration happens
-	# before anything asks for it. `_ready` is where DotCloudClient registers, for the
-	# reason its own class doc gives: `start()` awaits and a consumer resolving the
-	# service in between would get null from a client that was about to work.
+	# Added under the server's half so the scoped registration (in `_ready`) happens before
+	# anything looks the service up.
 	_server.add_child(_server_cloud)
 
 	var booted := await _server.boot()

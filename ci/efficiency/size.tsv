@@ -1,20 +1,2 @@
 # size
 # Baselines only shrink: scripts/<gate> --update lowers or drops entries and refuses to add.
-addons/dot_server/server/dot_server_config.gd	827
-examples/content_switch.gd	860
-examples/content_switch.gd::_boot	153
-examples/content_switch.gd::_publish_content	102
-examples/content_switch.gd::_test_switch_to_delivered	142
-examples/dedicated_server.gd	1092
-examples/dedicated_server.gd::_ready	81
-examples/dedicated_server.gd::_test_admins	91
-examples/dedicated_server.gd::_test_ban_source	122
-examples/dedicated_server.gd::_test_connection_limits	84
-examples/dedicated_server.gd::_test_cvar_flags	107
-examples/dedicated_server.gd::_test_notices	134
-examples/dedicated_server.gd::_test_permissions	81
-examples/dedicated_server.gd::_test_rcon_allow_list	108
-examples/dedicated_server.gd::_test_rcon_socket	95
-examples/dedicated_server.gd::_test_rcon_websocket	101
-examples/signon_revision.gd::_test_a_notice_reaches_the_client	105
-examples/signon_revision.gd::_test_the_scoreboard_reaches_the_client	85

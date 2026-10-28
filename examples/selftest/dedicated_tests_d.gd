@@ -2,12 +2,9 @@ extends "res://examples/selftest/dedicated_tests_c.gd"
 
 ## Notice and RCON sections of dedicated_server.gd.
 
-## [DotNotice]'s wire form, and the server's half with nobody to send to.
-##
-## The half with a client is in `signon_revision`, over a real socket. This is what a
-## socket cannot show: that the decoder survives a payload no server of this build sends —
-## an older one, a newer one, or garbage — because a client is not allowed to raise on a
-## message it did not expect.
+## [DotNotice]'s wire form, and the server's half with nobody to send to. The half with a
+## client is in `signon_revision`; this shows the decoder survives a payload no server of this
+## build sends, because a client may not raise.
 func _test_notices() -> void:
 	print("")
 	_section("[notices]")
@@ -50,10 +47,8 @@ func _test_notices_bounds() -> void:
 	# one of them passed when this stripped only what is below 32.
 	var spoof := DotNotice.make(&"", "a\u007Fb\u200Bc\u200Dd\uFEFFe\u202Ef\u2066g\nh")
 	_check("and none of the characters chat refuses (%s)" % spoof.text.c_escape(), spoof.text == "abcdefg h")
-	# And every one dot-chat's filter refuses, written out here rather than read from the
-	# constant, so that the constant shrinking is something this can see. The C1 controls,
-	# the soft hyphen, both directional marks, the word joiner and the deprecated format
-	# characters all reached a HUD line while this matched only eleven of them.
+	# Every character dot-chat's filter refuses, written out rather than read from the
+	# constant, so the constant shrinking is visible here.
 	var refused := PackedStringArray()
 	for code in [0x00AD, 0x061C, 0x180E, 0x200B, 0x200C, 0x200D, 0x200E, 0x200F,
 			0x202A, 0x202B, 0x202C, 0x202D, 0x202E, 0x2060, 0x2061, 0x2062, 0x2063, 0x2064,
@@ -243,8 +238,7 @@ func _test_rcon_allow_list_live() -> void:
 
 	refuser.free()
 
-	# Both tables shrink once the window has passed: a refilled bucket is dropped by time
-	# (it is stored at 0 tokens, which used to keep it forever) and the counts go with it.
+	# Both tables shrink once the window has passed: a refilled bucket is dropped by time.
 	var scan := DotRconServer.new()
 	scan._refusal_log = DotRateLimiter.new(100.0, 1.0)
 	scan._refusal_log.idle_eviction_sec = 0.02

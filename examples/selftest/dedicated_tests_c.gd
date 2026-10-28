@@ -24,9 +24,8 @@ func _test_cvar_flags() -> void:
 	_check("protected value redacted", listed.contains("***") and not listed.contains("hunter2"))
 	_run("sv_password \"\"")
 
-	# Startup-only cvars are locked once the server is listening. sv_tickrate was the
-	# example here until it became live (2026-10-07), and it was the only one, so the
-	# flag gets a cvar of its own -- a flag nothing exercises is a flag that can break.
+	# Startup-only cvars lock once the server is listening. No real cvar is left with the
+	# flag, so this one has its own: an unexercised flag is one that can break.
 	var startup := console.cvar("test_startup_only", "1", "", DotConVar.FLAG_STARTUP_ONLY)
 	var refused := _run("test_startup_only 2")
 	_check(
@@ -292,10 +291,8 @@ func _test_ban_source() -> void:
 	print("")
 	_section("[an external ban list: dot-moderation]")
 
-	# Loaded by path and called by duck typing, never by class name: naming
-	# DotModerationManager here would make this whole example fail to parse in a
-	# checkout that does not have the addon, which is every checkout of dot-server
-	# alone.
+	# Loaded by path and called by duck typing: naming DotModerationManager would fail to
+	# parse in a checkout without the addon.
 	var manager_path := "res://addons/dot_moderation/runtime/dot_moderation_manager.gd"
 	var store_path := "res://addons/dot_moderation/store/dot_punishment_store_file.gd"
 
@@ -442,14 +439,8 @@ func _test_admins() -> void:
 		not admins.uid_has_permission("backbone:alice", DotAdminFlags.ROOT)
 	)
 
-	# A uid answered by a SOURCE rather than by the admin file.
-	#
-	# This is the case that used to be refused for everybody: `uid_permissions` read the
-	# file and nothing else, on the reasoning that a source needs an identity and only a
-	# connection carries one. True of dot-auth's, false of every source that is a table
-	# keyed by uid -- so a deployment whose admins live in a config file (which is
-	# `dot-server-deploy`, and therefore every TMC server) refused every command relayed
-	# from the website, permanently, with nothing erroring.
+	# A uid answered by a SOURCE rather than the admin file: a table keyed by uid needs no
+	# connection, and a deployment whose admins live in config depends on it for relayed commands.
 	var table := UidTableSource.new()
 	table.rows["backbone:bob"] = PackedStringArray([DotAdminFlags.CHANGEMAP])
 	admins.add_source(table)
@@ -480,8 +471,7 @@ func _test_admins() -> void:
 
 func _test_admins_groups() -> void:
 	var admins := server.admins
-	# Group NAMES are kept, not only merged into flags: a game grants things by role, and a
-	# role is a group name. They used to be read, used, and dropped.
+	# Group NAMES are kept, not only merged into flags: a game grants things by role.
 	var _vip := admins.set_admin(
 		"backbone:carol", PackedStringArray(), 0, PackedStringArray(["vip"]), "Carol"
 	)
