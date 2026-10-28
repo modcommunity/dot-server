@@ -1,14 +1,6 @@
 # size
 # Baselines only shrink: scripts/<gate> --update lowers or drops entries and refuses to add.
-addons/dot_server/admin/dot_admin_manager.gd::resolve	102
-addons/dot_server/game/dot_game_manager.gd	1019
-addons/dot_server/game/dot_game_manager.gd::_swap_to	108
-addons/dot_server/game/dot_game_manager.gd::_sync_clients	122
-addons/dot_server/game/dot_game_manager.gd::change_game	106
-addons/dot_server/modules/dot_module_host.gd::load_module	119
-addons/dot_server/server/dot_server.gd	2218
-addons/dot_server/server/dot_server_config.gd	837
-addons/dot_server/server/dot_server_config.gd::validate	109
+addons/dot_server/server/dot_server_config.gd	827
 examples/content_switch.gd	860
 examples/content_switch.gd::_boot	153
 examples/content_switch.gd::_publish_content	102

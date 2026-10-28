@@ -89,8 +89,8 @@ func load_all() -> int:
 	return loaded_count
 
 
-## Loads one module from a script path.
-func load_module(path: String) -> DotResult:
+## Loads the script at [param path] and makes the [DotModule] it declares.
+func _instantiate_module(path: String) -> DotResult:
 	if not FileAccess.file_exists(path):
 		return DotResult.fail(
 			DotError.CODE_IO, "Module script not found.", path
@@ -102,11 +102,7 @@ func load_module(path: String) -> DotResult:
 			DotError.CODE_INVALID, "Not a GDScript file.", path
 		)
 
-	# [b]A script that did not compile still loads.[/b] `load()` hands back a GDScript
-	# whatever its parse said — a module extending a class nobody registered (an addon
-	# that was never linked) is one — and `.new()` on it is a script error that aborts
-	# this coroutine. Every caller then awaited null instead of a result, read `.ok` off
-	# it, and aborted too, so a failed module load was never reported as one.
+	# `load()` returns a GDScript even when it did not parse, and `.new()` on it aborts this coroutine.
 	if not (script as GDScript).can_instantiate():
 		return DotResult.fail(
 			DotError.CODE_INVALID,
@@ -117,8 +113,7 @@ func load_module(path: String) -> DotResult:
 	var instance: Variant = (script as GDScript).new()
 
 	if not (instance is DotModule):
-		# Freed explicitly: a RefCounted would go on its own, but a Node that is
-		# never added to the tree leaks until the process ends.
+		# A Node never added to the tree leaks until the process ends.
 		if instance is Node:
 			(instance as Node).queue_free()
 		return DotResult.fail(
@@ -127,7 +122,16 @@ func load_module(path: String) -> DotResult:
 			path
 		)
 
-	var module := instance as DotModule
+	return DotResult.success(instance)
+
+
+## Loads one module from a script path.
+func load_module(path: String) -> DotResult:
+	var made := _instantiate_module(path)
+	if not made.ok:
+		return made
+
+	var module := made.value as DotModule
 	var module_name := module._module_name()
 
 	if blocklist.has(module_name):
@@ -151,23 +155,9 @@ func load_module(path: String) -> DotResult:
 
 	add_child(module)
 
-	# [b]Awaited, and it was not.[/b] `_module_load` is allowed to be a coroutine and
-	# every non-trivial one is -- an identity layer reaches a content host, a profile
-	# store, an avatar store, and an un-awaited GDScript coroutine returns at its first
-	# suspension. Godot 4.7 reports that as **"Trying to call an async function without
-	# 'await'"**, `result` is then null, and the next line reads `.ok` off it: the module
-	# fails to load with a message about async functions, on a server whose only crime is
-	# that something it talks to was slow.
-	#
-	# It hid because it only fires when a load ACTUALLY suspends. Every module in the
-	# tree awaited things that happened to finish inside one call -- a cloud client with
-	# nothing to fetch, a backbone that is not configured -- so the coroutine ran to
-	# completion and returned its value like an ordinary function. The first module whose
-	# setup really waited was a test fixture written to wait on purpose.
-	#
-	# `await` on a value that is not a coroutine passes it straight through, so this is
-	# correct for a synchronous module too. Typed explicitly rather than inferred,
-	# because `await` yields a Variant and `:=` would quietly widen `result`.
+	# Awaited: `_module_load` may suspend, and an un-awaited coroutine hands back null at its first
+	# suspension. `await` passes a synchronous module's value straight through.
+	# Typed explicitly, because `await` yields a Variant and `:=` would widen `result`.
 	var result: DotResult = await module._module_load()
 
 	if not result.ok:
@@ -192,14 +182,7 @@ func load_module(path: String) -> DotResult:
 		{
 			"module": module_name,
 			"version": module._module_version(),
-			# [b]`get`, not `[]`.[/b] `describe()` is a method a module is expected to
-			# override -- it is the family's "dump your runtime state" convention -- and
-			# indexing an override that did not happen to keep this key throws, inside
-			# the logging call, AFTER the module has been registered. What that produced
-			# was a load that reported "Invalid access to property or key 'commands'",
-			# returned null to its caller, and left the module in `_modules` anyway, so
-			# the next attempt said it was already loaded. A log line must not be able to
-			# fail the operation it is describing.
+			# `get`, not `[]`: an overridden describe() without this key would throw inside the log call.
 			"commands": module.describe().get("commands", 0),
 		}
 	)

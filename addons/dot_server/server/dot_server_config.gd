@@ -100,12 +100,8 @@ extends DotConfig
 @export_range(5.0, 300.0, 5.0) var auth_timeout_sec: float = 60.0
 
 ## Seconds a client may spend in the PROFILE stage, held by a module, before it is dropped.
-##
-## Its own number rather than the auth one, because what is being waited on is different:
-## a profile store on a bad afternoon, or a first-time player making an avatar before they
-## may play, which takes minutes rather than a round trip. It is the ceiling on a module
-## that holds and never releases, not the module's own deadline (dot-platform lets a slow
-## store's player in long before this). Unused on a server where no module holds.
+## Its own number: a profile store or a first avatar can take minutes. It is the ceiling on a module
+## that never releases, not the module's own deadline. Unused when no module holds.
 @export_range(5.0, 1800.0, 5.0) var profile_timeout_sec: float = 300.0
 
 ## Seconds a client may spend downloading content.
@@ -143,15 +139,9 @@ extends DotConfig
 
 @export_group("Threads")
 
-## Worker threads each subsystem this server turns on may use (cvar [code]sv_worker_threads[/code],
-## live). -1, the default, is the processor count less one, at most eight, which assumes one
-## server process per machine: an owner running several on one box sets this so they do not
-## all ask for every core. 0 sends every subsystem back to the main thread at once, the one
-## command that rules threads out when something looks wrong.
-##
-## Nothing is threaded until its own switch below is on: this is the count, those are the
-## opt-ins. A server's settings, not the process's, so a second server or a client in the
-## same process keeps its own.
+## Worker threads each subsystem this server turns on may use (cvar [code]sv_worker_threads[/code], live).
+## -1 is the processor count less one, at most eight; 0 sends every subsystem back to the main thread.
+## Nothing is threaded until its own switch below is on. A server's settings, not the process's.
 @export_range(-1, 64) var worker_threads: int = -1
 
 ## Build each player's snapshot on the workers (cvar [code]sv_threads_net[/code], live from the
@@ -175,16 +165,8 @@ extends DotConfig
 @export var net_native_interest: bool = true
 
 ## Frames per second while hibernating, on a headless server. NOT the tickrate.
-##
-## Every socket this server owns -- the query and A2S listeners, the game transport, RCON
-## -- is read once per frame, so the frame rate is how long a packet waits to be seen.
-## Frames used to follow [member hibernate_tickrate], and at 5 an empty server answered a
-## query up to 200 ms late on every round trip: a server browser, which asks for a
-## challenge and then the info, measured a 40 ms server at 270-540 ms. A browser lists by
-## that number, so the servers nobody had joined yet looked like the worst ones to join.
-## The saving was mostly in the ticks, which stay at the hibernate rate. Measured on an
-## empty dot-server-deploy lobby, hibernating: 0.1% of one core at 5 frames, 0.5% at 60,
-## for queries answered in 3 ms instead of up to 200.
+## Every socket is read once per frame, so at 5 fps a query answered up to 200 ms late made empty servers
+## look worst in a browser. Measured hibernating: 0.1% of one core at 5 frames, 0.5% at 60, answers in 3 ms.
 @export_range(1, 240, 1) var hibernate_frame_rate: int = 60
 
 @export_group("RCON")
@@ -207,14 +189,8 @@ extends DotConfig
 @export var stdin_console_enabled: bool = true
 
 ## Read stdin even when it is a pipe (or a socket, or `/dev/null`).
-##
-## [b]Off, because it is the one stdin that can stop the process exiting.[/b] The reader
-## blocks in a read nothing can cancel, and on a pipe whose writer never closes it the
-## engine hangs in its own exit -- which is what every suite run under a runner's pipe
-## did, and a 900-second timeout on a deploy check that exits in seven. On for a
-## supervisor that feeds commands down a pipe; that supervisor closes the pipe to stop
-## the server. A terminal needs nothing: it is read either way. See
-## [member DotStdinConsole.read_pipes].
+## Off: the reader blocks in a read nothing can cancel, and a pipe whose writer never closes hangs the
+## engine's exit. On for a supervisor that feeds commands down a pipe; see [member DotStdinConsole.read_pipes].
 @export var stdin_console_pipes: bool = false
 
 ## Also serve RCON over WebSocket, for browser-based admin panels.
@@ -542,6 +518,15 @@ func sensitive_keys() -> PackedStringArray:
 
 
 func validate() -> DotResult:
+	for check: Callable in [_validate_logging, _validate_ports, _validate_transport]:
+		var res: DotResult = check.call()
+		if not res.ok:
+			return res
+
+	return DotResult.success(null)
+
+
+func _validate_logging() -> DotResult:
 	if worker_threads < -1:
 		return DotResult.fail(
 			DotError.CODE_INVALID,
@@ -570,7 +555,10 @@ func validate() -> DotResult:
 				"A channel level must be written channel=level.",
 				entry
 			)
+	return DotResult.success(null)
 
+
+func _validate_ports() -> DotResult:
 	if port < 0 or port > 65535:
 		return DotResult.fail(
 			DotError.CODE_INVALID, "port must be between 0 and 65535."
@@ -610,7 +598,10 @@ func validate() -> DotResult:
 			"The RCON port must differ from the game port.",
 			"both are %d" % port
 		)
+	return DotResult.success(null)
 
+
+func _validate_transport() -> DotResult:
 	if not ["full", "names", "count", "none"].has(query_player_detail):
 		return DotResult.fail(
 			DotError.CODE_INVALID,
@@ -648,7 +639,6 @@ func validate() -> DotResult:
 					"The query WebSocket port must differ from %s." % str(taken[0]),
 					"both are %d" % ws_port
 				)
-
 	return DotResult.success(null)
 
 

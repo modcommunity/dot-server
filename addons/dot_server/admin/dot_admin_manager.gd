@@ -121,6 +121,26 @@ func resolve(session: DotClientSession) -> DotResult:
 	var uid := session.uid()
 	var reasons := PackedStringArray()
 
+	_merge_file_entry(session, uid, reasons)
+	_merge_sources(session, reasons)
+
+	if not session.permissions.is_empty():
+		DotLog.info(
+			CHANNEL,
+			"admin recognised",
+			{
+				"user": session.label(),
+				"flags": DotAdminFlags.format(session.permissions),
+				"immunity": session.immunity,
+				"via": ", ".join(reasons),
+			}
+		)
+
+	permissions_resolved.emit(session, session.permissions)
+	return DotResult.success(session.permissions)
+
+
+func _merge_file_entry(session: DotClientSession, uid: String, reasons: PackedStringArray) -> void:
 	if _admins.has(uid):
 		var entry: Dictionary = _admins[uid]
 		session.permissions = DotAdminFlags.merge(
@@ -149,6 +169,8 @@ func resolve(session: DotClientSession) -> DotResult:
 					{"uid": uid, "group": group_name}
 				)
 
+
+func _merge_sources(session: DotClientSession, reasons: PackedStringArray) -> void:
 	for source in sources:
 		var res: Variant = source.call("lookup", session.identity)
 
@@ -182,21 +204,6 @@ func resolve(session: DotClientSession) -> DotResult:
 		for group in d.get("groups", []):
 			if not session.groups.has(str(group)):
 				session.groups.append(str(group))
-
-	if not session.permissions.is_empty():
-		DotLog.info(
-			CHANNEL,
-			"admin recognised",
-			{
-				"user": session.label(),
-				"flags": DotAdminFlags.format(session.permissions),
-				"immunity": session.immunity,
-				"via": ", ".join(reasons),
-			}
-		)
-
-	permissions_resolved.emit(session, session.permissions)
-	return DotResult.success(session.permissions)
 
 
 ## An identity carrying a uid and nothing else.
