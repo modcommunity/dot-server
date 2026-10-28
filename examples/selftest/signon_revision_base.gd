@@ -21,9 +21,7 @@ var _server: DotServer = null
 var _link: DotClientLink = null
 var _client_side: Node = null
 
-# Captured through an Array: a GDScript lambda captures locals by value, so a flag set
-# inside a signal handler stays false outside it and the suite reports a failure for a
-# signal that fired perfectly.
+# Captured through an Array: a lambda captures locals by value, so a plain flag stays false.
 var _spawned := [false]
 var _refused := [""]
 

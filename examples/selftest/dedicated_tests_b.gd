@@ -69,14 +69,9 @@ func _test_chat_state() -> void:
 	chat.relay_fn = func() -> Variant: return "yes"
 	_check("a non-boolean answer is no", not chat.is_relayed())
 
-	# `watch_relay` is the one line a game writes, and it is duck-typed because
-	# dot-server cannot name DotChatRelay.
-	#
-	# [b]Held in a variable, and that is not style.[/b] A [Callable] stores an object id
-	# and does NOT keep a [RefCounted] alive, so `watch_relay(FakeRelay.new())` binds to
-	# something that is freed on the next line and the seam reads as "no relay" for ever.
-	# The real one is a [Node] the game keeps in the tree, which is why this is a trap the
-	# test walked into and the product did not.
+	# `watch_relay` is duck-typed because dot-server cannot name DotChatRelay. Held in a variable:
+	# a [Callable] does not keep a [RefCounted] alive, so an inline `FakeRelay.new()` is freed at
+	# once and the seam reads "no relay".
 	var fake := FakeRelay.new()
 	chat.watch_relay(fake)
 	_check("watch_relay takes anything with is_carrying", chat.is_relayed())
@@ -122,11 +117,7 @@ func _test_events() -> void:
 	_check("missing key returns default", typed.get_int("absent", 7) == 7)
 	_done()
 
-## The identity used when dot-auth is absent.
-##
-## Only reached in that configuration, which is exactly why it needs a test — a
-## server with dot-auth installed never touches it, so a break here would surface
-## only for the people running the simplest setup.
+## The identity used when dot-auth is absent; only a test reaches it with dot-auth installed.
 func _test_guest_identity() -> void:
 	print("")
 	_section("[guest identity]")
@@ -291,17 +282,9 @@ func _on_spawn(_e: DotEvent) -> void:
 		not (await server.modules.load_module("user://example/bad_module.gd")).ok
 	)
 
-	# And one that does not compile -- a module whose base class is an addon that was
-	# never linked -- must come back as a failed result, not abort the coroutine and hand
-	# every awaiting caller null.
-	#
-	# [b]The script is put in the resource cache uncompiled rather than parsed from disk[/b],
-	# because parsing it prints `SCRIPT ERROR: Parse Error`, and dot-ci fails any suite
-	# whose output carries one -- the rule that catches a test aborted by a real script
-	# error cannot tell it from one provoked on purpose. load_module's plain load() takes
-	# the cached script, which is exactly what a failed parse leaves: a GDScript whose
-	# can_instantiate() is false. Still armed: with the guard removed, .new() on it is the
-	# same aborting script error the guard was written for.
+	# A module that does not compile must come back as a failed result, not abort the coroutine.
+	# The script is put in the resource cache uncompiled: parsing from disk prints a SCRIPT ERROR,
+	# which dot-ci fails a suite for. The `can_instantiate()` guard stays armed.
 	DotPaths.write_text(
 		"user://example/unlinked_module.gd",
 		"extends DotNoSuchModuleBase\n"
@@ -347,24 +330,12 @@ func _test_audit() -> void:
 	_check("audit command runs", _run("audit 5").length() > 0)
 	_done()
 
-# --- Query -----------------------------------------------------------------
-#
-# The query tests are NOT here any more. Both protocols live in dot-server-query,
-# and its own suite drives them the same way this one used to: handle_datagram()
-# takes a datagram and returns the datagrams to send back, so the whole of DQP and
-# A2S is exercised without binding a socket. Running them here would have needed
-# this project to link an optional addon in order to test a server without it.
+# The query tests live in dot-server-query's suite, which drives both protocols through
+# handle_datagram() without a socket.
 
-# --- Helpers ---------------------------------------------------------------
 
-## A context that looks like a client, for permission tests.
-## The whole chat-command path, end to end, which had no executed coverage at all.
-##
-## Everything else about chat commands is asserted against a hand-built context with
-## `Source.CHAT` on it. That skips the part a player actually uses: the prefix, the
-## manager's parse, the dispatch into the console. The bug that started this — an operator
-## typing `/map surf_beginner` and being told the command cannot be run from chat — lived
-## precisely in the gap between those two, and no assertion in this suite could see it.
+## The whole chat-command path, end to end: the prefix, the manager's parse and the dispatch
+## into the console, which assertions on a hand-built `Source.CHAT` context skip.
 func _test_chat_commands() -> void:
 	print("")
 	_section("[chat commands]")
@@ -423,12 +394,8 @@ func _test_chat_commands() -> void:
 	console.command_executed.disconnect(on_run)
 	_done()
 
-## Long output has to survive being split into several packets.
-##
-## The splitter is the only part of the protocol that rewrites the payload, and no
-## in-process test can see it: [method DotConsole.execute] hands back the text
-## whole. Both bounds matter — a client must be able to reassemble the exact text,
-## and no single packet may exceed what the protocol allows.
+## Long output has to survive being split into several packets: a client must reassemble the
+## exact text and no packet may exceed the protocol's bound.
 func _test_rcon_long_responses(peer: StreamPeerTCP) -> void:
 	# A command whose output is long, but built from short lines.
 	server.console.register_command(DotConCommand.new(

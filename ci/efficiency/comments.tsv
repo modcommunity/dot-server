@@ -60,9 +60,9 @@ addons/dot_server/server/dot_client_session.gd::banner	5
 addons/dot_server/server/dot_client_session.gd::history	1
 addons/dot_server/server/dot_client_session.gd::long_block	20
 addons/dot_server/server/dot_guest_identity.gd::long_block	2
-addons/dot_server/server/dot_server.gd::banner	14
-addons/dot_server/server/dot_server.gd::history	3
-addons/dot_server/server/dot_server.gd::long_block	66
+addons/dot_server/server/dot_server.gd::banner	11
+addons/dot_server/server/dot_server.gd::history	1
+addons/dot_server/server/dot_server.gd::long_block	45
 addons/dot_server/server/dot_server_config.gd::history	3
 addons/dot_server/server/dot_server_config.gd::long_block	45
 addons/dot_server/vote/dot_vote_manager.gd::banner	4

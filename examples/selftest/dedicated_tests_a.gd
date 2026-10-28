@@ -28,11 +28,8 @@ func _test_console() -> void:
 	_check("alias resolves", _run("mystatus").contains("hostname:"))
 	_done()
 
-## A command object of the duck-typed shape, for [method DotConsole.add_source].
-##
-## Deliberately a bare [RefCounted] with nothing of this family on it. The whole point of
-## the hook is that an addon dot-server has never heard of can plug a command in, and a
-## fixture that extended one of ours would prove a narrower thing than the one claimed.
+## A command object of the duck-typed shape, for [method DotConsole.add_source]. A bare
+## [RefCounted] on purpose: an addon dot-server has never heard of must be able to plug in.
 class ProbeSource:
 	extends RefCounted
 
@@ -70,11 +67,9 @@ class ProbeSource:
 			return DotResult.success(PackedStringArray(["one", "two"]))
 		return DotResult.success("probe ran: %s" % line)
 
-## Which stdin the operator console reads. A reader on a pipe nobody closes cannot be
-## cancelled and keeps the process from exiting, so this very suite, run as `sleep 600 |
-## godot ...`, used to print its totals and then hang until the runner killed it. Only a
-## terminal and a file are read unless a host asks for pipes. The exit itself is checked
-## from outside -- run this scene with an open pipe on stdin and it must exit on its own.
+## Which stdin the operator console reads. A reader on an unclosed pipe cannot be cancelled and
+## hangs the exit, so only a terminal and a file are read unless a host asks for pipes. The exit
+## is checked from outside: run this scene with an open pipe on stdin and it must exit.
 func _test_stdin_console() -> void:
 	_section("[stdin console]")
 
@@ -138,7 +133,7 @@ func _test_console_source() -> void:
 		_run("probe lines").split("\n").size() == 2)
 	_check("a refusal is reported as one", _run("probe fail").contains("refused"))
 
-	# Completion, which is the half that used to have nowhere to arrive.
+	# Completion arrives.
 	var completions := console.complete("probe al")
 	_check("the source completes its own arguments",
 		completions.size() == 1 and completions[0] == "probe alpha")
@@ -333,12 +328,8 @@ func _test_bans() -> void:
 	_check("banlist runs", _run("banlist").length() > 0)
 	_done()
 
-## The flags column of a `status` line, or "" when it is empty.
-##
-## Every other column is a fixed width the format string owns; splitting on runs of
-## whitespace finds them all regardless, and an empty flags column simply is not there.
-## Depends on the display name having no spaces in it, which is why the sessions this
-## is used on are named in one word.
+## The flags column of a `status` line, or "" when it is empty. Splits on whitespace, so it
+## needs one-word display names.
 func _status_flags(session: DotClientSession) -> String:
 	var fields := session.status_line().split(" ", false)
 	# "# userid name state time ping [flags] uid addr"
@@ -424,10 +415,6 @@ func _test_hibernation() -> void:
 	_done()
 
 ## A second server, booted with hibernation left at its default and nobody connected.
-##
-## [b]It used to come up RUNNING and stay there until somebody joined and left[/b], so a
-## fresh server ran its map clock out to an empty room and the wake that restarts every
-## clock never came, because there had been no sleep.
 func _test_boot_hibernation() -> void:
 	print("")
 	_section("[hibernation from boot]")
@@ -628,11 +615,8 @@ func _test_targeting() -> void:
 	server.release_session(bob.peer_id)
 	_done()
 
-## A session the server did not get from a socket, for tests that need players.
-##
-## The userid and the peer id are the same number here purely so the checks below read
-## clearly; on a real server they are unrelated, which is why `kick` and `kickid` exist
-## separately.
+## A session the server did not get from a socket. Userid and peer id are the same number
+## here so checks read clearly; on a real server they are unrelated.
 func _adopt(peer_id: int, address: String, display_name: String) -> DotClientSession:
 	var session := DotClientSession.new(peer_id, peer_id)
 	session.address = address

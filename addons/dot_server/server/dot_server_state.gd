@@ -7,19 +7,11 @@ const Cvars := preload("dot_server_cvars.gd")
 const CHANNEL := "server"
 const SERVICE := &"dot_server"
 
-## Registry name of an optional external ban list — dot-moderation registers under it.
-##
-## Whatever is registered here answers
-## [code]check_admission(uid: String, address: String) -> DotResult[/code]. Neither
-## addon imports the other, exactly as [code]dot_mute_source[/code] joins dot-moderation
-## to dot-voice.
+## Registry name of an optional external ban list; dot-moderation registers under it and answers
+## [code]check_admission(uid, address) -> DotResult[/code]. Neither addon imports the other.
 const BAN_SOURCE := &"dot_ban_source"
 
 ## Reported in `status`, in query responses and in the backbone stats report.
-##
-## One constant rather than the three string literals it used to be, because a
-## version that disagrees with itself across three listings is worse than no
-## version at all.
 const VERSION := "0.1.0"
 
 ## Multiplayer channel used for the join handshake and console traffic.
@@ -46,15 +38,8 @@ enum State {
 signal state_changed(state: State)
 
 ## The server went into hibernation ([param hibernating] true) or came out of it.
-##
-## [b]The hook a game's clocks follow.[/b] [signal state_changed] says the same thing among
-## five other states, and every listener would have to remember which two transitions mean
-## "the room emptied" and "somebody is back" — and that leaving HIBERNATING for
-## SHUTTING_DOWN is neither. A map's time limit, a vote's clock and a round timer stop
-## counting on [code]true[/code] and start again from their configured values on
-## [code]false[/code], so the first player to arrive gets the whole map rather than
-## whatever an empty room left of it. dot-vote's and dot-map's [code]follow_hibernation[/code]
-## connect to this by name, which is why it carries a plain bool.
+## A game's clocks follow this rather than [signal state_changed], which says it among five other
+## states; dot-vote's and dot-map's [code]follow_hibernation[/code] connect to it by name.
 signal hibernation_changed(hibernating: bool)
 
 ## [code]sv_tickrate[/code] was set while the server is up. Nothing has changed yet: the
@@ -90,19 +75,13 @@ signal notice_sent(notice: DotNotice, recipients: int)
 ## JSON config layered over [member config]'s defaults.
 @export var config_file: String = "user://cfg/server.json"
 
-## Boot automatically on [method Node._ready].
-##
-## Off when a host project wants to configure subsystems first and call
-## [method boot] itself.
+## Boot automatically on [method Node._ready]; off when a host configures subsystems first.
 @export var auto_boot: bool = true
 
 @export_group("Subsystems")
 
-## Where to find or create the console.
-##
-## Every subsystem ref defaults to creating a child, so a bare [DotServer] works.
-## Point one at an existing node to share it — a listen server hosting and playing
-## in one process wants one console, not two.
+## Where to find or create the console. Every subsystem ref defaults to creating a child;
+## point one at an existing node to share it.
 @export var console_ref: DotNodeRef = null
 @export var admin_ref: DotNodeRef = null
 @export var bans_ref: DotNodeRef = null
@@ -116,18 +95,9 @@ signal notice_sent(notice: DotNotice, recipients: int)
 @export var events_ref: DotNodeRef = null
 @export var modules_ref: DotNodeRef = null
 
-## Where the log goes, over and above stdout.
-##
-## Resolve it to a [DotLogSink] for a rotating file, or to a **dot-log**
-## [code]DotLogRouter[/code] for the whole sink layer — a file, a ring in memory the
-## console can read back, syslog, a database table, a hosted collector. Either is
-## recognised by duck typing; dot-server names neither, because only dot-core may be a
-## hard dependency here.
-##
-## Leave it null and the server makes its own [DotLogSink] from
-## [member DotServerConfig.log_file_enabled], so a server has a log file without anybody
-## having configured one. That default exists because a dedicated server whose only record
-## is stdout has no record at all the moment its supervisor rotates or restarts.
+## Where the log goes, over and above stdout: a [DotLogSink], or a dot-log [code]DotLogRouter[/code]
+## (duck-typed; only dot-core may be a hard dependency). Null makes a [DotLogSink] from
+## [member DotServerConfig.log_file_enabled].
 @export var log_sink_ref: DotNodeRef = null
 
 ## Where the log is going, if anywhere: a [DotLogSink], a dot-log router, or null.
@@ -161,40 +131,22 @@ var scoreboard_fields: Callable = Callable()
 ## never over them.
 var scoreboard_extra: Callable = Callable()
 
-## The addon versions this server runs, as a client can fetch them: one
-## `{dir, repo, id, version}` per addon -- `dir` under `res://addons/`, `id` the content id
-## its pack is published under. Empty says nothing, which is every server before this.
-##
-## [b]It rides the signon challenge[/b] because that is the first thing a client hears and
-## the one message that arrives whatever else differs. A client whose build is older than
-## this list can fetch the newer addons as packs and restart into them (dot-cloud's
-## `DotCloudAddonSet`) instead of waiting for a new client build. The host fills it: only
-## the host knows which repositories its addons came from.
+## The addon versions this server runs, one `{dir, repo, id, version}` per addon. It rides the
+## signon challenge so an older client can fetch the newer addons as packs and restart into
+## them. The host fills it: only the host knows where its addons came from.
 var addon_set: Array = []
 
 var _scoreboard_accum: float = 0.0
 var votes: DotVoteManager = null
 var events: DotEventBus = null
 var modules: DotModuleHost = null
-## The query responder, when dot-server-query is installed and plugged in.
-##
-## [b]Duck-typed, and that addon is named nowhere in dot-server.[/b] Answering a
-## query is a whole protocol's worth of concern that most servers in this family
-## never switch on, so it lives in its own repository — and a script mentioning a
-## [code]class_name[/code] the project does not have fails to parse and takes
-## every script referencing it down with it. Naming [code]DotQueryHost[/code] here
-## would make an optional addon mandatory for anything that so much as boots a
-## server.
-##
-## The hook is [method attach_query_host]. Everything below is filled in by the
-## host once it has attached, and stays null when nothing does.
+## The query responder, when dot-server-query is plugged in. Duck-typed: naming its class here
+## would make an optional addon mandatory, since a script naming a missing class fails to parse.
+## Filled in by the host through [method attach_query_host]; null when nothing attaches.
 var query_host: Object = null
 
-## The snapshot builder, set by the query host. See [method attach_query_host].
-##
-## Read by [method DotModule.add_query_provider] and by the builtin query
-## commands, both of which check it for null first — which on a server with no
-## query addon is always.
+## The snapshot builder, set by the query host (see [method attach_query_host]). Null on a
+## server with no query addon; readers check it first.
 var query_source: Object = null
 
 ## The dot query protocol listener, set by the query host.
@@ -239,8 +191,6 @@ var address_guard: DotAddressGuard = null
 var _sweep_accum: float = 0.0
 
 ## The server's frame time, smoothed, and how far frames stray from it, in milliseconds.
-## Sent back on every heartbeat (see [method _on_heartbeat]) so a client's net_stat can
-## tell "the network is slow" from "the server is": both feel like lag, and only one of
-## them is the player's connection.
+## Sent on every heartbeat so a client's net_stat can tell a slow network from a slow server.
 var _frame_ms: float = 0.0
 var _frame_dev_ms: float = 0.0

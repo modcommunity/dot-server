@@ -18,11 +18,7 @@ addons/dot_server/game/dot_game_manager.gd::_swap_to	108
 addons/dot_server/game/dot_game_manager.gd::_sync_clients	122
 addons/dot_server/game/dot_game_manager.gd::change_game	106
 addons/dot_server/modules/dot_module_host.gd::load_module	119
-addons/dot_server/server/dot_server.gd	2932
-addons/dot_server/server/dot_server.gd::_on_credentials	96
-addons/dot_server/server/dot_server.gd::_register_cvars	153
-addons/dot_server/server/dot_server.gd::_resolve_subsystems	124
-addons/dot_server/server/dot_server.gd::boot	115
+addons/dot_server/server/dot_server.gd	2218
 addons/dot_server/server/dot_server_config.gd	837
 addons/dot_server/server/dot_server_config.gd::validate	109
 examples/content_switch.gd	860

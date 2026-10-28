@@ -58,12 +58,8 @@ func _check(what: String, passed: bool) -> void:
 		_failed += 1
 		print("  %-44s FAILED" % what)
 
-# --- RCON over a real socket ----------------------------------------------
-#
-# Everything above drives the console in-process. This section is the only place
-# anything connects to the RCON listener over TCP and speaks the binary framing, so
-# it is the only coverage of accept, the allow-list on a real peer address, the
-# packet reader's partial and pipelined reads, auth, and response splitting.
+# RCON over a real socket: the only coverage of accept, the allow-list on a real peer
+# address, partial and pipelined reads, auth and response splitting.
 
 const RCON_TYPE_RESPONSE := 0
 const RCON_TYPE_AUTH_RESPONSE := 2
@@ -100,10 +96,8 @@ func _rcon_connect() -> StreamPeerTCP:
 		await get_tree().process_frame
 	return null
 
-## Pumps frames until [param want] packets have arrived, or the budget runs out.
-##
-## Frames matter: the RCON server accepts and reads in [code]_process[/code], so a
-## test that only sleeps on the socket deadlocks against a server that never runs.
+## Pumps frames until [param want] packets have arrived, or the budget runs out. The RCON
+## server reads in [code]_process[/code], so sleeping on the socket alone deadlocks.
 func _rcon_read(peer: StreamPeerTCP, want: int, frames: int = 180) -> Array:
 	var buffer := PackedByteArray()
 	var packets: Array = []
@@ -137,10 +131,8 @@ func _rcon_auth(peer: StreamPeerTCP, password: String, id: int = 7) -> Array:
 	peer.put_data(_rcon_encode(id, RCON_TYPE_AUTH, password))
 	return await _rcon_read(peer, 2)
 
-## Opens a WebSocket to the RCON port and pumps frames until it is open.
-##
-## Frames matter for the same reason they do on the TCP path: the server accepts
-## and polls in [code]_process[/code], so waiting on the socket alone deadlocks.
+## Opens a WebSocket to the RCON port and pumps frames until it is open (the server polls
+## in [code]_process[/code]).
 func _ws_connect(port: int) -> WebSocketPeer:
 	var ws := WebSocketPeer.new()
 	if ws.connect_to_url("ws://127.0.0.1:%d" % port) != OK:
@@ -166,12 +158,8 @@ func _ws_read(ws: WebSocketPeer, want: int, frames: int = 180) -> PackedStringAr
 			break
 	return out
 
-## A source that is a table keyed by uid, which is what every deployment's admin config is.
-##
-## dot-auth's source needs a live session to resolve a site group; this one needs nothing
-## but the uid, and the difference is the whole reason `uid_permissions` asks the sources at
-## all. It records whether it was ever handed a display name, so the check above can assert
-## that a relayed author's NAME is not a key.
+## A source that is a table keyed by uid, like every deployment's admin config. It records
+## whether it was handed a display name, so a relayed author's NAME can be asserted not a key.
 class UidTableSource:
 	extends RefCounted
 

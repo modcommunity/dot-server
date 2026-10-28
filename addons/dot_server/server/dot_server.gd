@@ -1,6 +1,6 @@
 @tool
 class_name DotServer
-extends "res://addons/dot_server/server/dot_server_state.gd"
+extends "res://addons/dot_server/server/dot_server_wire.gd"
 
 ## The dedicated server. Place one in a scene and it boots.
 ##
@@ -25,16 +25,6 @@ extends "res://addons/dot_server/server/dot_server_state.gd"
 ##
 ## Registers itself as [code]dot_server[/code] in [DotRegistry].
 
-## The kinds this server knows, and what each client it has heard from knows. See
-## [DotEnvelope] for why every message is a kind on six fixed RPCs.
-##
-## [b]A game or a module adds a kind here[/b] rather than an [code]@rpc[/code]: an
-## [code]@rpc[/code] on this node would move the signon revision and lock out every client
-## built before it, where a kind reaches the clients that know it and is not sent to the
-## ones that do not.
-var envelope: DotEnvelope = _make_envelope()
-
-
 func _ready() -> void:
 	if Engine.is_editor_hint():
 		return
@@ -53,23 +43,9 @@ func boot() -> DotResult:
 		)
 
 	_set_state(State.BOOTING)
-
-	if config == null:
-		config = DotServerConfig.new()
-
-	if config_file != "":
-		var loaded := config.apply_json_file(config_file)
-		if not loaded.ok:
-			return _boot_failed(loaded)
-
-	config.apply_env()
-	config.apply_cli()
-
-	var valid := config.validate()
-	if not valid.ok:
-		return _boot_failed(valid)
-
-	config.warn_about_risky_settings()
+	var configured := _load_boot_config()
+	if not configured.ok:
+		return _boot_failed(configured)
 
 	DotRegistry.register(SERVICE, self)
 
@@ -95,13 +71,8 @@ func boot() -> DotResult:
 	# settable — that is the whole reason for the ordering.
 	console.exec_config(config.startup_config, null, false)
 
-	# And so does the command line's CVAR half, for the same reason and with the
-	# same force: `+sv_tickrate 128` is the most startup-ish input a server takes,
-	# and running the whole command line after the listener made every startup-only
-	# cvar unsettable from it — so an operator with the muscle memory of any other
-	# server got one
-	# that quietly ignored them. The `+command` half still runs after the listener,
-	# below, because a `+map` or a `+say` needs the server up first.
+	# The command line's CVAR half runs here too: `+sv_tickrate` is startup-only. The
+	# `+command` half waits for the listener, below.
 	console.execute_command_line(true)
 
 	_apply_cvars_to_config()
@@ -136,12 +107,38 @@ func boot() -> DotResult:
 	# come up.
 	_open_query_host()
 
-	# An empty server hibernates from the moment it is up, not from the first time somebody
-	# leaves. It used to wait for a disconnect, so a freshly booted server ran its map clock
-	# out to an empty room and the first player arrived at a map with a minute left — and
-	# the wake that resets every clock never happened, because there had been no sleep.
+	# Hibernate from the moment the server is up, so the first player's wake resets the map clocks.
 	_maybe_hibernate()
 
+	_log_ready()
+
+	if events != null:
+		events.fire("server_start", {"hostname": config.hostname})
+
+	return DotResult.success(self)
+
+
+func _load_boot_config() -> DotResult:
+	if config == null:
+		config = DotServerConfig.new()
+
+	if config_file != "":
+		var loaded := config.apply_json_file(config_file)
+		if not loaded.ok:
+			return loaded
+
+	config.apply_env()
+	config.apply_cli()
+
+	var valid := config.validate()
+	if not valid.ok:
+		return valid
+
+	config.warn_about_risky_settings()
+	return DotResult.success()
+
+
+func _log_ready() -> void:
 	DotLog.info(
 		CHANNEL,
 		"ready",
@@ -156,11 +153,6 @@ func boot() -> DotResult:
 			"bans": bans.count() if bans != null else 0,
 		}
 	)
-
-	if events != null:
-		events.fire("server_start", {"hostname": config.hostname})
-
-	return DotResult.success(self)
 
 
 func _boot_failed(res: DotResult) -> DotResult:
@@ -315,6 +307,12 @@ func _resolve_subsystems() -> void:
 		events_ref = DotNodeRef.of_created(&"Events", DotEventBus)
 	events = _resolve(events_ref, "events") as DotEventBus
 
+	await _resolve_moderation()
+	_resolve_game_subsystems()
+	_resolve_operator_io()
+
+
+func _resolve_moderation() -> void:
 	if audit_ref == null:
 		audit_ref = DotNodeRef.of_created(&"Audit", DotAuditLog)
 	audit = _resolve(audit_ref, "audit") as DotAuditLog
@@ -352,6 +350,8 @@ func _resolve_subsystems() -> void:
 		bans.audit = audit
 		await bans.load_bans()
 
+
+func _resolve_game_subsystems() -> void:
 	if chat_ref == null:
 		chat_ref = DotNodeRef.of_created(&"Chat", DotChatManager)
 	chat = _resolve(chat_ref, "chat") as DotChatManager
@@ -384,6 +384,8 @@ func _resolve_subsystems() -> void:
 	if modules != null:
 		modules.setup(self)
 
+
+func _resolve_operator_io() -> void:
 	if config.rcon_password != "":
 		if rcon_ref == null:
 			rcon_ref = DotNodeRef.of_created(&"Rcon", DotRconServer)
@@ -703,66 +705,6 @@ func _address_of(peer_id: int) -> String:
 	return "unknown"
 
 
-func session_of(peer_id: int) -> DotClientSession:
-	return _sessions.get(peer_id)
-
-
-func session_by_userid(userid: int) -> DotClientSession:
-	var peer_id: Variant = _by_userid.get(userid)
-	if peer_id == null:
-		return null
-	return _sessions.get(int(peer_id))
-
-
-func sessions() -> Array[DotClientSession]:
-	var out: Array[DotClientSession] = []
-	for peer_id in _sessions:
-		out.append(_sessions[peer_id])
-	return out
-
-
-func playing_sessions() -> Array[DotClientSession]:
-	var out: Array[DotClientSession] = []
-	for session in sessions():
-		if session.is_playing():
-			out.append(session)
-	return out
-
-
-func player_count() -> int:
-	return playing_sessions().size()
-
-
-## Every active session connected from [param address].
-##
-## What an address ban has to act on: banning an address that nobody currently at it is
-## removed from is a ban that takes effect the next time they connect, which from the
-## moderator's seat looks exactly like the ban not working.
-func sessions_from(address: String) -> Array[DotClientSession]:
-	var out: Array[DotClientSession] = []
-	var host := DotBanManager.normalise_address(address)
-
-	if host == "":
-		return out
-
-	for session in sessions():
-		if session.is_active() and DotBanManager.normalise_address(session.address) == host:
-			out.append(session)
-
-	return out
-
-
-## The address of every session currently holding a slot, duplicates included.
-##
-## Duplicates are the point: this is what [DotAddressGuard] counts.
-func addresses_in_use() -> PackedStringArray:
-	var out := PackedStringArray()
-	for session in sessions():
-		if session.is_active():
-			out.append(session.address)
-	return out
-
-
 ## Whether a peer at [param address] may connect at all.
 ##
 ## Answered before a session exists, so it covers only what an address can be judged on:
@@ -913,7 +855,6 @@ func release_session(peer_id: int) -> DotResult:
 	_by_userid.erase(session.userid)
 
 	return DotResult.success(session)
-
 
 
 ## Runs a console command as the person a uid names, and returns what it replied.
@@ -1107,11 +1048,7 @@ func _make_envelope() -> DotEnvelope:
 	return env
 
 
-## Sends a kind to one client. False when it was not sent: no peer, or a client that does
-## not know the kind -- which is not an error, it is what an older client looks like.
-##
-## [b]The only way anything in dot-server reaches a client.[/b] Six RPCs carry everything,
-## and choosing among them is choosing a [enum DotEnvelope.Lane]; see [DotEnvelope].
+## Contract in dot_server_wire.gd; the lanes are the three `_dot_down` RPCs below.
 func send_kind(
 	peer_id: int,
 	kind: StringName,
@@ -1272,36 +1209,7 @@ func _on_credentials(peer_id: int, payload: Dictionary) -> void:
 		)
 		return
 
-	# [b]First, before a password or a ticket is looked at.[/b] A client that cannot play
-	# with this server should be told so in words, and told before it is asked for anything
-	# else -- a player who typed the right password into a client one release too old
-	# should read "needs a newer game client", not wait out an auth timeout.
-	var compatible := envelope.adopt(peer_id, payload.get("kinds"), true)
-	if not compatible.ok:
-		DotLog.info(CHANNEL, "client refused: it cannot speak this server's protocol", {
-			"userid": session.userid,
-			"from": session.address,
-			"why": compatible.error.message,
-			"detail": compatible.error.detail,
-		})
-		_reject_session(session, compatible.error.message, compatible.error)
-		return
-
-	var requested_name := str(payload.get("name", "")).strip_edges()
-	if requested_name != "":
-		session.display_name = requested_name.substr(0, 32)
-
-	# Before the password and before authentication: a platform this server does not
-	# take is refused with the reason, rather than after a sign-in round trip.
-	session.platform = str(payload.get("platform", "")).strip_edges().to_lower()
-	var platform_refusal := platform_refusal_for(session.platform)
-	if platform_refusal != "":
-		DotLog.info(CHANNEL, "client refused: this server does not take its platform", {
-			"userid": session.userid,
-			"from": session.address,
-			"platform": session.platform,
-		})
-		_reject_session(session, platform_refusal)
+	if not _accept_hello(session, peer_id, payload):
 		return
 
 	if _password_refused(session, payload):
@@ -1348,6 +1256,39 @@ func _on_credentials(peer_id: int, payload: Dictionary) -> void:
 	)
 
 	_enter_profile(session)
+
+
+## False (and the session rejected) when the client's protocol or platform is refused.
+func _accept_hello(session: DotClientSession, peer_id: int, payload: Dictionary) -> bool:
+	# First, so a client too old to play reads "needs a newer game client" instead of
+	# waiting out an auth timeout.
+	var compatible := envelope.adopt(peer_id, payload.get("kinds"), true)
+	if not compatible.ok:
+		DotLog.info(CHANNEL, "client refused: it cannot speak this server's protocol", {
+			"userid": session.userid,
+			"from": session.address,
+			"why": compatible.error.message,
+			"detail": compatible.error.detail,
+		})
+		_reject_session(session, compatible.error.message, compatible.error)
+		return false
+
+	var requested_name := str(payload.get("name", "")).strip_edges()
+	if requested_name != "":
+		session.display_name = requested_name.substr(0, 32)
+
+	# Before the password and authentication: no sign-in round trip for a refused platform.
+	session.platform = str(payload.get("platform", "")).strip_edges().to_lower()
+	var platform_refusal := platform_refusal_for(session.platform)
+	if platform_refusal != "":
+		DotLog.info(CHANNEL, "client refused: this server does not take its platform", {
+			"userid": session.userid,
+			"from": session.address,
+			"platform": session.platform,
+		})
+		_reject_session(session, platform_refusal)
+		return false
+	return true
 
 
 ## True (and the session rejected) when the server has a password and the payload's differs.
@@ -1782,49 +1723,6 @@ func _send_load_game(session: DotClientSession) -> void:
 # every client that has had the table (LOADING or SPAWNED) as a delta. A client that does
 # not know the kind is sent nothing and keeps its own defaults, which is what it did before.
 
-func _watch_replicated_cvars() -> void:
-	if console == null:
-		return
-	if not console.cvar_changed.is_connected(_on_replicated_cvar_changed):
-		console.cvar_changed.connect(_on_replicated_cvar_changed)
-	if not console.cvar_registered.is_connected(_on_replicated_cvar_registered):
-		console.cvar_registered.connect(_on_replicated_cvar_registered)
-
-
-## Sends [param session] every replicated cvar. False when it was not sent (no peer, or a
-## client that does not know the kind).
-func _send_replicated_cvars(session: DotClientSession) -> bool:
-	if console == null or session == null:
-		return false
-	return send_kind(session.peer_id, DotEnvelope.CVARS, {
-		"values": console.replicated_values(),
-		"full": true,
-	})
-
-
-func _on_replicated_cvar_changed(c: DotConVar, _old_value: String) -> void:
-	_broadcast_replicated_cvar(c)
-
-
-func _on_replicated_cvar_registered(c: DotConVar) -> void:
-	_broadcast_replicated_cvar(c)
-
-
-func _broadcast_replicated_cvar(c: DotConVar) -> void:
-	if not DotConsole.is_replicated(c):
-		return
-
-	var payload := {"values": {c.name: c.get_string()}, "full": false}
-	var sent := 0
-
-	for session in sessions():
-		if session.state != DotClientSession.State.LOADING and not session.is_playing():
-			continue
-		if send_kind(session.peer_id, DotEnvelope.CVARS, payload):
-			sent += 1
-
-	DotLog.debug(CHANNEL, "replicated cvar sent", {"cvar": c.name, "value": c.get_string(), "clients": sent})
-
 
 ## A client reporting that it has finished loading and is ready to play.
 func _on_loaded(peer_id: int, _payload: Dictionary) -> void:
@@ -1905,185 +1803,6 @@ func _on_ping(peer_id: int, payload: Dictionary) -> void:
 
 # --- The scoreboard ----------------------------------------------------------------
 
-## A client's scoreboard opened or closed. Open is answered at once, then every
-## [member scoreboard_interval_sec] until it closes.
-func _on_scoreboard_want(peer_id: int, payload: Dictionary) -> void:
-	var session: DotClientSession = _sessions.get(peer_id)
-	if session == null:
-		return
-	# `once`: one board now, and the held state left as it is. A client's block list asks
-	# for the roster this way every few seconds, and toggling `wants_scoreboard` for it would
-	# close a board the player is holding open. The client also sends its current `open`, so
-	# a server before `once` reads the request as "no change" rather than as a close.
-	if DotEnvelope.flag(payload, "once", false):
-		_send_scoreboard(session)
-		return
-	session.wants_scoreboard = DotEnvelope.flag(payload, "open", false)
-	if session.wants_scoreboard:
-		_send_scoreboard(session)
-
-
-func _send_scoreboards() -> void:
-	for session in playing_sessions():
-		if session.wants_scoreboard and not session.local:
-			_send_scoreboard(session)
-
-
-## Numbers every scoreboard sent, so a client can tell an old one from a new one.
-var _scoreboard_seq: int = 0
-
-
-func _send_scoreboard(session: DotClientSession) -> void:
-	# [b]`seq`, because unreliable over ENet is unordered.[/b] Godot's ENet sends an
-	# unreliable packet UNSEQUENCED, so on a desktop client a late board arrived after the
-	# one that superseded it and the link kept whichever came last: the previous roster for
-	# a whole interval (dot-net's relay audit, 2026-10-09). Over WebSocket it never showed,
-	# because there "unreliable" is TCP. The client drops one older than what it holds.
-	_scoreboard_seq += 1
-	var snap := scoreboard_snapshot(session)
-	snap["seq"] = _scoreboard_seq
-	var _sent := send_kind(session.peer_id, DotEnvelope.SCOREBOARD, snap, DotEnvelope.Lane.UNRELIABLE)
-
-
-## Where [method player_key]'s salt is kept. A server's own file: the salt is what stops a
-## key meaning anything on another server, so it is never configured, logged or sent.
-var player_key_salt_path: String = "user://cfg/player_key.salt"
-
-var _player_key_salt: String = ""
-
-
-## A player's key for a CLIENT's block list: stable for one account on this server across
-## reconnects, game changes and restarts, and meaningless anywhere else.
-##
-## [b]Not the uid, and not dot-chat's sender key.[/b] dot-chat attributes a line to the
-## session's userid, which a reconnect changes, so a mute keyed by it lasted until the
-## muted player pressed reconnect. The account uid survives that, but every player can read
-## every row of a board, and a raw uid published to every player of every server is a way
-## to follow one person between servers (dot-chat's `sender_key` note). A digest salted
-## with a secret this server keeps is the middle: the same person on this server is the
-## same key forever, and two servers' keys for them cannot be matched. Empty without an
-## identity (a bot), which a client reads as "match by name".
-func player_key(session: DotClientSession) -> String:
-	if session == null or session.local:
-		return ""
-	var uid := session.uid()
-	if uid == "":
-		return ""
-	return DotHash.sha256_text("%s|%s" % [_key_salt(), uid]).substr(0, 20)
-
-
-func _key_salt() -> String:
-	if _player_key_salt != "":
-		return _player_key_salt
-	if FileAccess.file_exists(player_key_salt_path):
-		var read := FileAccess.get_file_as_string(player_key_salt_path).strip_edges()
-		if read.length() >= 16:
-			_player_key_salt = read
-			return _player_key_salt
-	_player_key_salt = DotHash.random_hex(16)
-	var _made := DirAccess.make_dir_recursive_absolute(player_key_salt_path.get_base_dir())
-	var file := FileAccess.open(player_key_salt_path, FileAccess.WRITE)
-	if file == null:
-		# Kept for this process: keys stay stable until a restart, which only costs a
-		# client's mutes falling back to matching by name.
-		DotLog.warn(CHANNEL, "could not keep the player key salt; keys change on restart", {
-			"path": player_key_salt_path, "error": error_string(FileAccess.get_open_error()),
-		})
-		return _player_key_salt
-	file.store_string(_player_key_salt)
-	file.close()
-	return _player_key_salt
-
-
-## What a held scoreboard shows: the server, and everybody playing.
-## [codeblock]
-## {
-##   "server":  {"name", "game", "map", "players", "max", "tickrate"},
-##   "you":     <the recipient's userid>,
-##   "players": [{"id", "name", "score", "ping", "seconds", "bot", "admin", "key", "peer", ...}],
-##   ...whatever scoreboard_extra returns: "teams", "header", "rows"
-## }
-## [/codeblock]
-##
-## [b]The server's numbers, because only the server has them all.[/b] A client knows its own
-## ping and nobody else's, and when it joined but not when anybody else did; a game that
-## wanted a scoreboard with both had to replicate them itself, and most did not. Every field
-## here is one [DotClientSession] already kept for the console's `status`.
-##
-## [b]Sent only to a client holding its board open[/b] (`scoreboard.want`), so a full server
-## does not pay for a table nobody is looking at, and unreliable, because the next one
-## supersedes it. A game adds its own columns per player through [member scoreboard_fields]
-## and its teams or anything else through [member scoreboard_extra]; dot-menu's
-## `DotMenuScoreboard` draws it, and a game's own columns are its to name.
-func scoreboard_snapshot(for_session: DotClientSession = null) -> Dictionary:
-	var players: Array = []
-	for session in playing_sessions():
-		if players.size() >= SCOREBOARD_MAX_ROWS:
-			break
-		var row := {
-			"id": session.userid,
-			"name": session.display_name,
-			"score": session.score,
-			"ping": session.ping_ms,
-			"seconds": session.connected_seconds(),
-			"bot": session.local,
-			"admin": session.is_admin(),
-			# Who a client's personal block list (dot-chat's `sm`) keys a player by, and
-			# which voice frames are theirs. See [method player_key].
-			"key": player_key(session),
-			"peer": session.peer_id,
-		}
-		if scoreboard_fields.is_valid():
-			var more: Variant = scoreboard_fields.call(session)
-			if more is Dictionary:
-				row.merge(more as Dictionary, true)
-		players.append(row)
-
-	var current := games.current() if games != null else null
-	var out := {
-		"server": {
-			"name": config.hostname,
-			"game": current.display_name if current != null else "",
-			"map": games.reported_map() if games != null else "",
-			"players": player_count(),
-			"max": config.max_players,
-			"tickrate": config.tickrate,
-		},
-		"you": for_session.userid if for_session != null else 0,
-		"players": players,
-	}
-	if scoreboard_extra.is_valid():
-		var extra: Variant = scoreboard_extra.call()
-		if extra is Dictionary:
-			for key in (extra as Dictionary):
-				if not out.has(key):
-					out[key] = (extra as Dictionary)[key]
-	return out
-
-
-## A client announcing that its page went into, or came back from, the background.
-##
-## [b]Reliable, unlike the heartbeat above it.[/b] A dropped heartbeat costs one ping
-## sample. A dropped announcement costs the player their slot, because this is the only
-## thing standing between a hidden tab and [member DotServerConfig.client_timeout_sec] —
-## and the client cannot retry, having no frames left to retry in.
-##
-## [param requested_grace_sec] is a request, not a setting. The server clamps it to
-## [code]sv_background_grace[/code], because a number a client chose for itself is a way
-## to hold a slot on a full server for as long as it likes. 0 asks for whatever the
-## server allows.
-func _on_visibility(peer_id: int, payload: Dictionary) -> void:
-	var session: DotClientSession = _sessions.get(peer_id)
-	if session == null:
-		return
-
-	session.touch()
-	set_session_background(
-		session,
-		not DotEnvelope.flag(payload, "visible", true),
-		DotEnvelope.number(payload, "grace", 0.0)
-	)
-
 
 ## A client sending chat. Handled by [DotChatManager], which is where every rule about
 ## chat lives; this only finds the session.
@@ -2100,55 +1819,6 @@ func _on_chat_submit(peer_id: int, payload: Dictionary) -> void:
 		DotEnvelope.flag(payload, "team", false)
 	)
 
-
-## Records that a session has gone into, or come back from, the background.
-##
-## Split out from the RPC above so the clamp is reachable without a peer to send from
-## — by the suite, and by a host that knows on its own that a client has gone quiet on
-## purpose (a mobile app moving to the background has the same problem and a different
-## event to hear it from).
-##
-## [param requested_grace_sec] is clamped to [code]sv_background_grace[/code]; 0 asks
-## for the maximum. A server whose maximum is 0 grants nothing, and says so by leaving
-## the session unflagged: recording a refused request as backgrounded anyway would put
-## a `B` in `status` against a session being judged on the ordinary timeout, which is
-## the opposite of what that column is for.
-func set_session_background(
-	session: DotClientSession,
-	backgrounded: bool,
-	requested_grace_sec: float = 0.0
-) -> void:
-	if session == null:
-		return
-
-	var cap := (
-		_cv_background_grace.get_float() if _cv_background_grace != null else 0.0
-	)
-
-	if not backgrounded or cap <= 0.0:
-		session.backgrounded = false
-		session.background_grace_sec = 0.0
-		return
-
-	session.backgrounded = true
-	session.background_grace_sec = (
-		clampf(requested_grace_sec, 0.0, cap) if requested_grace_sec > 0.0 else cap
-	)
-
-
-## How long this session is allowed to say nothing before it is dropped.
-##
-## [code]sv_timeout[/code], unless the client announced that its tab was going into
-## the background and the server granted it longer — see
-## [method set_session_background].
-func silence_budget(session: DotClientSession) -> float:
-	var budget := _cv_timeout.get_float() if _cv_timeout != null else 0.0
-	if session != null and session.backgrounded:
-		budget = maxf(budget, session.background_grace_sec)
-	return budget
-
-
-# --- Kicking ---------------------------------------------------------------
 
 ## Disconnects a client with a reason they will see.
 ##
@@ -2268,89 +1938,6 @@ func _close_peer(peer_id: int) -> void:
 
 # --- Broadcast -------------------------------------------------------------
 
-## Sends a system message to every playing client.
-func broadcast_message(text: String) -> void:
-	if chat != null:
-		chat.broadcast_system(text)
-
-
-## Puts a [DotNotice] on every playing client's HUD. Returns how many it reached.
-##
-## [b]Playing clients only, the same audience as [method broadcast_message].[/b] A client
-## still downloading has no HUD to draw on, and a countdown it hears the end of after it
-## loads is a countdown that has already been wrong for most of its length. A host that
-## wants a late joiner to see a line that is still true resends it from
-## [signal client_spawned], which is where it knows what is still true.
-func broadcast_notice(notice: DotNotice) -> int:
-	if notice == null or notice.is_empty():
-		return 0
-
-	var payload := notice.to_wire()
-	var sent := 0
-
-	for session in playing_sessions():
-		if _put_notice(session, payload):
-			sent += 1
-
-	DotLog.debug(CHANNEL, "notice", {
-		"cue": String(notice.cue),
-		"topic": String(notice.topic),
-		"seconds": notice.seconds,
-		"text": notice.text,
-		"recipients": sent,
-	})
-
-	notice_sent.emit(notice, sent)
-	return sent
-
-
-## Puts a [DotNotice] on one client's HUD. False when it could not be sent.
-func send_notice(session: DotClientSession, notice: DotNotice) -> bool:
-	if notice == null or notice.is_empty() or session == null or not session.is_playing():
-		return false
-
-	var ok := _put_notice(session, notice.to_wire())
-
-	if ok:
-		notice_sent.emit(notice, 1)
-
-	return ok
-
-
-## Whether this session can be sent an RPC right now, and sends it if so.
-##
-## [b]The peer list is asked, not the session's state.[/b] Between a player leaving and the
-## server noticing, `rpc_id` on their id prints an engine error and a backtrace — once per
-## notice, so a one-second countdown fills a log with them. An adopted session has no peer
-## at all. Same test as [method DotChatManager._can_reach], for the same reasons.
-func _put_notice(session: DotClientSession, payload: Dictionary) -> bool:
-	if session == null or session.local or not session.is_active():
-		return false
-
-	if multiplayer == null or multiplayer.multiplayer_peer == null:
-		return false
-
-	if session.peer_id <= 0 or not Array(multiplayer.get_peers()).has(session.peer_id):
-		return false
-
-	# False for a client that does not know notices -- an older one. Not an error: it
-	# keeps its game and loses the HUD line.
-	return send_kind(session.peer_id, DotEnvelope.NOTICE, payload, DotEnvelope.Lane.EVENT)
-
-
-## Sends a message to clients holding a permission flag.
-##
-## What makes admin chat work: the message goes only to the peers entitled to see
-## it, decided server-side rather than by asking clients to filter.
-func broadcast_to_permission(flag: String, text: String) -> void:
-	if chat == null:
-		return
-	for session in playing_sessions():
-		if session.has_permission(flag):
-			chat.send_system_to(session, text)
-
-
-# --- Tick and timeouts ----------------------------------------------------
 
 func _process(delta: float) -> void:
 	if Engine.is_editor_hint():
@@ -2442,145 +2029,6 @@ func _sweep_timeouts() -> void:
 			kick(session, "Timed out while %s" % stage)
 
 
-## The rate the server plays at -- [code]sv_tickrate[/code] as last applied, not the
-## engine's, which reads [member DotServerConfig.hibernate_tickrate] while it hibernates.
-func tickrate() -> int:
-	return config.tickrate
-
-
-## A [code]sv_tickrate[/code] set while running and not yet applied, or -1.
-func pending_tickrate() -> int:
-	return _pending_tickrate
-
-
-## Applies a pending [code]sv_tickrate[/code]. Returns whether the rate changed.
-##
-## [b]At a boundary the GAME chooses, because only the game knows where one is.[/b] A tick
-## rate is the step everything counts in -- the netcode's input and snapshot timelines,
-## prediction, a timer's run, a replay -- and changing it under a moving player is a run
-## half at one rate and half at another. A map change is where all of that starts over
-## anyway, so a game that follows maps calls this as its old map goes; dot-server cannot
-## see a map change, so it applies one itself only at the next GAME change, which is a
-## boundary for every game. Until then the old rate stands and `status` says what is
-## waiting.
-func apply_pending_tickrate() -> bool:
-	if _pending_tickrate < 0:
-		return false
-	var rate := _pending_tickrate
-	_pending_tickrate = -1
-	if rate == config.tickrate:
-		return false
-	config.tickrate = rate
-	_apply_tickrate()
-	DotLog.info(CHANNEL, "tickrate changed", {"tickrate": rate})
-	tickrate_changed.emit(rate)
-	return true
-
-
-func _apply_tickrate() -> void:
-	var rate := config.tickrate
-
-	if state == State.HIBERNATING:
-		rate = config.hibernate_tickrate
-
-	Engine.physics_ticks_per_second = maxi(1, rate)
-
-	# A dedicated server has no frames to draw, so an unbounded max_fps spins a
-	# core for nothing. Matching it to the tickrate is what keeps an idle server
-	# near zero CPU.
-	#
-	# Except while hibernating, where the frame rate is the SOCKET rate: every listener
-	# is read once a frame, and 5 frames a second made an empty server answer each
-	# query up to 200 ms late. See DotServerConfig.hibernate_frame_rate.
-	if DotPlatform.is_headless():
-		var frames := rate
-		if state == State.HIBERNATING:
-			frames = maxi(rate, config.hibernate_frame_rate)
-		Engine.max_fps = maxi(1, frames)
-
-	DotLog.debug(CHANNEL, "tickrate applied", {"rate": rate})
-
-
-## True while a game change is under way: see the connection in [method start].
-var _loading_game: bool = false
-
-
-func _begin_game_load() -> void:
-	# A game change is a boundary for every game, including one that never asks.
-	apply_pending_tickrate()
-	_loading_game = true
-	_wake_from_hibernation()
-
-
-func _end_game_load() -> void:
-	_loading_game = false
-	call_deferred(&"_maybe_hibernate")
-
-
-func _maybe_hibernate() -> void:
-	if not config.hibernate_when_empty or _loading_game:
-		return
-	if state != State.RUNNING:
-		return
-	if player_count() > 0 or not _sessions.is_empty():
-		return
-
-	_set_state(State.HIBERNATING)
-	_apply_tickrate()
-	DotLog.info(CHANNEL, "hibernating (no players)")
-	hibernation_changed.emit(true)
-
-
-func _wake_from_hibernation() -> void:
-	if state != State.HIBERNATING:
-		return
-	_set_state(State.RUNNING)
-	_apply_tickrate()
-	DotLog.info(CHANNEL, "woke from hibernation")
-	hibernation_changed.emit(false)
-
-
-## Whether the server is hibernating: up, empty, and ticking at
-## [member DotServerConfig.hibernate_tickrate].
-func is_hibernating() -> bool:
-	return state == State.HIBERNATING
-
-
-## Applies [code]sv_hibernate_when_empty[/code] to a running server, at once.
-##
-## [b]Turning it off wakes an empty server, and that is a wake like any other[/b]: the
-## clocks following [signal hibernation_changed] start again from their configured values
-## and keep running with nobody there, which is what the operator asked for. Turning it on
-## hibernates a server that is empty now rather than at the next disconnect, which might
-## never come.
-func _apply_hibernate_setting(enabled: bool) -> void:
-	config.hibernate_when_empty = enabled
-
-	if enabled:
-		_maybe_hibernate()
-	else:
-		_wake_from_hibernation()
-
-
-func _set_state(new_state: State) -> void:
-	if state == new_state:
-		return
-	state = new_state
-	state_changed.emit(new_state)
-
-
-func state_name() -> String:
-	return State.keys()[state]
-
-
-func uptime_seconds() -> int:
-	if _started_at == 0:
-		return 0
-	return int(Time.get_unix_time_from_system()) - _started_at
-
-
-# --- Cvars ----------------------------------------------------------------
-
 func _register_cvars() -> void:
 	console.cheats_cvar = console.cvar(
 		"sv_cheats",
@@ -2604,6 +2052,61 @@ func _register_cvars() -> void:
 		DotConVar.FLAG_PROTECTED | DotConVar.FLAG_ARCHIVE
 	)
 
+	_register_admission_cvars()
+	_register_limit_cvars()
+
+	# Bound onto the console rather than read here: the console is what applies it, on
+	# every line, and a console with no server (an editor, a test) still answers from its
+	# own exported default.
+	console.chat_commands_cvar = console.cvar(
+		"sv_chat_commands",
+		"1" if config.chat_commands_open else "0",
+		"Let a prefixed chat message run any command the speaker has the flag for.",
+		DotConVar.FLAG_ARCHIVE | DotConVar.FLAG_NOTIFY
+	)
+
+	console.cvar("sv_lan", "0", "LAN mode: skip listing and heartbeat.", DotConVar.FLAG_ARCHIVE)
+	Cvars.register_query(self)
+
+	# Applying the cvar to the live config keeps the two views from drifting: a
+	# reader of config.max_players must not see a stale value after an admin
+	# changed sv_maxplayers.
+	_cv_maxplayers.changed.connect(
+		func(_old: String, value: String) -> void:
+			config.max_players = value.to_int()
+	)
+	_cv_hostname.changed.connect(
+		func(_old: String, value: String) -> void:
+			config.hostname = value
+	)
+	_cv_timeout.changed.connect(
+		func(_old: String, value: String) -> void:
+			config.client_timeout_sec = value.to_float()
+	)
+	_cv_background_grace.changed.connect(
+		func(_old: String, value: String) -> void:
+			config.background_grace_max_sec = value.to_float()
+	)
+
+	# Live rather than startup-only: hibernating is a state the server moves in and out of
+	# all day, and an operator switching it off wants the empty server's clock running now,
+	# not after a restart.
+	console.cvar(
+		"sv_hibernate_when_empty",
+		"1" if config.hibernate_when_empty else "0",
+		"Idle at a reduced tickrate while nobody is connected; the map's clocks wait, and restart when somebody joins. 0 keeps an empty server running, and its map changes on its own.",
+		DotConVar.FLAG_ARCHIVE | DotConVar.FLAG_NOTIFY
+	).changed.connect(
+		func(_old: String, value: String) -> void:
+			if state == State.RUNNING or state == State.HIBERNATING:
+				_apply_hibernate_setting(value.to_int() != 0)
+			else:
+				config.hibernate_when_empty = value.to_int() != 0
+	)
+	Cvars.register_threads(self)
+
+
+func _register_admission_cvars() -> void:
 	# [b]Which kinds of client may join, all on by default.[/b] Cross-play is the
 	# platform's default and these are an owner's opt-out, not an opt-in: every client
 	# speaks the same WebSocket protocol, so nothing about a desktop or a browser
@@ -2631,6 +2134,8 @@ func _register_cvars() -> void:
 		DotConVar.FLAG_ARCHIVE | DotConVar.FLAG_NOTIFY | DotConVar.FLAG_REPLICATED
 	)
 
+
+func _register_limit_cvars() -> void:
 	_cv_maxplayers = console.cvar(
 		"sv_maxplayers",
 		str(config.max_players),
@@ -2676,62 +2181,6 @@ func _register_cvars() -> void:
 		DotConVar.FLAG_ARCHIVE
 	).with_range(0, 1800)
 
-	# Bound onto the console rather than read here: the console is what applies it, on
-	# every line, and a console with no server (an editor, a test) still answers from its
-	# own exported default.
-	console.chat_commands_cvar = console.cvar(
-		"sv_chat_commands",
-		"1" if config.chat_commands_open else "0",
-		"Let a prefixed chat message run any command the speaker has the flag for.",
-		DotConVar.FLAG_ARCHIVE | DotConVar.FLAG_NOTIFY
-	)
-
-	console.cvar(
-		"sv_lan",
-		"0",
-		"LAN mode: skip listing and heartbeat.",
-		DotConVar.FLAG_ARCHIVE
-	)
-
-	Cvars.register_query(self)
-
-	# Applying the cvar to the live config keeps the two views from drifting: a
-	# reader of config.max_players must not see a stale value after an admin
-	# changed sv_maxplayers.
-	_cv_maxplayers.changed.connect(
-		func(_old: String, value: String) -> void:
-			config.max_players = value.to_int()
-	)
-	_cv_hostname.changed.connect(
-		func(_old: String, value: String) -> void:
-			config.hostname = value
-	)
-	_cv_timeout.changed.connect(
-		func(_old: String, value: String) -> void:
-			config.client_timeout_sec = value.to_float()
-	)
-	_cv_background_grace.changed.connect(
-		func(_old: String, value: String) -> void:
-			config.background_grace_max_sec = value.to_float()
-	)
-
-	# Live rather than startup-only: hibernating is a state the server moves in and out of
-	# all day, and an operator switching it off wants the empty server's clock running now,
-	# not after a restart.
-	console.cvar(
-		"sv_hibernate_when_empty",
-		"1" if config.hibernate_when_empty else "0",
-		"Idle at a reduced tickrate while nobody is connected; the map's clocks wait, and restart when somebody joins. 0 keeps an empty server running, and its map changes on its own.",
-		DotConVar.FLAG_ARCHIVE | DotConVar.FLAG_NOTIFY
-	).changed.connect(
-		func(_old: String, value: String) -> void:
-			if state == State.RUNNING or state == State.HIBERNATING:
-				_apply_hibernate_setting(value.to_int() != 0)
-			else:
-				config.hibernate_when_empty = value.to_int() != 0
-	)
-	Cvars.register_threads(self)
-
 
 ## Reads cvars back into the config after server.cfg has run.
 func _apply_cvars_to_config() -> void:
@@ -2766,167 +2215,4 @@ func _register_commands() -> void:
 
 # --- Reporting ------------------------------------------------------------
 
-## The `status` command's output.
-func status_lines() -> PackedStringArray:
-	var out := PackedStringArray()
 
-	out.append("hostname: %s" % _cv_hostname.get_string())
-	# The game's version first: it is the release an operator restarted to get, and the
-	# framework constant beside it never changes.
-	var game_version := ""
-	if games != null and games.current() != null:
-		game_version = games.current().version
-	out.append("version : %s(dot-server %s, %s)" % [
-		(game_version + " ") if game_version != "" else "", VERSION, DotPlatform.kind_name()
-	])
-	out.append("udp/ip  : %s:%d (%s)" % [
-		config.bind_address, config.port, _transport._transport_name()
-			if _transport != null else "not listening",
-	])
-	out.append("state   : %s, up %s" % [
-		state_name().to_lower(), DotBanManager.format_duration(uptime_seconds())
-	])
-
-	if games != null:
-		out.append("game    : %s" % games.describe_current())
-
-	out.append("players : %d playing, %d connecting, %d max" % [
-		player_count(), _sessions.size() - player_count(), _cv_maxplayers.get_int()
-	])
-
-	if _cv_password.get_string() != "":
-		out.append("password: yes")
-
-	if address_guard != null and address_guard.limit > 0:
-		# Shown only when it is on. A limit that is refusing players is the first thing
-		# to look at when the server "will not let anybody in", and nothing else here
-		# would say so.
-		out.append("per-ip  : %d max, %d refused" % [
-			address_guard.limit, address_guard.refused
-		])
-
-	out.append("")
-	out.append("# userid name                 state      time   ping  flags uid                    addr")
-
-	for session in sessions():
-		out.append(session.status_line())
-
-	return out
-
-
-func describe() -> Dictionary:
-	return {
-		"state": state_name(),
-		"hostname": config.hostname if config != null else "",
-		"uptime": uptime_seconds(),
-		"players": player_count(),
-		"sessions": _sessions.size(),
-		"max_players": _cv_maxplayers.get_int() if _cv_maxplayers != null else 0,
-		"transport": _transport._transport_name() if _transport != null else "",
-		"web_clients": _transport.supports_web_clients() if _transport != null else false,
-		"query": query != null and bool(query.call("is_listening")),
-		"a2s": a2s != null,
-		"per_ip_limit": address_guard.limit if address_guard != null else 0,
-		"per_ip_refused": address_guard.refused if address_guard != null else 0,
-		"ban_source": DotRegistry.get_service(BAN_SOURCE) != null,
-		"log_level": DotLog.level_name(DotLog.get_level()),
-		# Named rather than a bool, because "where does the log go" is a question an
-		# operator asks of a server that has just lost something, and "true" is not an
-		# answer to it.
-		"log": _log_destination(),
-		"threads": describe_threads(),
-	}
-
-
-## One line: the worker count and cores, what is pooled, and the physics engine, read-only
-## from the project because nothing in the process can change it. The figures come from
-## dot-core's [DotParallel], whose labels the threaded subsystems name ("net.snapshot").
-func describe_threads() -> String:
-	var workers := config.worker_threads if config != null else 0
-	var resolved := DotParallel.resolve_workers(workers)
-	var labels: Dictionary = DotParallel.describe()["labels"]
-	var parts := PackedStringArray()
-	parts.append("workers %d of %d cores%s" % [
-		resolved, OS.get_processor_count(),
-		"" if DotParallel.available() else " (no worker pool here)",
-	])
-	for which: Array in [["net", "net.snapshot", config != null and config.threads_net],
-			["npc", "npc.think", config != null and config.threads_npc]]:
-		var entry: Dictionary = labels.get(which[1], {})
-		if not bool(which[2]):
-			parts.append("%s inline (off)" % which[0])
-		elif entry.is_empty() or int(entry["pooled"]) == 0:
-			parts.append("%s on, nothing pooled yet" % which[0])
-		else:
-			parts.append("%s pooled (%d items a call, %.1f ms join, p99 %.1f)" % [
-				which[0], int(entry["items"]) / maxi(1, int(entry["calls"])),
-				float(entry["mean_usec"]) / 1000.0, float(entry["p99_usec"]) / 1000.0,
-			])
-	var engine := str(ProjectSettings.get_setting("physics/3d/physics_engine", "DEFAULT"))
-	var separate := bool(ProjectSettings.get_setting("physics/3d/run_on_separate_thread", false))
-	parts.append("physics %s, %s" % [engine, "own thread" if separate else "main thread"])
-	return "threads: " + "; ".join(parts)
-
-
-func _log_destination() -> String:
-	if log_node == null or not is_instance_valid(log_node):
-		return "stdout only"
-	if log_is_router:
-		return "router: %s" % log_node.name
-	if log_node.has_method("describe"):
-		var d: Variant = log_node.call("describe")
-		if d is Dictionary and (d as Dictionary).has("path"):
-			return str((d as Dictionary)["path"])
-	return log_node.name
-
-
-## The shape [code]DotBackboneClient.report_stats[/code] expects.
-func to_stats_report() -> Dictionary:
-	return {
-		"online": state == State.RUNNING or state == State.HIBERNATING,
-		"curUsers": player_count(),
-		"maxUsers": _cv_maxplayers.get_int(),
-		# The one place that can know: only a game knows which of its entities are
-		# bots, and it says so through a query provider (dot-server-query). Without
-		# one this is still 0, which is at least honest about not knowing.
-		"bots": _bot_count(),
-		# null, never "": the backbone's IngestServerStatsInput takes `map` as a
-		# non-empty string or null, and a server between games sending "" would
-		# have its whole report refused.
-		"map": _report_map(),
-		"password": _cv_password.get_string() != "",
-		"dedicated": DotPlatform.is_headless(),
-		"version": VERSION,
-	}
-
-
-## Bots, from the query snapshot, duck-typed like everything else about it.
-##
-## Zero when there is no query addon, and zero when there is one but no game has
-## registered a provider. Both are honest: nothing in dot-server can know how many
-## of a game's entities are bots, because it never sees one connect.
-func _bot_count() -> int:
-	if query_source == null or not is_instance_valid(query_source):
-		return 0
-
-	var snap: Object = query_source.call("snapshot")
-	if snap == null or not snap.has_method("bot_count"):
-		return 0
-
-	return int(snap.call("bot_count"))
-
-
-## The shape [code]DotBackboneClient.report_users[/code] expects.
-##
-## The game's own map when it reported one, else the game — see
-## [method DotGameManager.reported_map].
-func _report_map() -> Variant:
-	var id := games.reported_map() if games != null else ""
-	return id if id != "" else null
-
-
-func to_roster_report() -> Array:
-	var out: Array = []
-	for session in playing_sessions():
-		out.append(session.to_roster_entry())
-	return out

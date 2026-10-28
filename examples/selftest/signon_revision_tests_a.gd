@@ -2,23 +2,17 @@ extends "res://examples/selftest/signon_revision_base.gd"
 
 ## signon_revision selftest sections, part a.
 
-## [b]This is the section that would have prevented the bug.[/b]
-##
-## Every `@rpc` on [DotServer] has a counterpart on [DotClientLink] and every one on
-## [DotChatManager] has one on [DotClientChat] -- not because it is tidy, but because
-## Godot compares the name sets and refuses the pair when they differ. The suite asserts
-## the sets rather than the count, so a rename is caught as loudly as an addition and
-## the failure names the method.
+## Every `@rpc` on [DotServer] has a counterpart on [DotClientLink], and likewise for chat: Godot
+## compares the name sets and refuses the pair when they differ. The suite asserts the sets, not
+## the count, so a rename fails as loudly as an addition.
 func _test_the_two_sides_agree() -> void:
 	_section("the two sides of the handshake declare the same methods")
 
 	var server_names := DotSignon.rpc_method_names([DotServer, DotChatManager])
 	var client_names := DotSignon.rpc_method_names([DotClientLink, DotClientChat])
 
-	# [b]The surface is frozen, and this is the check that holds it.[/b] Exactly the six
-	# envelope names on each end, and none at all on the chat pair that used to carry
-	# two of their own: a feature is a kind now, and a seventh method is the protocol
-	# break the envelope exists to end.
+	# The surface is frozen: exactly the six envelope names on each end and none on the chat pair;
+	# a feature is a kind, and a seventh method is the protocol break.
 	var frozen := PackedStringArray(DotSignon.ENVELOPE)
 	_check(
 		server_names == frozen,
@@ -82,19 +76,14 @@ func _test_the_revision_is_derived() -> void:
 		"two servers that loaded their scripts in different orders would disagree"
 	)
 
-	# [b]An empty answer must not be a hash.[/b] A build that cannot read the rpc
-	# config -- an engine without `get_rpc_config` -- has to say so, because a hash of
-	# nothing is a specific twelve characters that every other build would read as a
-	# real revision and refuse.
+	# An empty answer must not be a hash: a build that cannot read the rpc config has to say so,
+	# not offer a hash of nothing that every other build would refuse.
 	_check(
 		DotSignon.revision([]) == "",
 		"a side that cannot answer reports nothing rather than a hash of nothing"
 	)
 
-	# Empty on EITHER side is not a mismatch: a server older than this class sends no
-	# revision, and refusing it would break every client against every server deployed
-	# before this landed -- which is the failure this whole thing exists to prevent,
-	# arrived at from the other direction.
+	# Empty on EITHER side is not a mismatch: a server older than this class sends no revision.
 	_check(DotSignon.compatible(rev, ""), "an older server is not refused")
 	_check(DotSignon.compatible("", rev), "and neither is an older client")
 	_check(DotSignon.compatible(rev, rev), "the same revision is compatible")
@@ -179,10 +168,8 @@ func _test_a_real_join_carries_it() -> bool:
 	_done()
 	return true
 
-## [b]FLAG_REPLICATED meant nothing on the wire until this.[/b] A game rule a client predicts
-## under (dot-combat's mp_teammate_passthrough) is a replicated cvar, and a client that never
-## hears it predicts under its own default. The table rides before LOAD_GAME; a cvar a module
-## registers later, and every change, arrives as a delta; a protected or plain cvar never does.
+## FLAG_REPLICATED on the wire: the table rides before LOAD_GAME, later registrations and changes
+## arrive as deltas, and a protected or plain cvar never does.
 func _test_replicated_cvars_reach_the_client() -> void:
 	_section("replicated cvars reach the client, live, and nothing else does")
 
@@ -228,12 +215,8 @@ func _test_replicated_cvars_reach_the_client() -> void:
 	_server.console.unregister_cvar("mp_signon_test_plain")
 	_done()
 
-## [b]Driven through the challenge handler directly, and that is the only way to reach
-## it.[/b] Producing a REAL mismatch would mean two builds of this addon in one process
-## -- two scripts declaring different rpc sets under the same class names -- which
-## GDScript cannot express. What can be exercised is the half that matters: a challenge
-## carrying a revision this build does not match must be refused immediately, with an
-## error that says what it is, rather than being answered and then falling silent.
+## Driven through the challenge handler directly: a real mismatch needs two builds in one
+## process. A challenge with a revision this build does not match must be refused at once, in words.
 func _test_a_mismatch_is_refused_at_once() -> void:
 	_section("a client that cannot match the server is told so at once")
 
@@ -264,10 +247,8 @@ func _test_a_mismatch_is_refused_at_once() -> void:
 		"and it disconnects rather than sitting on a socket that cannot work",
 		"a client left connected is a slot the server holds until it times out"
 	)
-	# [b]The refusal must not throw away what it refused.[/b] A shell telling its page
-	# "this server wants build X" reads `server_signon` off the link after the
-	# disconnect, and this was assigned past the early return -- so the one case it
-	# exists for was the one case it was empty.
+	# The refusal must keep what it refused: a shell reads `server_signon` off the link after the
+	# disconnect.
 	_check(
 		_link.server_signon == "0123456789ab",
 		"and it kept the revision the server asked for (%s)" % _link.server_signon,
@@ -292,11 +273,8 @@ func _test_a_mismatch_is_refused_at_once() -> void:
 
 	_done()
 
-## [b]An older client meets a newer server.[/b] The client has never heard of notices or
-## chat lines -- an older build that predates them -- and the server has a kind of its own
-## the client has never heard of. The join must complete, the server must not send what the
-## client does not know, and what arrives anyway must be dropped rather than break
-## anything.
+## An older client meets a newer server: the join completes, the server does not send kinds the
+## client does not know, and anything that arrives anyway is dropped.
 func _test_an_older_client_on_a_newer_server() -> void:
 	_section("an older client joins a newer server")
 
