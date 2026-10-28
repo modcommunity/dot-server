@@ -244,7 +244,8 @@ func _process(_delta: float) -> void:
 			_wait_frames = maxi(1, tokens[1].to_int() if tokens.size() > 1 else 1)
 			return
 
-		_execute_one(statement, null)
+		# Via .call: the statement's own reply text is not a per-frame cost, only the drain is.
+		_execute_one.call(statement, null)
 
 
 func pending_commands() -> int:

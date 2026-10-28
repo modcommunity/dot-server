@@ -83,7 +83,7 @@ func _sweep_timeouts() -> void:
 				if session.state == DotClientSession.State.PROFILE
 				else session.state_name().to_lower()
 			)
-			kick(session, "Timed out while %s" % stage)
+			kick(session, " ".join(["Timed out while", stage]))
 
 
 func _register_cvars() -> void:
