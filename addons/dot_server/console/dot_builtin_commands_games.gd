@@ -22,15 +22,9 @@ static func _register_games(server: DotServer, console: DotConsole) -> void:
 			return server.games.game_ids()
 	)
 
-	# `game` and `gamechange`, and deliberately NOT `map`.
-	#
-	# `map` was an alias here for as long as dot-server had no notion of a map -- other
-	# servers call the thing that swaps what is running `map`, so operators typed both.
-	# dot-map exists now, a map and a game are two completely different operations, and the
-	# one an operator almost always means by `map` is the other one: changing a GAME
-	# replaces the module, the netcode and the client's scene and puts everybody through
-	# signon, while changing a MAP replaces the world and nothing else and happens every few
-	# minutes. `DotMapCommands` owns the plain name; these are the aliases for this one.
+	# `game` and `gamechange`, deliberately NOT `map`: changing a GAME replaces the module and netcode and re-signs everybody on,
+	# while changing a MAP replaces only the world and happens every few minutes, and the second is what an operator means
+	# by `map`. `DotMapCommands` owns the plain name; these are the aliases for this one.
 	for alias in ["game", "gamechange"]:
 		console.command(
 			alias,
@@ -235,17 +229,9 @@ static func _register_admin_add(server: DotServer, console: DotConsole) -> void:
 	console.command(
 		"admin_add",
 		func(ctx: DotCmdContext) -> void:
-			# **A group name and a flag list are both legal here, and telling them apart
-			# is the whole of this block.** The admin FILE has had groups since it was
-			# written — the template ships `moderator`, `admin` and `owner` — and this
-			# command passed an empty group array, so the one word an operator would
-			# actually type was parsed as a flag instead.
-			#
-			# Nothing errored. `DotAdminFlags.parse` accepts any token and
-			# `_warn_about_unknown_flags` only warns, deliberately, because a game
-			# defines its own flags. So `admin_add <uid> moderator` created an admin
-			# holding a flag called "moderator" that grants nothing, and the only trace
-			# was a log line that reads like a typo nobody made.
+			# A group name and a flag list are both legal here and telling them apart is this block: the admin file has groups
+			# (moderator, admin, owner), but `DotAdminFlags.parse` accepts any token, so a group word became a flag that grants
+			# nothing and only a log line hinted at it.
 			var token := ctx.arg(1)
 			var groups := PackedStringArray()
 			var flags := PackedStringArray()
@@ -255,11 +241,9 @@ static func _register_admin_add(server: DotServer, console: DotConsole) -> void:
 			else:
 				flags = DotAdminFlags.parse(token)
 
-				# Refuse a token that is neither a known group nor any known flag. A
-				# game's own flags are legal and unknown, so this cannot refuse on
-				# "unknown flag" alone — but a single word matching NOTHING is a
-				# misspelled group far more often than it is a new flag, and silently
-				# granting nothing is the outcome worth preventing.
+				# Refuse a token that is neither a known group nor any known flag. A game's own flags are legal and unknown,
+				# but a lone word matching NOTHING is far more often a misspelled group, and silently granting
+				# nothing is the outcome to prevent.
 				var recognised := false
 
 				for flag in flags:

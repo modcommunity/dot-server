@@ -5,9 +5,7 @@ extends "res://addons/dot_server/client/dot_client_link_loading.gd"
 
 
 ## Connects to a server and runs the whole join flow.
-##
-## Returns when the client is playing, or with a failure describing which stage
-## went wrong.
+## Returns when the client is playing, or with a failure naming the stage that went wrong.
 func connect_to_server(address: String, password: String = "") -> DotResult:
 	if _connected:
 		disconnect_from_server()
@@ -61,20 +59,9 @@ func connect_to_server(address: String, password: String = "") -> DotResult:
 	return await _connect_with(ws, address, ws.connect_timeout_sec)
 
 
-## Whether a WebSocket join to [param address] tries [code]wss://[/code] before
-## [code]ws://[/code].
-##
-## [b]A public server's WebSocket port is a TLS port.[/b] Browsers reach every listed server
-## from an HTTPS page, so its game port is behind a TLS terminator (nginx, see
-## dot-server-deploy's install-server-tls.sh) or terminates TLS itself, and the address the
-## site hands the desktop app is that same `host:port`. Dialled as plain `ws://` it is
-## answered "400 plain HTTP request sent to HTTPS port": a desktop player whose UDP was
-## blocked, or who turned UDP off, could not join a server any browser could. TLS first
-## costs nothing when it is right; when it is wrong (a public server with no certificate,
-## which no browser can join either) the join waits [member tls_connect_timeout_sec] first.
-##
-## Only a bare `host:port` on a native build, and never a loopback or private address: a
-## LAN or development server is the plain-WebSocket case, and an explicit scheme is obeyed.
+## Whether a WebSocket join to [param address] tries [code]wss://[/code] before [code]ws://[/code].
+## A public server's WebSocket port is behind TLS, so plain ws:// is answered "400 plain HTTP request"; a wrong guess costs [member tls_connect_timeout_sec].
+## Only a bare host:port on native, never loopback or private (a LAN server is plain ws); an explicit scheme is obeyed.
 func _tls_first(address: String) -> bool:
 	if DotPlatform.is_web():
 		return false
@@ -189,16 +176,9 @@ func disconnect_from_server(reason: String = "") -> void:
 		_signon_watchdog.stop()
 	_unload_scene()
 
-	# [b]A failure survives the disconnect that reports it.[/b] Every legible refusal in
-	# this class is `_fail(...)` followed by a disconnect -- a signon revision that
-	# cannot match, a server that never challenged us -- and an unconditional IDLE here
-	# wiped the FAILED phase a frame after setting it. `last_error` stayed, so anything
-	# reading the error still worked and anything watching the PHASE showed the player a
-	# blank idle screen for a join that was refused with a reason. Found by a suite that
-	# asserted the phase rather than the error.
-	#
-	# A later `connect_to_server` sets CONNECTING before anything reads this, so a
-	# lingering FAILED cannot be mistaken for the state of a new attempt.
+	# A failure survives the disconnect that reports it: every legible refusal is _fail() then a disconnect,
+	# and an unconditional IDLE here wiped FAILED a frame later, so a watcher of the phase saw a blank idle screen.
+	# A later connect_to_server sets CONNECTING first, so a lingering FAILED cannot pass for a new attempt.
 	if phase != Phase.FAILED:
 		_set_phase(Phase.IDLE, "")
 
@@ -231,18 +211,8 @@ func _on_connection_failed() -> void:
 
 
 ## The server accepted a socket and then never said anything.
-##
-## [b]There is exactly one common cause and it is worth naming even when it is a
-## guess.[/b] A server that is listening, accepting and silent has almost always been
-## built against a different version of this addon: Godot compares the `@rpc` method
-## sets, refuses to confirm the path, and the challenge never leaves the server -- and
-## because that refusal is printed by the engine on whichever end noticed, and says
-## nothing about versions, nobody reads it as one. The alternative causes -- a server
-## wedged mid-boot, a proxy that completed a handshake it is not forwarding -- leave the
-## same silence, so this says "probably" rather than "is".
-##
-## The message names the fix a player can act on. The detail names the one an operator
-## can.
+## Most often a server built against a different addon version (the @rpc sets differ, so Godot never confirms the path); other causes look the same, so the message says "probably".
+## The message names the fix a player can act on; the detail names the operator's.
 func _on_signon_timeout() -> void:
 	if phase != Phase.AUTHENTICATING:
 		return
@@ -267,13 +237,8 @@ func _on_signon_timeout() -> void:
 
 
 ## The transport reported that the connection is gone.
-##
-## [b]Shares the teardown with [method disconnect_from_server] rather than repeating it.[/b]
-## The two ways a connection ends have to leave the same state behind and they did not:
-## this one left the closed peer assigned, so `multiplayer.has_multiplayer_peer()` stayed
-## true and everything downstream went on believing it was on a network. Clearing it from
-## inside the poll that reported the drop is supported -- [MultiplayerAPI] re-checks the
-## peer after polling for exactly this case.
+## Shares the teardown with [method disconnect_from_server]: both endings must leave the same state, or a closed peer stays assigned.
+## Clearing the peer from inside the poll that reported the drop is supported by [MultiplayerAPI].
 func _on_server_disconnected() -> void:
 	DotLog.info(CHANNEL, "server closed the connection")
 	# No reason, so it does not emit; this function owns the reason it reports.

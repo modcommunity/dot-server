@@ -100,12 +100,8 @@ func _attach_scene(packed: PackedScene, gen: int) -> Variant:
 
 
 ## The server telling us which scene to load.
-##
-## [b]This yields.[/b] It used to load, instantiate and add the scene in one call, so a
-## browser (where that is many seconds of wasm) never painted the LOADING phase and the page
-## went unresponsive. Two frames let a loading screen draw, the load is threaded where threads
-## exist, and a frame separates instantiate from add_child. Callers must not assume the scene
-## exists when this returns: wait for [signal spawned] or PLAYING.
+## This yields: two frames let a loading screen draw (a browser would otherwise freeze), the load is threaded where possible, and a frame separates instantiate from add_child.
+## Do not assume the scene exists on return: wait for [signal spawned] or PLAYING.
 func _on_load_game(_peer_id: int, info: Dictionary) -> void:
 	_load_gen += 1
 	var gen := _load_gen
@@ -198,20 +194,12 @@ func _load_scene_resource(resolved: String, gen: int) -> Variant:
 
 
 ## Everything that has to happen once the join is complete.
-##
-## Factored out because there are two ways to finish loading — with a scene and
-## without one — and they have to agree. They did not: the no-scene path skipped all
-## three steps, which is a bug that only exists on a server with no game configured.
+## Shared by the with-scene and no-scene paths so they cannot disagree (the no-scene path skipped all three steps).
 func _enter_playing() -> void:
 	_set_phase(Phase.PLAYING, "")
-	# A heartbeat now and three more a quarter of a second apart, then the usual interval.
-	# Every game's clock takes its input lead from the round trip, and until the first
-	# heartbeat came back -- two seconds after joining, at the earliest -- `ping_ms` was -1,
-	# so the clock left the flight time out and every command of the first seconds arrived
-	# after its tick: the player moved on their own screen and the server ran them on the
-	# command before. Measured in game-arena over a real link: 46% of the first three
-	# seconds' commands in time. A few early samples give the clock a round trip within one
-	# round trip of joining, on WebSocket as well as ENet.
+	# A heartbeat now and three more a quarter second apart, then the usual interval: the game clock needs a round trip
+	# for its input lead, and without early samples ping_ms stays -1 for two seconds, so the first commands arrive after their tick.
+	# A few early samples give the clock a round trip within one trip of joining, on WebSocket as well as ENet.
 	_early_heartbeats = EARLY_HEARTBEATS
 	_heartbeat.wait_time = EARLY_HEARTBEAT_SEC
 	_heartbeat.start()
@@ -220,12 +208,8 @@ func _enter_playing() -> void:
 
 
 ## Turns the server's scene path into one this client will load.
-##
-## [b]The server does not get to name an absolute path.[/b] A relative path resolves
-## under dot-cloud's mount prefix for the content the server named; an absolute
-## [code]res://[/code] path is accepted only when it is already inside a mount
-## prefix. Otherwise a malicious server could ask a client to load
-## [code]res://addons/…[/code] or any scene shipped in the build.
+## The server does not get to name an absolute path: a relative one resolves under dot-cloud's mount prefix, an absolute res:// path
+## only when already inside one; otherwise a hostile server could load res://addons/… or any shipped scene.
 func _resolve_scene(scene_path: String, info: Dictionary) -> String:
 	if not scene_path.contains("://"):
 		var safe := DotPaths.safe_relative(scene_path)
@@ -273,23 +257,8 @@ func _unload_scene() -> void:
 
 
 ## Retires what the game that just went parented under this link: its RPC node, above all.
-##
-## [b]A delivered game parents its own RPC node under this link[/b], named the same as the
-## server's copy, because Godot routes an RPC by node path and this node is `Server` on
-## both ends. No game freed it, so every game change left the old one here, and when the
-## same game loaded again its node collided with the leftover's name and was renamed
-## `@Node@<n>`: from then on the server could not find what this client sent ("Failed to
-## get path from RPC: Server/@Node@2370"), in every game a rotation came back to.
-## [DotGameManager] retires the server's copy the same way.
-##
-## [b]Renamed now and freed [constant RETIRED_SECONDS] later[/b], because a snapshot the
-## server sent before the swap can still be in flight: Godot resolves a cached RPC path by the
-## node's object and forgets it when the node leaves the tree, so a node freed at once turns
-## each straggler into an engine error, while a renamed one drops it quietly and frees the
-## name for the next game's node, which is added in this same call.
-##
-## Everything under this link that is not the link's own belongs to the game: the chat
-## node, the two timers, and the game root when it is the default one under this node.
+## A game's RPC node is named like the server's copy (RPCs route by node path), so a leftover makes the next one be renamed @Node@N and the server cannot find it.
+## Renamed now, freed [constant RETIRED_SECONDS] later: freeing at once turns in-flight snapshots into engine errors, a renamed node drops them quietly and frees the name.
 func _free_game_children() -> void:
 	var retired: Array[Node] = []
 
@@ -357,9 +326,7 @@ func ping_ms() -> int:
 	return _ping_ms
 
 
-## The round trip to the server in milliseconds, the best this link can say: ENet's own
-## measure on UDP (it times every acknowledged packet from the connect on, so it is right
-## before the first snapshot), and the heartbeat's otherwise. 0 when nothing is known yet.
+## The round trip to the server in milliseconds: ENet's own measure on UDP (right before the first snapshot), else the heartbeat's. 0 when unknown.
 ## What a game's netcode clock should be fed rather than [method ping_ms].
 func rtt_ms() -> float:
 	var api := multiplayer

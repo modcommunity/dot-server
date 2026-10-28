@@ -27,9 +27,7 @@ addons/dot_server/events/dot_event_bus.gd::banner	2
 addons/dot_server/events/dot_event_bus.gd::long_block	6
 addons/dot_server/game/dot_game_descriptor.gd::history	1
 addons/dot_server/game/dot_game_descriptor.gd::long_block	15
-addons/dot_server/game/dot_game_manager.gd::banner	5
-addons/dot_server/game/dot_game_manager.gd::history	2
-addons/dot_server/game/dot_game_manager.gd::long_block	25
+addons/dot_server/game/dot_game_manager.gd::long_block	2
 addons/dot_server/moderation/dot_address_guard.gd::long_block	6
 addons/dot_server/moderation/dot_audit_log.gd::banner	2
 addons/dot_server/moderation/dot_audit_log.gd::long_block	5
@@ -41,7 +39,7 @@ addons/dot_server/modules/dot_bot_quota.gd::long_block	2
 addons/dot_server/modules/dot_module.gd::banner	3
 addons/dot_server/modules/dot_module.gd::long_block	4
 addons/dot_server/modules/dot_module_host.gd::banner	3
-addons/dot_server/modules/dot_module_host.gd::long_block	7
+addons/dot_server/modules/dot_module_host.gd::long_block	4
 addons/dot_server/net/dot_envelope.gd::banner	3
 addons/dot_server/net/dot_envelope.gd::history	1
 addons/dot_server/net/dot_envelope.gd::long_block	6
@@ -55,11 +53,9 @@ addons/dot_server/server/dot_client_session.gd::banner	5
 addons/dot_server/server/dot_client_session.gd::history	1
 addons/dot_server/server/dot_client_session.gd::long_block	20
 addons/dot_server/server/dot_guest_identity.gd::long_block	2
-addons/dot_server/server/dot_server.gd::banner	11
-addons/dot_server/server/dot_server.gd::history	1
-addons/dot_server/server/dot_server.gd::long_block	45
-addons/dot_server/server/dot_server_config.gd::history	3
-addons/dot_server/server/dot_server_config.gd::long_block	45
+addons/dot_server/server/dot_server.gd::long_block	8
+addons/dot_server/server/dot_server_config.gd::history	2
+addons/dot_server/server/dot_server_config.gd::long_block	41
 addons/dot_server/vote/dot_vote_manager.gd::banner	4
 addons/dot_server/vote/dot_vote_manager.gd::long_block	3
 examples/content_switch.gd::banner	4

@@ -5,9 +5,7 @@ extends "res://addons/dot_server/console/dot_console_registry.gd"
 
 
 ## Parses and runs a command line immediately.
-##
-## Semicolons separate commands, as they always have. Quotes group arguments containing
-## spaces.
+## Semicolons separate commands; quotes group arguments containing spaces.
 func execute(line: String, ctx_template: DotCmdContext = null) -> DotResult:
 	var last := DotResult.success(null)
 
@@ -18,10 +16,7 @@ func execute(line: String, ctx_template: DotCmdContext = null) -> DotResult:
 
 
 ## Queues a command line to run from the buffer.
-##
-## Use when a command's effect must not happen inside another command's handler —
-## `changelevel` from a vote callback, for instance, where tearing down the scene
-## tree mid-signal would free the emitter.
+## For effects that must not happen inside another command's handler: `changelevel` from a vote callback would free the emitter mid-signal.
 func enqueue(line: String) -> void:
 	for part in split_statements(line):
 		_buffer.append(part)
@@ -95,25 +90,9 @@ func _build_context(
 	return ctx
 
 
-## Every command a caller arriving on [param source] could reach, as plain documents.
-##
-## Written for [code]DotChatRelay.commands_fn[/code]: a website composer offering a `/`
-## menu has to be told what this server accepts, because the table depends on which game is
-## loaded and which modules an operator installed, and a list held by the site goes stale
-## the first time either changes.
-##
-## [b]The source gate here is the same one [method _run_command] applies[/b], and that
-## matters more than it looks. A relay configured as RCON reaches everything RCON reaches;
-## a relay configured as CHAT reaches what this server takes from chat, which with
-## [member chat_commands_open] on is everything that has not called
-## [method DotConCommand.no_chat] — so a menu built from a per-command flag alone would
-## hide an operator's whole toolbox from a deployment that deliberately made them remote
-## administrators, and, on a server that closed chat commands, offer a table where every
-## entry is refused.
-##
-## [b]It answers no permission question.[/b] Whether a particular person may run a
-## particular command is decided per line, later, by the admin manager — this is what is
-## worth OFFERING. Hidden commands are left out, because hidden means "not in the list".
+## Every command a caller arriving on [param source] could reach, as plain documents, for [code]DotChatRelay.commands_fn[/code].
+## The source gate is the one [method _run_command] applies (RCON reaches all, CHAT what chat takes, per [member chat_commands_open] and [method DotConCommand.no_chat]),
+## so a menu built from a flag alone would hide or wrongly offer commands. It answers no permission question: the admin manager decides per line. Hidden commands are left out.
 func command_document(
 	source: DotCmdContext.Source = DotCmdContext.Source.CHAT
 ) -> Array[Dictionary]:
@@ -155,10 +134,8 @@ func _run_command(cmd: DotConCommand, ctx: DotCmdContext) -> DotResult:
 	if ctx.source == DotCmdContext.Source.CHAT and not cmd.allows_chat(
 		chat_commands_are_open()
 	):
-		# Two refusals, because they are two different conversations. One is "not this
-		# command, ever"; the other is "not this server, by a setting" -- and an operator
-		# who reads the second knows there is a cvar to look for, where the old single
-		# message sent them looking for a `with_chat()` they could not add.
+		# Two refusals, because they are two conversations: "not this command, ever" and "not this server, by a setting";
+		# the second tells the operator there is a cvar to look for.
 		var why := (
 			"'%s' cannot be run from chat." % cmd.name
 			if cmd.chat_policy == DotConCommand.ChatPolicy.REFUSED

@@ -25,19 +25,13 @@ signal cvar_registered(cvar: DotConVar)
 @export_group("Behaviour")
 
 ## Config files are searched here, in order.
-##
-## [code]res://[/code] first so a game can ship defaults, then [code]user://[/code]
-## so an operator's edits win — which is the order that makes shipping a default
-## [code]server.cfg[/code] useful rather than obstructive.
+## [code]res://[/code] first so a game can ship defaults, then [code]user://[/code] so an operator's edits win.
 @export var config_search_paths: PackedStringArray = PackedStringArray([
 	"user://cfg", "res://cfg", "res://addons/dot_server/cfg",
 ])
 
 ## Commands executed per frame from the buffer. 0 means all of them.
-##
-## Nonzero bounds the damage of a config file that loops: `alias` plus `exec` can
-## express one, and a server that hangs at boot with no output is much harder to
-## diagnose than one that logs a slow buffer.
+## Nonzero bounds a looping config (`alias` plus `exec`); a boot that hangs silently is harder to diagnose than a slow buffer.
 @export_range(0, 1000, 1) var commands_per_frame: int = 64
 
 ## Maximum depth of nested `exec` calls.
@@ -45,30 +39,13 @@ signal cvar_registered(cvar: DotConVar)
 ## The direct guard against a config that execs itself.
 @export_range(1, 32, 1) var max_exec_depth: int = 8
 
-## Whether a chat line that opens with a command prefix reaches commands that have
-## said nothing either way.
-##
-## [b]On, and that is a deliberate reversal.[/b] Commands used to opt in one at a time
-## and everything else answered "cannot be run from chat" -- to an operator holding the
-## flag for it as readily as to a stranger, because the check ran before the permission
-## check and did not look at who was asking. The gate that decides what a person may do is
-## [member DotConCommand.permission], and it runs on the same line for chat, RCON, the
-## terminal and a config file alike. This one decides something narrower: whether typing is
-## a way in at all.
-##
-## Off restores the old behaviour exactly -- only [code]with_chat()[/code] commands are
-## reachable by typing -- for a deployment that wants its console reached by console.
-## Either way [method DotConCommand.no_chat] still wins for a command whose answer is about
-## the operation rather than about who is asking.
-##
-## [DotServer] binds [member chat_commands_cvar] over this, so an operator can flip it at
-## runtime and a server.cfg can set it at boot.
+## Whether a chat line that opens with a command prefix reaches commands that said nothing either way.
+## On: [member DotConCommand.permission] decides who may do what on every source; this decides only whether typing is a way in. Off: only [code]with_chat()[/code] commands.
+## [method DotConCommand.no_chat] always wins. [DotServer] binds [member chat_commands_cvar] over this.
 @export var chat_commands_open: bool = true
 
 ## Log every executed command at INFO.
-##
-## On for a dedicated server: the command log is how an operator reconstructs what
-## an admin did, and it is the backing evidence for a moderation decision.
+## On for a dedicated server: it is how an operator reconstructs what an admin did, and the evidence for moderation.
 @export var log_commands: bool = true
 
 ## name -> DotConVar
@@ -169,34 +146,9 @@ func command(
 	)
 
 
-## Registers everything a duck-typed command source claims, as ordinary commands.
-##
-## [b]The point is that this is not a second dispatch path.[/b] An addon that ships a
-## command object -- dot-log's [code]log[/code], and anything else with the same shape --
-## has a whole console's worth of machinery it would otherwise have to do without on a
-## dedicated server: permissions, the RCON gate, the chat gate, the audit line, `cmdlist`,
-## `help`, aliases and completion. Wrapping each claimed name in a real [DotConCommand]
-## means every one of those keeps working and there is exactly one place a command is run.
-##
-## [b]Duck-typed, and the source's class is named nowhere.[/b] Same reasoning as
-## [method DotServer.attach_query_host]: a script mentioning a [code]class_name[/code] the
-## project does not have fails to parse and takes every script referencing it down with it,
-## so an optional addon may not be named by a mandatory one. The shape is the one
-## dot-console's [code]DotConsoleBridge[/code] already duck-types, which is why an addon
-## implements it once and reaches a client console and a server console both.
-##
-## [codeblock]
-## # in the host, with dot-log installed:
-## server.console.add_source(DotLogCommands.new(router), DotAdminFlags.GENERIC)
-## [/codeblock]
-##
-## [param source] must have [code]names()[/code] and [code]execute(line)[/code].
-## [code]help_for(name)[/code] and [code]complete(partial, limit)[/code] are used when
-## present and skipped when not.
-##
-## Returns the names actually registered, which is not always every name claimed: one that
-## collides with an existing command or cvar is refused by [method register_command] and
-## left to whoever had it. Read the returned array rather than assuming.
+## Registers everything a duck-typed command source claims, as ordinary commands. Not a second dispatch path:
+## wrapping each name in a [DotConCommand] keeps permissions, the RCON and chat gates, audit, `cmdlist`, `help`, aliases and completion. Duck-typed because a mandatory addon may not name an optional addon's class (it would fail to parse).
+## [param source] needs [code]names()[/code] and [code]execute(line)[/code]; [code]help_for(name)[/code] and [code]complete(partial, limit)[/code] are optional. Returns the names actually registered (collisions are refused), so read it.
 func add_source(
 	source: Object,
 	permission: String = "",
@@ -289,10 +241,7 @@ func add_source(
 
 
 ## One command's forwarder. Bound per name so the source sees the line it expects.
-##
-## [b]The whole line, command word included.[/b] Every source of this shape parses its own
-## first word -- dot-log's refuses a line that does not begin with `log` -- so handing it
-## only the arguments would make every one of them answer "not a log command".
+## The whole line, command word included: every source parses its own first word, so handing only the arguments makes it answer "not a log command".
 func _source_handler(source: Object, name: String) -> Callable:
 	return func(ctx: DotCmdContext) -> void:
 		if not is_instance_valid(source):
@@ -321,10 +270,7 @@ func _source_handler(source: Object, name: String) -> Callable:
 
 
 ## Puts whatever a source returned on the caller's console.
-##
-## A source is entitled to answer with a string, a string with newlines in it, or an array
-## of lines, and a console that only understood one of the three would make two thirds of
-## them look like a command that ran and said nothing.
+## A source may answer a string, a multi-line string or an array of lines; handling only one makes the rest look like a command that ran silently.
 func _reply_value(ctx: DotCmdContext, value: Variant) -> void:
 	if value == null:
 		return
@@ -346,11 +292,8 @@ func _reply_value(ctx: DotCmdContext, value: Variant) -> void:
 
 
 ## A source's own completion, in the shape [member DotConCommand.completer] is called in.
-##
-## The source is handed the whole line it would be asked to execute and answers with whole
-## lines, which is the convention everywhere in this family -- dot-console's panel replaces
-## the input box with the candidate it picked. [method complete] puts the line back
-## together from the pieces the completer contract hands over.
+## The source gets the whole line and answers whole lines (dot-console's panel replaces the input box);
+## [method complete] reassembles the line from the pieces the completer contract hands over.
 func _source_completer(source: Object, name: String) -> Callable:
 	return func(partial: String, index: int) -> PackedStringArray:
 		if not is_instance_valid(source):
@@ -359,11 +302,9 @@ func _source_completer(source: Object, name: String) -> Callable:
 		var line := name
 
 		for _i in range(index):
-			# The arguments already typed are not passed to a completer -- only the one
-			# being completed and its position -- so they are stood in for. Every source
-			# of this shape completes on the POSITION and the prefix, which is what makes
-			# that lossless here; one that parsed the earlier arguments would need the
-			# whole line and would be asking for a different contract.
+			# The completer is not given the arguments already typed, only the one being completed and its position, so they are
+			# stood in for. Sources complete on position and prefix, so this is lossless; one that parsed earlier arguments
+			# would need a different contract.
 			line += " ?"
 
 		line += " " + partial
@@ -379,11 +320,8 @@ func _source_completer(source: Object, name: String) -> Callable:
 		return PackedStringArray()
 
 
-## Unregisters everything a source claims. For a module that shipped one and is unloading.
-##
-## Every name it still claims, not every name it was given: a source whose claim list has
-## grown since is one whose extra commands would otherwise be left pointing at it after it
-## is gone.
+## Unregisters everything a source claims, for a module that is unloading.
+## Every name it still claims, not every name it was given, or commands added since would be left pointing at a gone source.
 func remove_source(source: Object) -> void:
 	if source == null or not is_instance_valid(source):
 		return
@@ -517,10 +455,8 @@ func _context_dict(c: DotConVar, ctx: DotCmdContext) -> Dictionary:
 	}
 
 
-## Whether a prefixed chat line reaches a command that has said nothing either way.
-##
-## The cvar wins when there is one, so `sv_chat_commands 0` takes effect on the next line
-## typed rather than at the next restart.
+## Whether a prefixed chat line reaches a command that said nothing either way.
+## The cvar wins when present, so `sv_chat_commands 0` takes effect on the next line rather than at restart.
 func chat_commands_are_open() -> bool:
 	if chat_commands_cvar != null:
 		return chat_commands_cvar.get_bool()
@@ -536,10 +472,8 @@ func _on_cvar_changed(old_value: String, _new_value: String, c: DotConVar) -> vo
 
 
 ## Names close to [param name], for "did you mean".
-##
-## Substring match plus a cheap edit-distance-1 check. Not a full Levenshtein: the
-## overwhelming majority of console typos are one transposition or one missing
-## character, and this catches those without scanning 400 names quadratically.
+## Substring match plus an edit-distance-1 check, not full Levenshtein: most typos are one transposition or missing character,
+## and this avoids scanning 400 names quadratically.
 func suggest(name: String, limit: int = 3) -> PackedStringArray:
 	var out := PackedStringArray()
 	var target := name.to_lower()

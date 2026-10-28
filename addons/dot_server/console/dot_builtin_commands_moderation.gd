@@ -96,10 +96,8 @@ static func _register_moderation_banid(server: DotServer, console: DotConsole) -
 				ctx.reply("Could not read the duration '%s'." % ctx.arg(1))
 				return
 
-			# Takes a connected player as well as a bare address, because an admin
-			# watching somebody misbehave has their name in front of them and not their
-			# address — and looking one up in `status` first is a step during which they
-			# are still misbehaving.
+			# Takes a connected player as well as a bare address: an admin watching a troublemaker has the name,
+			# and a `status` lookup first is a step during which they are still misbehaving.
 			var resolved := _resolve_address(server, ctx, ctx.arg(0))
 			if not resolved.ok:
 				ctx.reply_error(resolved)
@@ -232,15 +230,9 @@ static func _register_moderation_silence(server: DotServer, console: DotConsole)
 	).with_usage("[count|search]")
 
 
-## Turns a command argument into an address to ban.
-##
-## Accepts a bare address, an [code]ip:[/code] target, or any player the targeting rules
-## resolve — and refuses when somebody at that address outranks the caller.
-##
-## [b]That last check is the one worth keeping.[/b] An address ban removes everybody
-## behind it, so checking only the player who was named lets a junior admin remove a
-## senior one by naming their housemate. Immunity is about who may be acted on, and an
-## address ban acts on all of them.
+## Turns a command argument into an address to ban: a bare address, an [code]ip:[/code] target, or any player the targeting rules resolve.
+## Refuses when somebody at that address outranks the caller: an address ban removes everybody behind it,
+## so checking only the named player lets a junior admin remove a senior one via their housemate.
 static func _resolve_address(
 	server: DotServer,
 	ctx: DotCmdContext,
@@ -294,10 +286,8 @@ static func _resolve_address(
 
 
 ## Sends a listing, cut short when it is going to a chat window.
-##
-## A ban list is hundreds of lines and a chat command answers one line per message, so
-## an unbounded listing from chat is the server flooding its own admin — and the rate
-## limiter that exists to stop a player doing that does not run on server messages.
+## A ban list is hundreds of lines and chat answers one line per message, so an unbounded listing floods the admin,
+## and the rate limiter does not run on server messages.
 static func _reply_capped(
 	ctx: DotCmdContext,
 	lines: PackedStringArray,

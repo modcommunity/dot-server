@@ -5,14 +5,8 @@ extends "res://addons/dot_server/client/dot_client_link_signon.gd"
 
 
 ## Subscribes to the browser's visibility events. No-op off-web.
-##
-## Deliberately not gated on [member background_keepalive]: that is an exported
-## property a host can change at runtime, and a listener installed once in
-## [method _ready] could not honour a later change to it. The flag is checked where it
-## is acted on instead. Listening costs nothing off-web, where
-## [method DotWeb.watch_visibility] installs nothing at all — and
-## [signal page_visibility_changed] is about the page rather than about the keepalive,
-## so a game that wants to pause or mute on a tab switch gets it either way.
+## Not gated on [member background_keepalive] because a host can change it at runtime; the flag is checked where acted on.
+## [signal page_visibility_changed] is about the page, so a game can pause or mute on a tab switch either way.
 func _watch_page_visibility() -> void:
 	# Keyed by instance rather than by class: two links in one process would
 	# otherwise root their listeners under the same name, and the second would
@@ -39,23 +33,16 @@ func _on_page_visibility(visible: bool) -> void:
 	send_kind(DotEnvelope.VISIBILITY, {"visible": visible, "grace": background_grace_sec})
 
 	if visible:
-		# Coming back, the heartbeat timer resumes on its own — but its next tick is
-		# up to heartbeat_interval_sec away, and the server has been counting silence
-		# for the whole time the tab was hidden. Say something now rather than spend
-		# any more of a budget that is already nearly gone.
+		# Coming back, the heartbeat timer resumes, but its next tick may be far off while the server
+		# counts silence from the whole hidden time. Say something now rather than spend the nearly gone budget.
 		_send_heartbeat()
 
 	_flush_peer()
 
 
-## Pushes what [code]rpc_id[/code] queued out of the socket without waiting for a
-## frame.
-##
-## [b]The announcement above has no frame to wait for.[/b] `visibilitychange` arrives
-## as a JavaScript-to-wasm call, not as a frame callback, and it fires as the browser
-## is stopping [code]requestAnimationFrame[/code] — so the poll that would ordinarily
-## do the sending may never happen again. An announcement that never leaves is the
-## same as no announcement, and costs the player the slot it was asking to keep.
+## Pushes what [code]rpc_id[/code] queued out of the socket without waiting for a frame.
+## visibilitychange arrives as a JS-to-wasm call as the browser stops requestAnimationFrame, so the poll that would send it may never run again;
+## an announcement that never leaves costs the player the slot it asked to keep.
 func _flush_peer() -> void:
 	var peer := multiplayer.multiplayer_peer
 	if peer == null:
@@ -75,10 +62,8 @@ func want_scoreboard(open: bool) -> bool:
 	return send_kind(DotEnvelope.SCOREBOARD_WANT, {"open": open})
 
 
-## Asks for ONE board, leaving a held board held. What a client's block list (dot-chat's
-## `sm`) uses to learn who is here without the player opening Tab. The current held state
-## goes with it, so a server that predates `once` reads "no change" instead of a close.
-## False when it was not sent.
+## Asks for ONE board, leaving a held board held; a client's block list (dot-chat's `sm`) uses it to learn who is here.
+## The held state goes along, so a server that predates `once` reads "no change" instead of a close. False when not sent.
 func request_scoreboard() -> bool:
 	if not _connected:
 		return false
@@ -145,9 +130,7 @@ func _on_chat_line(_peer_id: int, payload: Dictionary) -> void:
 
 
 ## Creates the child that mirrors the server's chat node.
-##
-## Named to match [DotServer]'s [code]chat_ref[/code] default, because the name is
-## the routing.
+## Named to match [DotServer]'s [code]chat_ref[/code] default, because the name is the routing.
 func _ensure_chat() -> void:
 	if _chat != null and is_instance_valid(_chat):
 		return
@@ -159,11 +142,8 @@ func _ensure_chat() -> void:
 
 
 ## The server's HUD line, countdown or cue. See [signal notice_received].
-##
-## Decoded through [method DotNotice.from_wire], which defaults and bounds every field:
-## this is a Variant off the wire, and a server one build older or newer may send a shape
-## this one has never seen. A payload that decodes to nothing is dropped here rather than
-## handed to a HUD that would have to ask.
+## Decoded through [method DotNotice.from_wire], which defaults and bounds every field, since a server one build off may send an unknown shape;
+## a payload that decodes to nothing is dropped here rather than handed to a HUD.
 func _on_notice(_peer_id: int, payload: Dictionary) -> void:
 	var notice := DotNotice.from_wire(payload)
 
@@ -176,12 +156,8 @@ func _on_notice(_peer_id: int, payload: Dictionary) -> void:
 
 
 ## The server explaining why it is about to close the connection.
-##
-## Sent before the socket closes, which is the only way a player learns they were
-## banned rather than merely disconnected.
-##
-## A refusal for a protocol mismatch carries its code and detail, so a shell can tell
-## "this build cannot play here" from a kick.
+## Sent before the socket closes: the only way a player learns they were banned rather than disconnected.
+## A protocol-mismatch refusal carries its code and detail, so a shell can tell "this build cannot play here" from a kick.
 func _on_disconnect_notice(_peer_id: int, payload: Dictionary) -> void:
 	var reason := DotEnvelope.text(payload, "reason")
 	var code := DotEnvelope.text(payload, "code", DotError.CODE_FORBIDDEN)

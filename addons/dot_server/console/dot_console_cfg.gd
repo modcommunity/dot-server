@@ -4,12 +4,9 @@ extends "res://addons/dot_server/console/dot_console_exec.gd"
 ## Config files and the command line of [DotConsole].
 
 
-## Executes a config file.
-##
-## Searched through [member config_search_paths] unless the name is already a
-## path. Missing files are not an error when [param required] is false: a server
-## that refuses to boot without an optional [code]autoexec.cfg[/code] is a server
-## that is annoying to install.
+## Executes a config file, searched through [member config_search_paths] unless the name is already a path.
+## Missing files are no error when [param required] is false: a server that refuses to boot without an optional
+## [code]autoexec.cfg[/code] is annoying to install.
 func exec_config(
 	name: String,
 	ctx: DotCmdContext = null,
@@ -131,27 +128,16 @@ func write_config(name: String = "server_saved") -> DotResult:
 
 
 ## Runs [code]+command args[/code] arguments, the way a dedicated server does.
-##
-## [code]godot --headless -- +sv_maxplayers 24 +map dm_arena[/code] — a plus
-## introduces a command and everything up to the next plus is its arguments. This
-## is what makes a server scriptable from a systemd unit without a config file.
+## [code]godot --headless -- +sv_maxplayers 24 +map dm_arena[/code]: a plus starts a command and its arguments run to the next plus,
+## which makes a server scriptable from a systemd unit without a config file.
 func execute_command_line(only_cvars: bool = false) -> int:
 	var statements := command_line_statements()
 	var ran := 0
 
 	for statement in statements:
-		# Split into two passes, and the reason is `FLAG_STARTUP_ONLY`.
-		#
-		# A cvar the server cannot re-negotiate once it is up — the tickrate, the
-		# port, the transport — is refused after [method set_server_running]. The
-		# command line is the most "startup" input there is, so refusing
-		# `+sv_tickrate 128` there made the flag mean "settable nowhere but
-		# server.cfg", and an operator with the muscle memory of any other server
-		# ignored them and said so only in a log line.
-		#
-		# So the boot runs this twice: once before the listener with `only_cvars`,
-		# which lets those through, and once after for everything else — because a
-		# `+map` or a `+say` genuinely does need the server to be up first.
+		# Two passes because of `FLAG_STARTUP_ONLY`: such cvars (tickrate, port, transport) are refused once the server runs,
+		# and the command line is the most "startup" input there is. So the boot runs once before the listener with `only_cvars`,
+		# and once after for everything else, since a `+map` or `+say` needs the server up.
 		if only_cvars and find_cvar(_first_token(statement)) == null:
 			continue
 
@@ -163,9 +149,7 @@ func execute_command_line(only_cvars: bool = false) -> int:
 
 
 ## The `+command arg` statements on the command line, in order.
-##
-## Separated from running them so the boot can look at the list twice without
-## re-parsing argv, and so a test can assert on what was found.
+## Separate from running them so the boot can read the list twice without re-parsing argv, and a test can assert on it.
 func command_line_statements() -> PackedStringArray:
 	var args := PackedStringArray()
 	args.append_array(OS.get_cmdline_args())

@@ -119,10 +119,8 @@ static func _register_status(server: DotServer, console: DotConsole) -> void:
 		"Show server and player status."
 	)
 
-	# [b]An operator cannot read an RPC checksum, and this is the question they will
-	# actually be asked.[/b] "Players on the old build cannot join" is answered by
-	# comparing this line with what the client prints, and there is no other way to get
-	# it out of a running server without a packet capture. See [DotSignon].
+	# An operator cannot read an RPC checksum, but "players on the old build cannot join" is answered by comparing
+	# this line with what the client prints; there is no other way to get it from a running server. See [DotSignon].
 	console.command(
 		"signon",
 		func(ctx: DotCmdContext) -> void:

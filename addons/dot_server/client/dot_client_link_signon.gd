@@ -105,15 +105,8 @@ func _on_challenge(_peer_id: int, challenge: Dictionary) -> void:
 
 
 ## Whether this link's transport may carry the credential [param strategy] needs.
-##
-## [b]ENet is not encrypted.[/b] A ticket is safe to send in the clear — single-use,
-## minutes long, and good for this server alone — but an access token (introspect)
-## or a password (local) is a bearer secret that anybody on the path could replay
-## anywhere. Neither goes over UDP: the link rejoins over WebSocket, which is TLS
-## wherever it is wss://, and sends nothing at all on the UDP connection. DTLS would
-## fix it at the cost of a certificate, which is the thing the native path exists to
-## not need. (A server's join password is shared, not an account's, and is sent as
-## before.)
+## ENet is not encrypted: a ticket is safe in the clear (single-use, short, one server) but an access token or password is a bearer secret.
+## Those never go over UDP: the link rejoins over WebSocket (TLS under wss://). The server's shared join password is sent as ever.
 func _may_send_credential_here(strategy: String) -> bool:
 	if transport_used != "enet" or not strategy in ["introspect", "local"]:
 		return true
@@ -268,12 +261,9 @@ func _on_content_sync(_peer_id: int, info: Dictionary) -> void:
 ## somewhere to ask: the manifest must still carry a signature from a key the client holds.
 ## Duck-typed, since dot-server does not depend on dot-cloud.
 func _adopt_content_bases(cloud: Object, urls: Variant) -> void:
-	# [b]`PackedStringArray is Array` is FALSE, and this silently dropped everything
-	# the server sent.[/b] The packed arrays are their own Variant types rather than
-	# specialisations of [Array], so a `urls is Array` guard rejects exactly the value
-	# the config holds and the RPC carries -- no error, no warning, just a client that
-	# never learns the address. Found by the check below failing with "it had []" on a
-	# payload that was demonstrably being sent.
+	# PackedStringArray is not an Array: the packed arrays are their own Variant types, so an `is Array`
+	# guard rejected exactly the value the config holds and the RPC carries, and the client silently
+	# never learned the address.
 	var list: Array = []
 	if urls is PackedStringArray:
 		list = Array(urls as PackedStringArray)
