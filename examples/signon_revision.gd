@@ -212,6 +212,9 @@ func _test_a_notice_reaches_the_client() -> void:
 	_check(got.topic == &"game_vote", "and its topic (%s)" % got.topic)
 	_check(_link.last_notice == got, "and the link keeps it for a HUD built afterwards")
 
+	await _test_notice_shapes(received)
+
+func _test_notice_shapes(received: Array[DotNotice]) -> void:
 	# The two shapes that are not "everything": a cue and nothing else, which must come
 	# back with NO countdown rather than a countdown of zero -- a HUD told "0 seconds" draws
 	# a line that has already run out -- and a clear, which is a topic and nothing else.
@@ -238,6 +241,9 @@ func _test_a_notice_reaches_the_client() -> void:
 			"a clear arrives as a clear of its topic (%s)" % str(received[2].describe())
 		)
 
+	await _test_notice_data(received, session)
+
+func _test_notice_data(received: Array[DotNotice], session: DotClientSession) -> void:
 	# Structured content rides the same dictionary, which is why it changes no revision: a
 	# ballot goes out with its options and its voters and comes back whole.
 	var ballot := {"open": true, "options": [{"id": "a", "label": "Alpha", "votes": 1.0}], "voters": {"u1": 0}}
@@ -318,6 +324,9 @@ func _test_the_scoreboard_reaches_the_client() -> void:
 	_check(got.size() == after, "and nothing more is sent (%d then %d)" % [after, got.size()])
 	_check(_link.scoreboard == got[-1], "the link keeps the last one for a board drawn later")
 
+	await _test_scoreboard_stale(got, session, row)
+
+func _test_scoreboard_stale(got: Array[Dictionary], session: DotClientSession, row: Dictionary) -> void:
 	# Unreliable over ENet arrives in any order: a board older than the one held is dropped.
 	var newest := int(_link.scoreboard.get("seq", 0))
 	var stale := (_link.scoreboard as Dictionary).duplicate(true)
@@ -340,6 +349,9 @@ func _test_the_scoreboard_reaches_the_client() -> void:
 	_check(_server.player_key(session) == key and FileAccess.file_exists(salt_path),
 		"the key survives a restart: its salt is kept on disk")
 
+	await _test_scoreboard_one_off(got, session)
+
+func _test_scoreboard_one_off(got: Array[Dictionary], session: DotClientSession) -> void:
 	# One board on request, without holding it: nothing follows it, and a held board stays held.
 	var before := got.size()
 	_check(_link.request_scoreboard(), "a one-off board is asked for")
