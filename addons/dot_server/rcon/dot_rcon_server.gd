@@ -2,28 +2,9 @@
 class_name DotRconServer
 extends Node
 
-## Remote console, speaking the classic RCON protocol.
-##
-## Wire-compatible with existing RCON tooling, which is the point: server operators
-## already have clients, web panels and scripts that speak it, and inventing a
-## protocol would mean none of them work.
-##
-## Also serves the same console over WebSocket when
-## [member DotServerConfig.rcon_websocket] is on, because a browser cannot open a raw
-## TCP socket and a browser-based admin panel is the thing most operators actually
-## want.
-##
-## [b]RCON is a remote shell.[/b] Treat every control here as load-bearing:
-##
-## - No password means the listener does not open at all. There is no configuration
-##   that produces an unauthenticated RCON.
-## - Passwords are compared in constant time.
-## - Failed attempts are counted per address and lock it out.
-## - An allow-list, when set, is checked before the password — it is the control that
-##   survives a leaked password.
-## - The protocol is plaintext, as every implementation of it is. Run it over a
-##   private network or a
-##   tunnel; the WebSocket variant can at least have TLS in front of it.
+## Remote console speaking the classic RCON protocol (and WebSocket for browser panels).
+## A remote shell: no password means no listener, constant-time compare, per-address lockout,
+## allow-list before the password, plaintext wire.
 
 const CHANNEL := "rcon"
 const SERVICE := &"dot_rcon_server"
@@ -37,10 +18,8 @@ const TYPE_AUTH := 3
 ## The protocol's limit is 4096; anything larger is not a real command.
 const MAX_PACKET_BYTES := 4096
 
-## Largest response body sent in one packet.
-##
-## Real clients handle multi-packet responses inconsistently, so long output is
-## split at line boundaries into several complete packets rather than fragmented.
+## Largest response body in one packet; longer output is split at line boundaries, since
+## clients handle multi-packet responses inconsistently.
 const MAX_RESPONSE_BYTES := 3500
 
 signal authenticated(address: String)
@@ -149,7 +128,6 @@ func is_listening() -> bool:
 	return _tcp != null
 
 
-# --- Accept and poll ------------------------------------------------------
 
 func _process(_delta: float) -> void:
 	if Engine.is_editor_hint():
@@ -203,11 +181,9 @@ func _accept_from(listener: TCPServer, websocket: bool) -> void:
 		var ws: WebSocketPeer = null
 
 		if websocket:
-			# WebSocketPeer.accept_stream() performs the HTTP handshake itself: it
-			# reads the request off the stream and writes the 101 response. So the
-			# stream must be handed over untouched. Reading the request here first
-			# to inspect it — which is what this used to do — consumes the bytes the
-			# peer is waiting for, and the upgrade then never completes at all.
+			# accept_stream() does the HTTP handshake itself, so hand over the stream untouched:
+			# reading the request first consumes bytes the peer waits for and the upgrade never
+			# completes.
 			ws = WebSocketPeer.new()
 			var ws_err := ws.accept_stream(peer)
 			if ws_err != OK:
@@ -254,10 +230,8 @@ func _poll_clients() -> void:
 func _poll_client(client: Dictionary) -> bool:
 	var tcp: StreamPeerTCP = client["tcp"]
 
-	# An unauthenticated socket that just sits there is a slot being held open.
-	# This covers the WebSocket path too, including a handshake that never
-	# completes: that port is meant to be reachable from a browser, so it is the
-	# easier of the two to hold slots on.
+	# An unauthenticated socket that just sits there holds a slot; this includes a WebSocket
+	# handshake that never completes, on a port meant to be reachable from a browser.
 	if not bool(client["authed"]) \
 		and Time.get_ticks_msec() - int(client["connected_at"]) > 30_000:
 		DotLog.debug(
@@ -318,13 +292,9 @@ func _poll_client(client: Dictionary) -> bool:
 	return true
 
 
-# --- The binary protocol --------------------------------------------------
 
-## Reads complete packets out of the buffer, leaving any partial tail.
-##
-## Framing is: int32 size (of everything after it), int32 id, int32 type, then the
-## body and two NUL terminators. A short read is normal on a stream socket, so the
-## remainder is kept rather than discarded.
+## Reads complete packets out of the buffer, leaving any partial tail (a short read is
+## normal). Framing: int32 size, int32 id, int32 type, body, two NULs.
 func _consume_packets(
 	client: Dictionary,
 	buffer: PackedByteArray
@@ -493,19 +463,15 @@ func _execute(
 	_send_response(client, packet_id, "\n".join(lines))
 
 
-## Sends a response, split into several packets if it is long.
-##
-## Split at line boundaries rather than at byte offsets: a client that concatenates
-## packets gets the same text, and one that does not at least gets whole lines.
+## Sends a response, split into packets at line boundaries if long, so a client that does
+## not concatenate still gets whole lines.
 func _send_response(
 	client: Dictionary,
 	packet_id: int,
 	text: String
 ) -> void:
-	# Measured in bytes, not characters. The limit the protocol imposes is on the
-	# encoded packet, and one accented or CJK character is two to four bytes: a
-	# response of 2400 characters can be 4800 bytes and overrun MAX_PACKET_BYTES,
-	# which this server's own reader — and every real client — then rejects.
+	# Bytes, not characters: the limit is on the encoded packet, and a CJK character is up to
+	# four bytes, so 2400 characters can overrun MAX_PACKET_BYTES and be rejected by clients.
 	if text.to_utf8_buffer().size() <= MAX_RESPONSE_BYTES:
 		_send_packet(client, packet_id, TYPE_RESPONSE, text)
 		return
@@ -532,11 +498,8 @@ func _send_response(
 		_send_packet(client, packet_id, TYPE_RESPONSE, chunk)
 
 
-## Cuts [param text] into pieces that each encode to at most
-## [constant MAX_RESPONSE_BYTES] bytes, never splitting a character in half.
-##
-## Only reached by a line with no interior newline to break at, so the per-character
-## walk costs nothing in the normal case.
+## Cuts [param text] into pieces of at most [constant MAX_RESPONSE_BYTES] encoded bytes, never
+## splitting a character. Only reached by a line with no newline to break at.
 static func _split_to_byte_limit(text: String) -> PackedStringArray:
 	var out := PackedStringArray()
 
@@ -605,12 +568,9 @@ func _send_packet(
 	tcp.put_data(packet)
 
 
-# --- WebSocket ------------------------------------------------------------
 
-## Handles a command sent as plain text over WebSocket.
-##
-## The first message must be the password; everything after it is a command. Simpler
-## than the binary framing because a browser panel has no reason to reproduce it.
+## Handles a command sent as plain text over WebSocket: the first message is the password,
+## the rest are commands.
 func _handle_text_command(client: Dictionary, text: String) -> void:
 	var trimmed := text.strip_edges()
 
@@ -625,21 +585,14 @@ func _handle_text_command(client: Dictionary, text: String) -> void:
 	_execute(client, 1, trimmed)
 
 
-# --- Access control ------------------------------------------------------
 
 func _address_allowed(address: String) -> bool:
 	return address_matches(address, server.config.rcon_allowed_addresses)
 
 
-## Whether [param address] is covered by [param allow].
-##
-## Static and free of any socket so a self-test can drive it directly. The
-## allow-list is the control that survives a leaked password, so both directions
-## matter: an address it wrongly admits is a hole, and an address it wrongly
-## refuses locks an operator out of their own console.
-##
-## An empty list allows everything, which is what "no allow-list configured"
-## means. [method DotServerConfig.warn_about_risky_settings] says so out loud.
+## Whether [param address] is covered by [param allow]. Static so a self-test can drive it.
+## Wrongly admitting is a hole, wrongly refusing locks an operator out. An empty list allows
+## everything; [method DotServerConfig.warn_about_risky_settings] says so.
 static func address_matches(address: String, allow: PackedStringArray) -> bool:
 	if allow.is_empty():
 		return true
@@ -654,10 +607,8 @@ static func address_matches(address: String, allow: PackedStringArray) -> bool:
 		if candidate == "":
 			continue
 
-		# Prefix matching, so "192.168." covers a subnet without needing CIDR
-		# parsing. Coarse, and enough for the "my LAN" case this is usually for.
-		# The trailing dot is what anchors it to an octet boundary, so "192.16."
-		# does not cover 192.168.1.1.
+		# Prefix matching ("192.168." covers a subnet without CIDR parsing); the trailing dot
+		# anchors it to an octet boundary, so "192.16." does not cover 192.168.1.1.
 		var is_prefix := candidate.ends_with(".")
 
 		for form in forms:
@@ -669,13 +620,8 @@ static func address_matches(address: String, allow: PackedStringArray) -> bool:
 	return false
 
 
-## The IPv4-mapped IPv6 prefix.
-##
-## A listener bound to a dual-stack socket reports a connecting IPv4 client as
-## "::ffff:192.168.1.5". That is the same address written differently, so an
-## allow-list holding either spelling has to cover the other — otherwise an
-## operator who allowed 127.0.0.1 is refused by their own server the moment it
-## binds IPv6, with a log line that says only that the address was not allowed.
+## The IPv4-mapped IPv6 prefix. A dual-stack listener reports an IPv4 client as
+## "::ffff:192.168.1.5", so an allow-list holding either spelling must cover the other.
 const V4_MAPPED_PREFIX := "::ffff:"
 
 
@@ -714,7 +660,6 @@ func clear_lockout(address: String) -> void:
 	_failures.erase(host)
 
 
-# --- Teardown ------------------------------------------------------------
 
 func _close_client(client: Dictionary) -> void:
 	if client["ws"] != null:

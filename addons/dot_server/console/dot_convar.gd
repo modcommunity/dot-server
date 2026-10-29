@@ -1,43 +1,25 @@
 class_name DotConVar
 extends RefCounted
 
-## A console variable, modelled on the console variables of every dedicated server.
-##
-## [b]Why values are stored as strings.[/b] Every path a cvar value arrives
-## through is textual — a [code].cfg[/code] file, an RCON packet, a chat command,
-## a command-line argument — and every path it leaves through is textual too.
-## Storing the string and converting on read means one representation, one place
-## where parsing can fail, and no class of bug where [code]sv_gravity 800[/code]
-## and [code]sv_gravity 800.0[/code] behave differently.
-##
-## Flags are the interesting part. They are what makes a console safe to expose:
-## [constant FLAG_CHEAT] variables refuse to change unless [code]sv_cheats[/code]
-## is on, [constant FLAG_PROTECTED] values never appear in output, and
-## [constant FLAG_ARCHIVE] decides what [code]writeconfig[/code] persists.
+## A console variable. Values are stored as strings because every path in and out (cfg, RCON,
+## chat, argv) is textual: one representation, one parse failure point. Flags make a console
+## safe to expose: [constant FLAG_CHEAT], [constant FLAG_PROTECTED], [constant FLAG_ARCHIVE].
 
 ## Persisted by `writeconfig`. For operator settings, not runtime state.
 const FLAG_ARCHIVE := 1 << 0
 
-## Refuses to change unless `sv_cheats` is on.
-##
-## The whole reason a cheat flag exists: a server can ship a console that
-## exposes gameplay-affecting variables without those variables being reachable
-## on a live competitive server.
+## Refuses to change unless `sv_cheats` is on, so gameplay variables are unreachable on a live
+## competitive server.
 const FLAG_CHEAT := 1 << 1
 
-## Value is sent to clients and kept in sync.
-##
-## For rules a client needs to predict correctly — gravity, movement speed. A
-## client that disagrees mispredicts, and the mismatch looks like lag.
+## Value is sent to clients and kept in sync (gravity, speed); a client that disagrees
+## mispredicts, which looks like lag.
 const FLAG_REPLICATED := 1 << 2
 
 ## Announces changes in chat.
 const FLAG_NOTIFY := 1 << 3
 
-## Value is never shown: redacted in `cvarlist`, `status` and every log line.
-##
-## For `rcon_password` and `sv_password`. A console that prints these is one
-## pasted screenshot away from a compromised server.
+## Value is never shown: redacted in `cvarlist`, `status` and logs (`rcon_password`).
 const FLAG_PROTECTED := 1 << 4
 
 ## Meaningful only on the server. Client-side use is refused.
@@ -51,10 +33,8 @@ const FLAG_CLIENT_ONLY := 1 << 6
 ## For internals and deprecated aliases — clutter reduction, not access control.
 const FLAG_HIDDEN := 1 << 7
 
-## Cannot be changed after the server has started.
-##
-## For things a live server cannot re-negotiate: the listen port, the tickrate,
-## the transport. Changing them at runtime would half-apply.
+## Cannot be changed after the server has started (listen port, tickrate, transport);
+## a runtime change would half-apply.
 const FLAG_STARTUP_ONLY := 1 << 8
 
 ## May be changed by clients over RCON only with the `cvar` permission.
@@ -89,10 +69,8 @@ var max_value: float = 0.0
 var has_min: bool = false
 var has_max: bool = false
 
-## Optional validator. Returns a [DotResult]; a failure refuses the change.
-##
-## For constraints reflection cannot express: a port already in use, a map that
-## does not exist, a tickrate the physics step cannot divide.
+## Optional validator returning a [DotResult]; a failure refuses the change. For constraints
+## reflection cannot express (a port in use, a map that does not exist).
 var validator: Callable = Callable()
 
 
@@ -135,7 +113,6 @@ func with_validator(p_validator: Callable) -> DotConVar:
 	return self
 
 
-# --- Reading ---------------------------------------------------------------
 
 func get_string() -> String:
 	return _value
@@ -149,11 +126,8 @@ func get_float() -> float:
 	return _value.to_float() if _value.is_valid_float() else 0.0
 
 
-## Truthiness, accepting everything an operator might reasonably type.
-##
-## Those consoles treat any nonzero number as true and nothing else; accepting
-## [code]true[/code] / [code]on[/code] / [code]yes[/code] as well costs nothing
-## and stops [code]sv_cheats true[/code] from silently meaning false.
+## Truthiness accepting what an operator might type: nonzero, [code]true[/code], [code]on[/code],
+## [code]yes[/code], so `sv_cheats true` does not silently mean false.
 func get_bool() -> bool:
 	var s := _value.strip_edges().to_lower()
 	if s.is_valid_float():
@@ -165,17 +139,10 @@ func is_default() -> bool:
 	return _value == default_value
 
 
-# --- Writing ---------------------------------------------------------------
 
-## Changes the value, enforcing flags and bounds.
-##
-## [param context] describes who is setting it and gates the flag checks. Keys:
-## [code]cheats_enabled[/code], [code]server_running[/code],
-## [code]has_permission[/code], [code]source[/code].
-##
-## A cvar set from a config file at boot legitimately bypasses checks that a cvar
-## set by a client over RCON must not, which is why this takes a context rather
-## than reading global state.
+## Changes the value, enforcing flags and bounds. [param context] says who sets it (keys
+## [code]cheats_enabled[/code], [code]server_running[/code], [code]has_permission[/code],
+## [code]source[/code]): a boot-time config legitimately bypasses checks an RCON client must not.
 func set_value(new_value: String, context: Dictionary = {}) -> DotResult:
 	var trimmed := new_value.strip_edges()
 
@@ -248,12 +215,8 @@ func reset() -> void:
 	force_set(default_value)
 
 
-## Applies bounds, clamping rather than refusing.
-##
-## Clamping is what an operator typing at a console expects, and is the right
-## behaviour for one at a
-## console: [code]sv_maxplayers 9999[/code] should give them the maximum with a
-## note, not an error they have to look up the limit to fix.
+## Applies bounds, clamping rather than refusing: `sv_maxplayers 9999` gives the maximum
+## with a note, not an error.
 func _coerce(value: String) -> DotResult:
 	if not (has_min or has_max):
 		return DotResult.success(value)
@@ -287,7 +250,6 @@ func _coerce(value: String) -> DotResult:
 	return DotResult.success(str(clamped))
 
 
-# --- Reporting -------------------------------------------------------------
 
 func has_flag(flag: int) -> bool:
 	return (flags & flag) != 0

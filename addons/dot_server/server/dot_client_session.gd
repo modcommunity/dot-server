@@ -1,26 +1,9 @@
 class_name DotClientSession
 extends RefCounted
 
-## One connected client, and how far through joining it is.
-##
-## [b]The signon state machine is the load-bearing part.[/b] Joining a dot-server
-## is not one step — a client connects, proves who it is, downloads whatever content
-## the current game needs, loads it, and only then exists in the world. Each stage
-## can fail differently, each has its own timeout, and a client stuck in one needs
-## to be told which. Every dedicated server that has this problem models it the
-## same way, and for the same reason.
-##
-## [codeblock]
-## CONNECTING -> AUTHENTICATING -> PROFILE -> DOWNLOADING -> LOADING -> SPAWNED
-##      \              \             \            \             \
-##       -------------------- REJECTED / DISCONNECTED -------------------
-## [/codeblock]
-##
-## A client that never leaves [constant State.DOWNLOADING] is on a slow connection;
-## one stuck in [constant State.AUTHENTICATING] has a credential problem; one stuck in
-## [constant State.PROFILE] is waiting on a module (a profile store, an avatar the player
-## has not made yet). Collapsing these into "connecting" is what makes a server
-## impossible to support.
+## One connected client and its signon: CONNECTING, AUTHENTICATING, PROFILE, DOWNLOADING,
+## LOADING, SPAWNED, or REJECTED / DISCONNECTED from any stage. Stages fail and time out
+## separately so a stuck client can be told which; "connecting" alone is unsupportable.
 
 enum State {
 	## Transport connected, nothing known about them yet.
@@ -37,25 +20,14 @@ enum State {
 	REJECTED,
 	## Gone.
 	DISCONNECTED,
-	## Authenticated, and held by a module before any content is sent: the one stage in
-	## which a module can still refuse a player who has not appeared. See
-	## [method DotServer.hold_profile]. A server with no module holding it passes
-	## straight through.
-	##
-	## [b]Last in the enum, not between AUTHENTICATING and DOWNLOADING where it runs.[/b]
-	## A state is stored and compared as its number outside this file (a replay records
-	## [code]int(session.state)[/code]), so inserting it in signon order would renumber
-	## LOADING, SPAWNED, REJECTED and DISCONNECTED under every record and every build
-	## that kept one. The order of the signon is [method _can_transition], never the
-	## enum's.
+	## Authenticated and held by a module before any content is sent; see
+	## [method DotServer.hold_profile]. Last in the enum, not in signon order, because a
+	## state is stored as its number elsewhere (replays); the order is [method _can_transition].
 	PROFILE,
 }
 
-## Server-local sequential id — a userid, in the usual sense.
-##
-## Small and stable for the session's lifetime, which is what makes
-## [code]kickid 3[/code] usable. Distinct from the transport's peer id (which can
-## be large and is reused) and from the account uid (which is long).
+## Server-local sequential id, small and stable for the session ([code]kickid 3[/code]).
+## Not the transport's peer id (reused) or the account uid (long).
 var userid: int = 0
 
 ## Transport-level peer id, as [MultiplayerPeer] knows it.
@@ -66,16 +38,11 @@ var state: State = State.CONNECTING
 ## Set when [member state] is [constant State.REJECTED].
 var reject_reason: String = ""
 
-## Identity from dot-auth, once authenticated. Null before that.
-##
-## Typed loosely because dot-server does not depend on dot-auth; holds a
-## [code]DotAuthIdentity[/code] when that addon is installed.
+## Identity from dot-auth once authenticated, else null. Typed loosely: dot-server
+## does not depend on dot-auth.
 var identity: Object = null
 
-## Name shown in chat and `status`.
-##
-## Comes from the identity when authenticated, from the client's request when a
-## guest. Never used for authorisation.
+## Name shown in chat and `status`; never used for authorisation.
 var display_name: String = "unnamed"
 
 var address: String = ""
@@ -87,22 +54,14 @@ var ticket_nonce: String = ""
 ## Empty for a shell exported before clients said. See [method DotServer.platform_refusal_for].
 var platform: String = ""
 
-## Admin permission flags, resolved once at authentication.
-##
-## Cached rather than re-resolved per command: a permission lookup can hit a file
-## or a remote source, and doing that on every chat message would be both slow and
-## a way to make the server do work by talking.
+## Admin permission flags, resolved once at authentication and cached: a lookup can hit
+## a file or remote source, and per-message lookups would let chat make the server work.
 var permissions: PackedStringArray = PackedStringArray()
 
 var immunity: int = 0
 
-## The admin groups this player is in, by name — from the admin file's `groups` and from
-## any source that returns a `groups` list. Resolved with [member permissions].
-##
-## [b]Kept, not only folded into flags.[/b] A flag says what somebody may DO; a game also
-## wants to know who somebody IS — a sandbox gives its "vip" group twice the props — and a
-## role named in a config is a group name, not a set of flags. Before this the names were
-## read, used to merge flags, and dropped.
+## The admin groups this player is in, by name. Kept besides the flags because a game
+## wants to know who somebody IS (a "vip" group), and a role is a group name, not flags.
 var groups: PackedStringArray = PackedStringArray()
 
 ## Unix seconds when the transport connected.
@@ -121,36 +80,22 @@ var ping_ms: int = -1
 ## [method DotServer.scoreboard_snapshot].
 var wants_scoreboard: bool = false
 
-## Whether this client has told the server its page went into the background.
-##
-## [b]A browser stops driving the Godot main loop for a hidden tab.[/b] It stops
-## calling [code]requestAnimationFrame[/code] altogether, so [code]_process[/code],
-## every [Timer] and the multiplayer poll all stop: the client sends no heartbeats
-## and reads nothing, while the socket stays open and healthy. Without this flag
-## that is indistinguishable from a client whose machine has died, and
-## [code]sv_timeout[/code] drops somebody who only switched tabs.
-##
-## Set by the client's own announcement and cleared by the next packet that proves
-## its loop is running again — see [member background_grace_sec].
+## Whether the client said its page went into the background. A hidden tab stops the main
+## loop, so heartbeats stop on a healthy socket and `sv_timeout` would drop it. Cleared by
+## the next packet; see [member background_grace_sec].
 var backgrounded: bool = false
 
-## Seconds of silence allowed while [member backgrounded], already clamped to the
-## server's [code]sv_background_grace[/code]. 0 means the normal timeout applies.
-##
-## [b]The client asks and the server decides.[/b] A grace a client could set for
-## itself is a way to hold a slot on a full server for as long as it likes.
+## Seconds of silence allowed while [member backgrounded], clamped to the server's
+## [code]sv_background_grace[/code]. 0 means the normal timeout. The client asks, the
+## server decides: a self-set grace would hold a slot on a full server.
 var background_grace_sec: float = 0.0
 
 ## Score, for `status` output and roster reporting. The game sets this.
 var score: int = 0
 
-## Who is holding this session in [constant State.PROFILE], by the name each gave
-## [method DotServer.hold_profile]. The session leaves the stage when the last one
-## releases it. Empty in every other state.
-##
-## [b]Names, not a count.[/b] Two modules holding and one releasing twice must not let
-## the player in while the other is still deciding, and [code]status[/code] can say who
-## a stuck player is waiting on.
+## Who holds this session in [constant State.PROFILE], by the name each gave
+## [method DotServer.hold_profile]; it leaves when the last releases. Names, not a count,
+## so a double release cannot let the player in and `status` can say who is waited on.
 var profile_holds: PackedStringArray = PackedStringArray()
 
 ## Content sync progress, 0..1. -1 when not downloading.
@@ -169,20 +114,14 @@ var gagged: bool = false
 var mute_expires_at: int = 0
 
 ## Free-form per-session storage for game code and modules.
-##
-## Keeps a game from having to maintain a parallel dictionary keyed by peer id and
-## then keep it in sync with connect and disconnect.
 var data: Dictionary = {}
 
 ## Whether this client occupies a reserved slot.
 var used_reserved_slot: bool = false
 
-## Whether this session has no transport peer behind it.
-##
-## True for anything the host adopted rather than the listener created — a server-side
-## bot, a listen server's own player, a test. Everything that counts players must still
-## count them, which is why they are sessions at all; everything that talks to a socket
-## must not, because there is no socket. See [method DotServer.adopt_session].
+## Whether no transport peer is behind this session: a bot, a listen server's own player,
+## a test. These still count as players but must never be sent a packet. See
+## [method DotServer.adopt_session].
 var local: bool = false
 
 var _state_entered_ms: int = 0
@@ -196,14 +135,9 @@ func _init(p_userid: int = 0, p_peer_id: int = 0) -> void:
 	_state_entered_ms = Time.get_ticks_msec()
 
 
-# --- State -----------------------------------------------------------------
 
-## Moves to a new state. Returns false when the transition is not allowed.
-##
-## Transitions are checked rather than assumed because the interesting bugs in a
-## join flow are all ordering bugs — a spawn message arriving before content
-## finished, a second authentication for an already-spawned client — and a state
-## machine that accepts anything cannot catch them.
+## Moves to a new state. Returns false when the transition is not allowed. Checking
+## catches the ordering bugs of a join flow, such as a spawn before content finished.
 func transition_to(new_state: State) -> bool:
 	if state == new_state:
 		return true
@@ -247,11 +181,9 @@ static func _can_transition(from: State, to: State) -> bool:
 		State.CONNECTING:
 			return to == State.AUTHENTICATING
 		State.AUTHENTICATING:
-			# DotServer always goes through PROFILE. The direct moves stay legal for a
-			# host that drives the machine itself, which every one did before the stage
-			# existed; removing them would break those hosts for no gain.
-			# Content is optional: a server whose current game needs nothing new
-			# sends an authenticated client straight to loading.
+			# DotServer always goes through PROFILE; the direct moves stay legal for hosts
+			# that drive the machine themselves. Content is optional: a game that needs
+			# nothing new sends an authenticated client straight to loading.
 			return to == State.PROFILE or to == State.DOWNLOADING or to == State.LOADING
 		State.PROFILE:
 			# Out to content only. Never straight to SPAWNED: a held player who sends
@@ -260,13 +192,9 @@ static func _can_transition(from: State, to: State) -> bool:
 		State.DOWNLOADING:
 			return to == State.LOADING
 		State.LOADING:
-			# Back to downloading on a game change, exactly as from SPAWNED below. A
-			# `changelevel` does not wait for a client to finish joining, and one that
-			# connected a second before it is in LOADING when it arrives — so
-			# refusing this left that client in the game everybody else has left,
-			# with one warning line and nothing else. Worse, the server then counted
-			# it as neither ready nor waiting, decided every client was synced, and
-			# swapped without ever telling it.
+			# Back to downloading on a game change, as from SPAWNED: a `changelevel` does
+			# not wait for joiners, and refusing this left a LOADING client in the old
+			# game, counted as neither ready nor waiting, never told about the swap.
 			return to == State.SPAWNED or to == State.DOWNLOADING
 		State.SPAWNED:
 			# Back to downloading on a game change, which is the whole point of
@@ -280,10 +208,7 @@ func state_name() -> String:
 	return State.keys()[state]
 
 
-## Seconds spent in the current state.
-##
-## What a timeout sweep and a `status` listing both need: "authenticating for 90
-## seconds" is actionable in a way that "authenticating" is not.
+## Seconds spent in the current state, for timeout sweeps and `status`.
 func time_in_state() -> float:
 	return float(Time.get_ticks_msec() - _state_entered_ms) / 1000.0
 
@@ -304,10 +229,7 @@ func is_authenticated() -> bool:
 	return true
 
 
-## Whether this is an authenticated, non-guest account.
-##
-## The distinction bans care about: a guest can always come back as a different
-## guest, so a ban on one means very little.
+## Whether this is an authenticated, non-guest account (a guest can return as another guest).
 func is_account() -> bool:
 	if not is_authenticated():
 		return false
@@ -326,12 +248,8 @@ func uid() -> String:
 	return str(value) if value != null else ""
 
 
-## The account name, or [code]""[/code] when there is none.
-##
-## Distinct from [member display_name], which a guest picks for themselves and an
-## account holder can usually change: a report, a ticket or an appeal names somebody by
-## their username, so an admin command has to accept one. Never used for authorisation —
-## that is [method uid].
+## The account name, or [code]""[/code]. Not [member display_name], which a guest picks;
+## reports and appeals name somebody by it. Never used for authorisation (that is [method uid]).
 func username() -> String:
 	if identity == null:
 		return ""
@@ -357,13 +275,8 @@ func connected_seconds() -> int:
 	return int(Time.get_unix_time_from_system()) - connected_at
 
 
-# --- Moderation ------------------------------------------------------------
 
-## Whether a mute or gag is currently in force, clearing it if it expired.
-##
-## Checked lazily on read rather than swept on a timer: a mute that has expired but
-## not yet been noticed is indistinguishable from one still in force, and the read
-## path is where it matters.
+## Whether a mute or gag is in force, clearing it if expired. Checked lazily on read, where it matters.
 func is_silenced() -> bool:
 	if not (muted or gagged):
 		return false
@@ -391,7 +304,6 @@ func unsilence() -> void:
 	mute_expires_at = 0
 
 
-# --- Permissions -----------------------------------------------------------
 
 func has_permission(flag: String) -> bool:
 	return DotAdminFlags.granted(permissions, flag)
@@ -421,12 +333,8 @@ func make_context(
 	return ctx
 
 
-# --- Reporting -------------------------------------------------------------
 
-## Short label for logs: userid, name and account.
-##
-## All three because each answers a different question — the userid is what an
-## admin types, the name is who players see, the uid is who it actually was.
+## Short label for logs: userid (what an admin types), name (what players see), uid (who it was).
 func label() -> String:
 	var account := uid()
 	if account != "":

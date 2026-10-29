@@ -2,23 +2,9 @@
 class_name DotChatManager
 extends Node
 
-## Chat, and the chat-trigger path into the console.
-##
-## Handles routing (all / team / admin), flood control, length limits, mute
-## enforcement, and turning [code]!kick someone[/code] into a console command with
-## the speaker's own permissions.
-##
-## [b]Chat is the least trustworthy input the server takes.[/b] It is unauthenticated
-## in the sense that anyone in the game can send it, it is attacker-controlled text
-## that ends up in other players' UI and in the log, and it is the path an admin
-## command arrives through. So: length is capped before anything else, control
-## characters are stripped, and the rate limiter runs before the command parser.
-##
-## What it is [i]not[/i] is a smaller set of commands. A prefixed line reaches whatever
-## [member DotServerConfig.chat_commands_open] leaves open -- by default everything that
-## has not called [method DotConCommand.no_chat] -- and then the speaker's own flags decide,
-## exactly as they do over RCON. The permission check is the boundary; the prefix is only
-## how a line that would otherwise be speech says it is a command.
+## Chat, and the chat-trigger path into the console: routing, flood control, length limits,
+## mutes, and turning [code]!kick someone[/code] into a command with the speaker's own flags.
+## Chat is the least trusted input: cap length, strip controls, rate-limit before parsing.
 
 const CHANNEL := "chat"
 const SERVICE := &"dot_chat_manager"
@@ -79,14 +65,9 @@ func _exit_tree() -> void:
 	DotRegistry.unregister_instance(SERVICE, self)
 
 
-# --- Receiving -------------------------------------------------------------
 
-## Handles a chat message from a client.
-##
-## Called by the RPC endpoint. Order is deliberate: cheap structural checks first,
-## then rate limiting, then mute, then the command path, then the event hook that a
-## module can cancel, then broadcast. Anything that can reject should reject before
-## work is done on the message.
+## Handles a chat message from a client. Cheap structural checks first, then rate limiting,
+## mute, the command path, the cancellable event hook, then broadcast: reject before working.
 func handle_message(
 	session: DotClientSession,
 	raw: String,
@@ -202,10 +183,8 @@ func _handle_command(
 	var cmd := server.console.find_command(command_name)
 
 	if cmd == null:
-		# Not a command. Silently ignored rather than answered: a player typing
-		# "!!" or a message that happens to start with a slash should not get a
-		# console error, and answering also confirms which commands exist to
-		# anyone probing.
+		# Not a command: ignored silently, since an error would confirm which commands
+		# exist to anyone probing.
 		DotLog.debug(
 			CHANNEL,
 			"unknown chat command ignored",
@@ -229,7 +208,6 @@ func _handle_command(
 	return server.console.execute(trimmed, ctx)
 
 
-# --- Sending ---------------------------------------------------------------
 
 func _broadcast_chat(
 	session: DotClientSession,
@@ -252,11 +230,8 @@ func _broadcast_chat(
 		server.send_kind(other.peer_id, DotEnvelope.CHAT_LINE, payload, DotEnvelope.Lane.EVENT)
 
 
-## Whether two sessions are on the same team.
-##
-## Reads a [code]team[/code] key from session data, which a game sets. Without one
-## every player is on the same team and team chat behaves like all chat — the safe
-## default, since the alternative is team chat silently reaching nobody.
+## Whether two sessions are on the same team, from a [code]team[/code] key in session data.
+## Without one everyone is on one team, so team chat never silently reaches nobody.
 func _same_team(a: DotClientSession, b: DotClientSession) -> bool:
 	var team_a: Variant = a.data.get("team")
 	var team_b: Variant = b.data.get("team")
@@ -265,29 +240,14 @@ func _same_team(a: DotClientSession, b: DotClientSession) -> bool:
 	return team_a == team_b
 
 
-# --- What else is carrying this conversation --------------------------------
 
-## Whether chat is also being carried somewhere off this server. `() -> bool`.
-##
-## [b]Pointed at a chat relay, and held as a callable rather than as one.[/b] dot-server
-## does not depend on dot-chat — the relay is [code]DotChatRelay[/code] in every game here
-## and a script that names it would not compile in a server without dot-chat installed.
-## The question is also broader than one class: a deployment bridging chat to anything at
-## all answers yes the same way.
-##
-## Unset means no, which is the honest default for a server that was never told.
+## Whether chat is also carried somewhere off this server. `() -> bool`, a callable because
+## dot-server cannot name dot-chat's relay. Unset means no.
 var relay_fn: Callable = Callable()
 
-## Points [member relay_fn] at a relay, and tells everybody what changed.
-##
-## [b]Duck-typed, and that is the whole reason this method exists rather than five copies
-## of `chat.relay_fn = relay.is_carrying`.[/b] The object is a [code]DotChatRelay[/code] in
-## every game here, and dot-server cannot name it: dot-chat is an optional addon and a
-## script that mentions the class fails to compile without it. One line in a game, and the
-## contract — a method called `is_carrying` returning a bool — is written down here.
-##
-## A relay that is null, or that has no such method, means nothing is carrying chat. That
-## is also how a game turns the answer back off.
+## Points [member relay_fn] at a relay and tells everybody what changed. Duck-typed (a
+## method `is_carrying() -> bool`) because naming [code]DotChatRelay[/code] would not compile
+## without dot-chat. A null relay, or one without the method, means nothing carries chat.
 func watch_relay(relay: Object) -> void:
 	if relay != null and relay.has_method("is_carrying"):
 		relay_fn = Callable(relay, "is_carrying")
@@ -297,14 +257,9 @@ func watch_relay(relay: Object) -> void:
 	announce_state()
 
 
-## What the client is told about the conversation it just joined.
-##
-## [b]Why a client is told at all.[/b] A player whose lines already reach a web page they
-## are looking at does not need a second chat box in front of the game, and a player whose
-## lines reach nothing but this server needs one badly. Only the server knows which of
-## those is true, so only the server can say. What the client then DOES with the answer is
-## the client's: [code]DotChatWindow.enabled[/code] and a setting beside it, because "the
-## site has a chat box" and "I am looking at the site" are not the same sentence.
+## What the client is told about the conversation it just joined. Only the server knows
+## whether a player's lines already reach a web page; what the client does with that
+## ([code]DotChatWindow.enabled[/code] and a setting) is the client's.
 func chat_state() -> Dictionary:
 	return {
 		"kind": "state",
@@ -321,10 +276,8 @@ func is_relayed() -> bool:
 	return answer is bool and answer
 
 
-## Tells one joining client what is carrying chat.
-##
-## Called by [DotServer] as a session starts playing, before the join announcement, so
-## that the client has the answer before it has any line to draw.
+## Tells one joining client what is carrying chat, before the join announcement so it has
+## the answer before any line to draw. Called by [DotServer] as a session starts playing.
 func greet(session: DotClientSession) -> void:
 	if not _can_reach(session):
 		return
@@ -361,21 +314,9 @@ func broadcast_system(text: String) -> void:
 	DotLog.info(CHANNEL, "system message", {"text": text})
 
 
-## Whether a line addressed to this session can actually be put on the wire.
-##
-## [b]`is_active()` is not enough, and a chat command is where that shows.[/b] A session's
-## state is what the server last decided; the peer list is what the multiplayer layer
-## currently has. Between a player leaving and the server noticing, `rpc_id` on their id
-## prints an engine error and a full GDScript backtrace — per reply line, so a `status` from
-## somebody who just disconnected fills the log with twenty of them. Found by a suite that
-## drove the whole chat path with a synthetic session, which is the only way it shows up:
-## every assertion about a reply passes while this is happening.
-##
-## [b]`get_peers()` excludes this process's own id[/b], so a session on the host peer of a
-## listen server reads as unreachable. That is not a loss: `rpc_id` at your own id is
-## refused by the engine, so such a session never received a line here anyway — it printed
-## an error instead. A host player who should see their own chat needs the payload handed
-## to the local client directly, which is a listen-server seam dot-server does not have yet.
+## Whether a line to this session can be put on the wire. `is_active()` is not enough: between
+## a player leaving and the server noticing, `rpc_id` prints an engine error per reply line.
+## The host's own id is not in `get_peers()`; `rpc_id` to oneself is refused anyway.
 func _can_reach(session: DotClientSession) -> bool:
 	if session == null or not session.is_active():
 		return false
@@ -397,10 +338,8 @@ func send_system_to(session: DotClientSession, text: String) -> void:
 	}, DotEnvelope.Lane.EVENT)
 
 
-## Sends admin chat to everyone holding [constant DotAdminFlags.CHAT].
-##
-## Filtered server-side. Asking clients to hide messages they are not entitled to
-## see is not a control at all.
+## Sends admin chat to everyone holding [constant DotAdminFlags.CHAT], filtered server-side:
+## asking clients to hide messages is not a control.
 func broadcast_admin(from: String, text: String) -> void:
 	var payload := {
 		"kind": "admin",
@@ -421,10 +360,7 @@ func broadcast_admin(from: String, text: String) -> void:
 	)
 
 
-## Announces an administrative action, if the config allows.
-##
-## Visible moderation is a deterrent, and players who see a cheater removed stop
-## reporting them.
+## Announces an administrative action, if the config allows: visible moderation deters.
 func announce_action(text: String) -> void:
 	if not server.config.announce_admin_actions:
 		return
@@ -443,36 +379,15 @@ func announce_leave(session: DotClientSession) -> void:
 	broadcast_system("%s left the game." % session.display_name)
 
 
-# --- The wire ------------------------------------------------------------
-#
-# No RPCs here any more. A line a client types arrives as the envelope's `chat.submit`
-# kind, which [DotServer] hands to [method handle_message], and a line out goes as
-# `chat.line` through [method DotServer.send_kind]. Declaring RPCs on this node made it a
-# second RPC surface a client had to match exactly -- see [DotEnvelope].
+# No RPCs here: a line in arrives as the envelope's `chat.submit` kind, a line out goes as
+# `chat.line` through [method DotServer.send_kind]. RPCs here would be a second surface
+# a client had to match exactly; see [DotEnvelope].
 
 
-# --- Sanitising -----------------------------------------------------------
 
-## Cleans untrusted chat text.
-##
-## Strips control characters (which can corrupt a terminal reading the log, and
-## break UI layout) and the invisible ones ([method is_refused]), collapses whitespace,
-## and truncates. It does NOT escape BBCode: this text is plain, and the shell draws it in
-## a plain [Label]. Anything that puts it in a [RichTextLabel] with BBCode on escapes it
-## there — [method DotNotice.bbcode_text] is that for a notice. Done before length
-## checking so a message padded with 4000 newlines does not pass a character count
-## and then render as a wall.
-##
-## [DotNotice] uses it too, for a HUD line: a notice is drawn by the same client that
-## draws chat, and a zero-width or bidi-override character spoofs a line there exactly as
-## it spoofs one here — so there is one list of what is refused, not two that drift.
-##
-## [b]Linear, and it stops reading once it has enough.[/b] It built the result with `+=`
-## one character at a time, which copies the whole string on every append, and then
-## truncated at the end — so its cost grew with the square of what a caller sent rather
-## than with what it kept. The result is the same as strip, collapse, then cut: whitespace
-## collapses as it goes, leading spaces are never kept, and one character past the limit
-## is enough to know whether a trailing space would have survived the strip.
+## Cleans untrusted chat text: strips controls and invisibles ([method is_refused]), collapses
+## whitespace, truncates; does NOT escape BBCode (a [RichTextLabel] caller does). Shared with
+## [DotNotice]. Linear: stops reading one character past the limit.
 static func sanitise(raw: String, max_length: int) -> String:
 	var out := PackedStringArray()
 	var last_space := true   # so a leading space is dropped, which is strip_edges' left half
@@ -511,19 +426,9 @@ static func sanitise(raw: String, max_length: int) -> String:
 	return "".join(out)
 
 
-## Whether [method sanitise] drops [param code] outright.
-##
-## C0 and C1 controls and DEL (a NUL or an ESC in a log, a console or a terminal; C1 is a
-## second set of the same, and a single U+0085 is a line break to some renderers), and
-## every code point in [constant INVISIBLE].
-##
-## [b]The same list as dot-chat's [code]DotChatFilter[/code], on purpose.[/b] A client that
-## runs dot-chat draws its lines and this server's notices on one screen, so a character
-## that one refuses and the other passes is a spoof with a choice of route. This refused
-## only the C0 set and eleven of the twenty-nine invisible characters until 2026-09-24 —
-## the soft hyphen, the left-to-right and right-to-left marks, the word joiner and the
-## deprecated format characters all reached a HUD line. Copied rather than imported
-## because dot-server names no other addon; keep the two equal.
+## Whether [method sanitise] drops [param code]: controls, DEL, and [constant INVISIBLE].
+## Keep equal to dot-chat's [code]DotChatFilter[/code]; a character one passes is a spoof
+## route. Copied because dot-server names no other addon.
 static func is_refused(code: int) -> bool:
 	if code < 32 or code == 127 or (code >= 0x80 and code <= 0x9F):
 		return true

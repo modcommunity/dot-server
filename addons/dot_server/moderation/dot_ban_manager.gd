@@ -2,17 +2,9 @@
 class_name DotBanManager
 extends Node
 
-## Bans, by account and by address, with durations and an audit trail.
-##
-## [b]Two kinds of ban, because they fail differently.[/b] An account ban is precise
-## and survives a reconnect, but only works on authenticated players — a guest just
-## comes back as a different guest. An address ban catches anyone on that address,
-## including household members and everyone behind a shared NAT, and is defeated by a
-## router reboot. Both exist; neither is sufficient alone.
-##
-## Bans are checked before authentication where possible (address) and immediately
-## after where not (account), so a banned player's connection is refused rather than
-## admitted and then dropped.
+## Bans by account (precise, but a guest returns as another guest) and by address (catches
+## households and shared NATs, defeated by a router reboot), with durations and an audit trail.
+## Checked before authentication (address) and right after (account): refuse, not admit-then-drop.
 
 const CHANNEL := "bans"
 const SERVICE := &"dot_ban_manager"
@@ -28,10 +20,8 @@ signal ban_removed(key: String)
 
 @export var config: DotServerConfig = null
 
-## Where bans are persisted. Defaults to a JSON file on this server.
-##
-## Assign a [DotBanStore] subclass to share one ban list across a group of servers —
-## the most-requested thing from anyone running more than one. See [DotBanStore].
+## Where bans are persisted; a JSON file by default. Assign a [DotBanStore] subclass to share
+## one ban list across several servers.
 @export var store: DotBanStore = null
 
 ## Audit log, if one is attached. Every ban and unban is recorded there too.
@@ -71,7 +61,6 @@ func _exit_tree() -> void:
 	DotRegistry.unregister_instance(SERVICE, self)
 
 
-# --- Keys ------------------------------------------------------------------
 
 static func uid_key(uid: String) -> String:
 	return "uid:%s" % uid
@@ -81,18 +70,14 @@ static func ip_key(address: String) -> String:
 	return "ip:%s" % normalise_address(address)
 
 
-## Strips a port and normalises an address for comparison.
-##
-## Peer addresses arrive with ports attached and in varying IPv6 forms; without
-## normalising, a ban on [code]1.2.3.4[/code] would not match
-## [code]1.2.3.4:51234[/code].
+## Strips a port and normalises an address, so a ban on [code]1.2.3.4[/code] matches
+## [code]1.2.3.4:51234[/code] in any IPv6 form.
 static func normalise_address(address: String) -> String:
 	var parts := DotTransport.normalise_address(address, 0)
 	var host := str(parts["host"])
 	return host if host != "" else address
 
 
-# --- Checking --------------------------------------------------------------
 
 ## Whether an account is banned. Returns the ban when it is.
 func check_uid(uid: String) -> DotResult:
@@ -108,11 +93,8 @@ func check_address(address: String) -> DotResult:
 	return _check(ip_key(address))
 
 
-## Checks both, for a session that has just authenticated.
-##
-## Returns a failure carrying a player-facing message when either matches, so the
-## caller can reject with something the player can act on — which for a temporary
-## ban means telling them when it lifts.
+## Checks both for a session that has just authenticated. A failure carries a player-facing
+## message, including when a temporary ban lifts.
 func check_session(session: DotClientSession) -> DotResult:
 	var by_address := check_address(session.address)
 	if not by_address.ok:
@@ -149,11 +131,8 @@ func _check(key: String) -> DotResult:
 	return DotResult.failure(err)
 
 
-## The message shown to the banned player.
-##
-## Includes the remaining time for a temporary ban: a player who does not know
-## whether they are banned for ten minutes or forever will keep reconnecting, which
-## is worse for the server than telling them.
+## The message shown to the banned player, with the remaining time for a temporary ban: one
+## who does not know how long it lasts keeps reconnecting.
 func _player_message(ban: Dictionary) -> String:
 	var reason := str(ban.get("reason", ""))
 	var expires := int(ban.get("expires_at", 0))
@@ -171,12 +150,9 @@ func _player_message(ban: Dictionary) -> String:
 	return "You are banned for %s." % window
 
 
-# --- Adding ---------------------------------------------------------------
 
-## Bans an account.
-##
-## [param duration_sec] of 0 is permanent. [param by] is the admin's label, recorded
-## in the ban and the audit log — a ban with no attribution cannot be reviewed.
+## Bans an account. [param duration_sec] 0 is permanent; [param by] is the admin's label,
+## recorded in the ban and the audit log.
 func ban_uid(
 	uid: String,
 	reason: String,
@@ -203,10 +179,7 @@ func ban_uid(
 	})
 
 
-## Bans an address.
-##
-## Catches everybody behind that address, so it is the blunt instrument. Prefer
-## [method ban_uid] for authenticated players.
+## Bans an address: catches everybody behind it, so prefer [method ban_uid] for accounts.
 func ban_address(
 	address: String,
 	reason: String,
@@ -240,10 +213,8 @@ func ban_address(
 	})
 
 
-## Bans a connected session by account, falling back to address.
-##
-## The right entry point for a `ban` command: it picks the precise ban when the
-## player has an account and the blunt one when they do not, and says which it did.
+## Bans a connected session by account, falling back to address; the entry point for a `ban`
+## command, and says which it did.
 func ban_session(
 	session: DotClientSession,
 	reason: String,
@@ -308,12 +279,8 @@ static func _expiry(duration_sec: int) -> int:
 	return int(Time.get_unix_time_from_system()) + duration_sec
 
 
-# --- Removing -------------------------------------------------------------
 
-## Lifts a ban by its key, or by a bare uid or address.
-##
-## Accepting all three because an operator reading a ban list sees keys, but one
-## responding to an appeal has a uid.
+## Lifts a ban by its key, or by a bare uid or address (a list shows keys, an appeal has a uid).
 func unban(key_or_target: String, by: String = "console") -> DotResult:
 	var candidates := PackedStringArray([
 		key_or_target,
@@ -345,11 +312,8 @@ func unban(key_or_target: String, by: String = "console") -> DotResult:
 	)
 
 
-## Removes expired bans from the in-memory set.
-##
-## Local only: a shared [DotBanStore] owns its own expiry, and having every server in
-## a group race to delete the same expired rows would be pointless write traffic.
-## Expired bans are refused on read regardless — see [method _check].
+## Removes expired bans from the in-memory set. Local only: a shared [DotBanStore] owns its
+## expiry. Expired bans are refused on read regardless; see [method _check].
 func _sweep() -> void:
 	var now := int(Time.get_unix_time_from_system())
 	var expired: Array = []
@@ -371,7 +335,6 @@ func _sweep() -> void:
 	DotLog.debug(CHANNEL, "expired bans removed", {"count": expired.size()})
 
 
-# --- Persistence ----------------------------------------------------------
 
 ## The store, creating the default file store if none was assigned.
 func _store() -> DotBanStore:
@@ -446,7 +409,6 @@ func save_bans() -> DotResult:
 	return DotResult.success(_bans.size())
 
 
-# --- Queries --------------------------------------------------------------
 
 func count() -> int:
 	return _bans.size()
@@ -487,11 +449,8 @@ static func format_duration(seconds: int) -> String:
 	return "%dd" % (seconds / 86400)
 
 
-## Parses a duration like [code]30m[/code], [code]2h[/code], [code]7d[/code].
-##
-## A bare number is minutes, because that is what admins already have in their
-## fingers from every other server they have run. [code]0[/code] and
-## [code]perm[/code] are permanent.
+## Parses a duration like [code]30m[/code], [code]2h[/code], [code]7d[/code]. A bare number is
+## minutes; [code]0[/code] and [code]perm[/code] are permanent.
 static func parse_duration(text: String) -> int:
 	var s := text.strip_edges().to_lower()
 

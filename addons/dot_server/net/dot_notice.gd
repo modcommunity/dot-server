@@ -1,54 +1,9 @@
 class_name DotNotice
 extends RefCounted
 
-## Something the server wants a player to see on their HUD and hear, that is not chat.
-##
-## [codeblock]
-## server.broadcast_notice(DotNotice.make(&"vote_warning", "A vote starts in", 10.0, &"vote"))
-## link.notice_received.connect(func(n: DotNotice) -> void: hud.show(n))
-## [/codeblock]
-##
-## [b]Why this exists at all.[/b] A client application talks to a server over exactly two
-## RPC sets, [DotClientLink]'s and [DotClientChat]'s, and neither could say anything but a
-## chat line. So a server-level vote — which is the server's, not the game's, and outlives
-## every game it changes to — could only reach a player as text in a scrollback: no
-## countdown on screen, no sound when the ballot opens. A loaded game's own wire is no help
-## there, because it is the game's, it is replaced by the change the vote causes, and the
-## host that runs the vote does not name a game's classes. This is the one message a
-## server can send to the client APPLICATION rather than to whatever game it is showing.
-##
-## [b]Deliberately not about votes.[/b] A cue id, optional seconds, optional text and an
-## optional topic cover a restart warning, a map vote a game did not wire itself, an
-## operator's announcement and a ballot alike. A vote-shaped message would be the second
-## [code]@rpc[/code] pair somebody has to add the next time, and every pair added is a
-## signon revision every shipped client has to be rebuilt for — see [DotSignon].
-##
-## [b]A dictionary on the wire, and that is the protocol decision.[/b] Godot's RPC
-## checksum is over method NAMES, so a field added to this dictionary later changes no
-## revision and breaks no client, while a new argument or a new method breaks every one.
-## [method from_wire] defaults every field for that reason: an older client meeting a newer
-## field ignores it, and a newer client meeting an older payload shows a plainer notice.
-##
-## What each field means to a client:
-##
-## - [member cue]: a sound id — a dot-audio catalogue id, typically. Empty is silence. An id
-##   a client does not have is silence too, which is dot-audio's own rule.
-## - [member text]: a line for the HUD. Empty shows nothing.
-## - [member seconds]: a countdown the client runs itself from the moment it arrives. -1 is
-##   "no countdown". A server does not send a notice per frame; it sends one and the client
-##   counts.
-## - [member topic]: which line on the HUD this replaces. Two notices with one topic are one
-##   line that changed, which is how "10… 9… 8…" stays one line rather than ten. A notice
-##   with a topic and nothing else ([method is_clear]) takes that line down.
-##
-## - [member data]: structured content for a client that knows the [member topic], and
-##   nothing to one that does not. A ballot to draw as a menu is the first: the text line
-##   says how to vote by typing, and a shell that can draw [code]data[/code] draws the menu.
-##   [b]Not cleaned the way [member text] is[/b] — it is a tree, and only its reader knows
-##   which leaves are drawn — so a client draws every string in it as plain text, never as
-##   markup, through [method sanitised_string].
-##
-## A pure value object. It logs nothing.
+## Something the server wants a player to see on their HUD and hear, that is not chat: the one
+## message sent to the client APPLICATION, not the loaded game. A dictionary on the wire.
+## Example: [code]DotNotice.make(&"vote_warning", "A vote starts in", 10.0, &"vote")[/code]
 
 ## Longest [member text] a client is asked to draw. A HUD line, not a message of the day:
 ## past this it is wrapping over the game, and a server that means to say more has chat.
@@ -61,10 +16,8 @@ const MAX_ID := 64
 ## is for, and a value past it is far more likely to be milliseconds sent as seconds.
 const MAX_SECONDS := 3600.0
 
-## Largest [member data], encoded. A ballot of six options with sixty-four named voters is
-## about four kilobytes; past this it is not a HUD's content any more and is dropped whole
-## rather than cut, because half a tree is a tree a reader has to check for every missing
-## branch.
+## Largest [member data], encoded. Past this it is dropped whole, not cut: half a tree needs
+## checking for every missing branch.
 const MAX_DATA_BYTES := 8192
 
 ## A sound id. Empty is silence.
@@ -100,11 +53,8 @@ static func make(
 	return n
 
 
-## A notice that takes [param p_topic]'s line off the HUD.
-##
-## Needed because the server knows when a line stops being true and the client cannot: a
-## countdown an admin called off would otherwise go on counting to a ballot that never
-## opens.
+## A notice that takes [param p_topic]'s line off the HUD: only the server knows a line stopped
+## being true (a countdown called off).
 static func clear(p_topic: StringName) -> DotNotice:
 	return make(&"", "", -1.0, p_topic)
 
@@ -124,15 +74,8 @@ func is_empty() -> bool:
 	return cue == &"" and text == "" and not has_countdown() and topic == &"" and data.is_empty()
 
 
-## The payload the RPC carries. See the class notes for why it is a dictionary.
-##
-## Fields at their defaults are left out: the common case — a cue with nothing else — is
-## then one key, and a field that is absent and a field that is default decode the same.
-##
-## [b]Bounded again here, not only in [method make].[/b] The fields are public, so a host
-## that builds a notice with [code]new()[/code] and assigns [member text] itself skipped
-## every rule — the receiving client cleaned it, but a client is not where the server gets
-## to decide what it sends, and a shell built before a rule was added cleans nothing.
+## The payload the RPC carries; fields at their defaults are left out. Bounded here as well as
+## in [method make], since the fields are public and a host may assign them directly.
 func to_wire() -> Dictionary:
 	var out := {}
 	var c := _bounded_id(String(cue))
@@ -153,13 +96,9 @@ func to_wire() -> Dictionary:
 	return out
 
 
-## [member text] for a [RichTextLabel] with BBCode on: both brackets escaped in one pass.
-##
-## The wire carries plain text, and the shell draws it in a plain [Label], where an escape
-## would be drawn literally as [code][lb][/code]. A client that draws a notice as rich text
-## is the one that has to escape it, or a server's line — a player's name in a vote line,
-## say — draws its own markup. One pass, not two replaces: `[` to `[lb]` inserts a `]` a
-## second pass would then rewrite, which is dot-chat's [code]escape_bbcode[/code] finding.
+## [member text] for a [RichTextLabel] with BBCode on: both brackets escaped in one pass (two
+## replaces would rewrite the `]` the first inserted). The wire is plain text, so only a client
+## drawing rich text must escape it, or a player's name draws its own markup.
 func bbcode_text() -> String:
 	var out := PackedStringArray()
 	for i in text.length():
@@ -173,13 +112,8 @@ func bbcode_text() -> String:
 	return "".join(out)
 
 
-## Reads a payload, whatever sent it.
-##
-## [b]Tolerant by design, and typed by hand.[/b] This is a wire message and a Variant, so
-## every field is checked for its type before it is used — a comparison between two
-## mismatched Variant types is a runtime error rather than a [code]false[/code], and an
-## older or newer server may send a shape this build has never seen. What cannot be read is
-## dropped, never raised.
+## Reads a payload, whatever sent it. Tolerant: every field is type-checked (mismatched Variant
+## comparisons are runtime errors) and what cannot be read is dropped, never raised.
 static func from_wire(payload: Variant) -> DotNotice:
 	var n := DotNotice.new()
 
@@ -230,21 +164,14 @@ static func _bounded_id(value: String) -> StringName:
 	return StringName(value.strip_edges().substr(0, MAX_ID))
 
 
-## Cleaned by [method DotChatManager.sanitise], because this is drawn, not logged, and
-## drawn by the client that draws chat: a newline in a HUD line pushes the next one off the
-## panel, and a bidi override or a zero-width character spoofs a line on the HUD exactly as
-## it does in chat. This stripped only what is below 32, so DEL, the zero-width characters
-## and the overrides all reached the screen — the same line refused as chat was drawn as a
-## notice.
+## Cleaned by [method DotChatManager.sanitise]: it is drawn by the client that draws chat, so a
+## newline or bidi override must not get through here that chat refuses.
 static func _bounded_text(value: String) -> String:
 	return DotChatManager.sanitise(value, MAX_TEXT)
 
 
-## A dictionary of plain values within [constant MAX_DATA_BYTES], or an empty one.
-##
-## Only what JSON could carry survives: a nested [Object] or [Callable] is not content, and
-## the engine would refuse to encode the first anyway — at the RPC, as an error, rather
-## than here as an empty tree.
+## A dictionary of plain values within [constant MAX_DATA_BYTES], or an empty one. Only what JSON
+## could carry survives; an [Object] or [Callable] is not content.
 static func _bounded_data(value: Variant) -> Dictionary:
 	if not (value is Dictionary) or (value as Dictionary).is_empty():
 		return {}

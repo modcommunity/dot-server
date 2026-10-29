@@ -1,28 +1,10 @@
 class_name DotAdminFlags
 extends RefCounted
 
-## Permission flags and immunity, modelled on the admin systems community servers
-## have run for twenty years.
-##
-## [b]Why flags rather than roles.[/b] Server operators do not agree on what a
-## "moderator" is. One community's moderators can change the map, another's cannot.
-## A fixed role hierarchy forces every server to either accept someone else's
-## definition or bypass the system. Flags let a server define its own roles by
-## composition, and the addon never has to have an opinion.
-##
-## [b]Why immunity is separate from flags.[/b] "May kick" and "may be kicked" are
-## different questions. Without immunity, any two admins with [constant KICK] can
-## kick each other, and there is no correct resolution — so a numeric level decides,
-## and equal levels cannot act on each other at all.
-##
-## Flags are strings rather than bits so a game can add its own
-## ([code]"give_weapon"[/code], [code]"spawn_npc"[/code]) without coordinating with this
-## file or running out of bits. [constant SLAY] and [constant TELEPORT] started as exactly
-## that kind of game flag and were promoted here once dot-moderation's live tools used them
-## in every game, because a flag every game shares is one an operator's group file should be
-## able to name without a boot-time "unknown flag" warning.
+## Permission flags and immunity. Flags are strings so a game adds its own and a server composes
+## its own roles; immunity is a separate numeric level ("may kick" is not "may be kicked"), and
+## equal levels cannot act on each other.
 
-# --- Standard flags --------------------------------------------------------
 
 ## Everything. Bypasses every check including immunity.
 ##
@@ -56,11 +38,9 @@ const CHEATS := "cheats"
 ## May toggle noclip on themselves, and nothing else of [constant CHEATS]. A game that offers a free-fly key checks this (or CHEATS, which implies it).
 const NOCLIP := "noclip"
 
-## Act on a player's body without changing the rules: slay, slap, freeze, respawn, rename,
-## burn. The moderator's live toolkit, and not [constant CHEATS] on purpose — freezing a
-## griefer is handling a person, giving somebody a rocket launcher is changing the game,
-## and a community that trusts somebody with the first has not thereby trusted them with
-## the second. dot-moderation's [code]DotModToolCommands[/code] is what checks it.
+## Act on a player's body without changing the rules (slay, slap, freeze, respawn, rename, burn).
+## Not [constant CHEATS] on purpose: freezing a griefer is not giving somebody a rocket launcher.
+## dot-moderation's [code]DotModToolCommands[/code] checks it.
 const SLAY := "slay"
 
 ## Move players: bring, goto, send, return. Separate from [constant SLAY] because
@@ -89,11 +69,8 @@ const MODULES := "modules"
 ## Read logs and the audit trail.
 const LOGS := "logs"
 
-## Manage other admins.
-##
-## Effectively grants everything indirectly — anyone who can add an admin can add
-## themselves with more flags — so it is separated out and worth guarding as
-## closely as [constant ROOT].
+## Manage other admins. Effectively grants everything (one can add oneself with more flags),
+## so guard it like [constant ROOT].
 const ADMIN := "admin"
 
 ## Every flag this addon defines. A game's own flags are simply not in this list.
@@ -127,7 +104,6 @@ const DESCRIPTIONS := {
 	ADMIN: "manage other admins",
 }
 
-# --- Immunity -------------------------------------------------------------
 
 ## Immunity of a player with no admin entry.
 const NO_IMMUNITY := 0
@@ -136,10 +112,8 @@ const NO_IMMUNITY := 0
 const MAX_IMMUNITY := 100
 
 
-## Whether [param held] satisfies a requirement for [param needed].
-##
-## [constant ROOT] satisfies everything. An empty requirement is satisfied by
-## anybody — that is what marks a command as public.
+## Whether [param held] satisfies a requirement for [param needed]. [constant ROOT] satisfies
+## everything; an empty requirement is satisfied by anybody (a public command).
 static func granted(held: PackedStringArray, needed: String) -> bool:
 	if needed == "":
 		return true
@@ -170,11 +144,8 @@ static func granted_any(held: PackedStringArray, needed: PackedStringArray) -> b
 	return false
 
 
-## Parses a flag list from a config string.
-##
-## Accepts [code]"kick,ban"[/code], [code]"kick ban"[/code] and
-## [code]"kick, ban"[/code], because all three appear in hand-edited files and
-## refusing two of them is a support burden with no upside.
+## Parses a flag list: [code]"kick,ban"[/code], [code]"kick ban"[/code] and [code]"kick, ban"[/code]
+## all appear in hand-edited files.
 static func parse(text: String) -> PackedStringArray:
 	var out := PackedStringArray()
 	var normalised := text.replace(",", " ")
@@ -206,11 +177,8 @@ static func merge(a: PackedStringArray, b: PackedStringArray) -> PackedStringArr
 	return out
 
 
-## Flags that are not in [constant ALL] — a game's own, or a typo.
-##
-## Reported at load rather than refused: refusing unknown flags would break every
-## game that defines its own, and silently accepting them makes
-## [code]"kcik"[/code] indistinguishable from a custom flag.
+## Flags not in [constant ALL] (a game's own, or a typo). Reported at load, not refused, which
+## would break games defining their own flags.
 static func unknown(flags: PackedStringArray) -> PackedStringArray:
 	var out := PackedStringArray()
 	for flag in flags:

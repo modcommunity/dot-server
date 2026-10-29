@@ -2,25 +2,9 @@
 class_name DotAdminManager
 extends Node
 
-## Resolves a connected player to permission flags and an immunity level.
-##
-## Reads a JSON file of admins and groups, and consults any number of pluggable
-## sources — dot-auth's [code]DotAuthAdminSource[/code] being the interesting one,
-## which maps site groups to server flags so an operator does not maintain a list of
-## user ids by hand.
-##
-## [b]Sources are duck-typed on purpose.[/b] dot-server does not depend on dot-auth,
-## so a source is any object with:
-##
-## [codeblock]
-## func lookup(identity: Object) -> DotResult   # -> {flags, immunity, source}
-## func source_name() -> String
-## [/codeblock]
-##
-## Results from every source are merged: a player in a file entry and a site group
-## holds the union of both flags and the higher of the two immunity levels. Merging
-## rather than first-match-wins is what lets a local file grant one extra flag to
-## somebody who already has permissions from the site.
+## Resolves a connected player to permission flags and immunity, from a JSON file of admins and
+## groups plus duck-typed sources ([code]lookup(identity) -> DotResult[/code] of {flags, immunity,
+## source}, and [code]source_name()[/code]). Results merge: union of flags, higher immunity.
 
 const CHANNEL := "admin"
 const SERVICE := &"dot_admin_manager"
@@ -67,12 +51,9 @@ func _exit_tree() -> void:
 	DotRegistry.unregister_instance(SERVICE, self)
 
 
-# --- Sources ---------------------------------------------------------------
 
-## Adds a permission source.
-##
-## Validates the contract at registration so a mistyped source is a startup error
-## rather than a silent absence of permissions later.
+## Adds a permission source, validating the contract at registration so a mistyped source is a
+## startup error, not silently absent permissions.
 func add_source(source: Object) -> DotResult:
 	if source == null:
 		return DotResult.fail(DotError.CODE_INVALID, "Null source.")
@@ -100,14 +81,9 @@ func remove_source(source: Object) -> void:
 	sources.erase(source)
 
 
-# --- Resolution ------------------------------------------------------------
 
-## Resolves and caches permissions onto a session.
-##
-## Called once per client at authentication. Cached on the session rather than
-## resolved per command, because a lookup can hit a file or a remote source and
-## doing that on every chat message would let a client make the server work by
-## talking.
+## Resolves and caches permissions onto a session, once per client at authentication: a lookup
+## can hit a file or remote source, and per-message lookups would let chat make the server work.
 func resolve(session: DotClientSession) -> DotResult:
 	session.permissions = PackedStringArray()
 	session.immunity = DotAdminFlags.NO_IMMUNITY
@@ -206,17 +182,9 @@ func _merge_sources(session: DotClientSession, reasons: PackedStringArray) -> vo
 				session.groups.append(str(group))
 
 
-## An identity carrying a uid and nothing else.
-##
-## What [method uid_permissions] hands to a source. A source's contract is `lookup(identity)`
-## and every source in this family reads `uid`, `username` and `display_name` off it — so a
-## uid-only identity lets the ones that can answer from a uid answer, and the ones that
-## cannot return their ordinary "nothing for this player".
-##
-## [b]The two empty strings are the point, not a placeholder.[/b] A relayed command's author
-## has a name on the website, and passing it here would let an admin entry be keyed on a
-## string the person themselves can edit on their profile page. A uid is issued; a display
-## name is typed.
+## An identity carrying a uid and nothing else, handed to sources by [method uid_permissions].
+## The name fields stay empty on purpose: a display name is typed by the person and must never
+## key an admin entry; a uid is issued.
 class UidOnlyIdentity:
 	extends RefCounted
 
@@ -228,29 +196,9 @@ class UidOnlyIdentity:
 		uid = p_uid
 
 
-## What a uid holds, without a session: `{flags: PackedStringArray, immunity: int}`.
-##
-## The local file, **plus every source that can answer from a uid alone**. For a reserved
-## slot, an offline promotion, or a command relayed from the website by somebody who is not
-## in the game at all.
-##
-## [b]It used to be the file only, and that was wrong in the one deployment shape that
-## matters.[/b] The reasoning was that a source needs an identity and an identity is
-## something only a connection carries — true of dot-auth's, which resolves a site group
-## from a live session, and false of every source that is a table keyed by uid. So on a
-## server whose admins live in a config file rather than in `admins.json` — which is
-## `dot-server-deploy`, and therefore every TMC server — a relayed command was refused for
-## everybody, permanently, while `permissions.yml` sat there looking correct. Nothing
-## errored: "that person has no permissions" is a legitimate answer and is indistinguishable
-## from the bug.
-##
-## A source that cannot answer from a uid returns "nothing for this player", which is
-## already its normal case for most players. So asking costs nothing and answering is now
-## possible.
-##
-## An unknown uid gets no flags and no immunity rather than an error: "this person has no
-## permissions" is the correct answer about somebody with no entry, and a caller asking
-## about a stranger is the normal case rather than a mistake.
+## What a uid holds, without a session: `{flags: PackedStringArray, immunity: int}`. The local
+## file plus every source that can answer from a uid alone (reserved slots, relayed commands).
+## An unknown uid gets no flags and no immunity, not an error.
 func uid_permissions(uid: String) -> Dictionary:
 	var flags := PackedStringArray()
 	var immunity := 0
@@ -305,21 +253,14 @@ func uid_permissions(uid: String) -> Dictionary:
 	return {"flags": flags, "immunity": immunity, "groups": groups}
 
 
-## Whether a player holds a flag, by uid, without a session.
-##
-## For deciding whether to hold a reserved slot for somebody who has not connected
-## yet, and for a command relayed from somewhere that is not a game connection.
-##
-## [b]One implementation, not two.[/b] This reads [method uid_permissions] rather than
-## walking the entry again: the group merge is the fiddly half, and two copies of it is
-## the shape that has cost this family a stale list four times.
+## Whether a player holds a flag, by uid, without a session (reserved slots, relayed commands).
+## Reads [method uid_permissions] so the group merge exists once.
 func uid_has_permission(uid: String, flag: String) -> bool:
 	var held: Dictionary = uid_permissions(uid)
 	return DotAdminFlags.granted(held["flags"] as PackedStringArray, flag)
 
 
 
-# --- Persistence -----------------------------------------------------------
 
 ## Loads the admin file. A missing file is not an error.
 func load_admins() -> DotResult:
@@ -440,11 +381,8 @@ func _write_template(path: String) -> void:
 		DotLog.info(CHANNEL, "wrote an admin file template", {"path": path})
 
 
-## Reports flags that are not standard, without refusing them.
-##
-## A game defines its own flags, so unknown is legal. But it is also what a typo
-## looks like, and an admin whose [code]"kcik"[/code] silently does nothing is a
-## support ticket.
+## Reports flags that are not standard, without refusing them: a game defines its own, but a
+## typo such as [code]"kcik"[/code] looks the same.
 func _warn_about_unknown_flags() -> void:
 	var seen := {}
 
@@ -464,7 +402,6 @@ func _warn_about_unknown_flags() -> void:
 		)
 
 
-# --- Editing ---------------------------------------------------------------
 
 ## Adds or updates an admin entry and saves.
 func set_admin(
@@ -515,7 +452,6 @@ func set_group(
 	return save_admins()
 
 
-# --- Queries ---------------------------------------------------------------
 
 func admin_count() -> int:
 	return _admins.size()

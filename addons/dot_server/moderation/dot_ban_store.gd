@@ -2,59 +2,26 @@
 class_name DotBanStore
 extends Resource
 
-## Where bans are kept. Subclass to put them somewhere other than a file.
-##
-## [b]The case this exists for.[/b] A community running eight servers wants one ban
-## list. With file storage each server has its own, a player banned on one walks into
-## the next, and admins maintain eight copies by hand. A shared store — a database, an
-## HTTP service, the backbone — makes a ban mean the same thing everywhere, and it is
-## the single most requested thing from anyone running more than one server.
-##
-## [b]Load is allowed to be slow; the checks are not.[/b] [DotBanManager] keeps the
-## loaded set in memory and answers every connection from it, so a store that talks to
-## a database is queried at startup and on writes, never on the join path. A store that
-## needs to poll for changes made elsewhere overrides [method _refresh].
-##
-## [codeblock]
-## class_name SqlBanStore extends DotBanStore
-##
-## func _load() -> DotResult:
-##     var rows := await db.query("SELECT * FROM bans WHERE server_group = $1", [group])
-##     var out := {}
-##     for row in rows:
-##         out[row["key"]] = _row_to_ban(row)
-##     return DotResult.success(out)
-##
-## func _put(key: String, ban: Dictionary) -> DotResult:
-##     return await db.upsert("bans", key, ban)
-##
-## func _remove(key: String) -> DotResult:
-##     return await db.delete("bans", key)
-## [/codeblock]
+## Where bans are kept. Subclass ([method _load], [method _put], [method _remove]) to share one
+## list across servers via a database or HTTP service. Load may be slow, checks are not:
+## [DotBanManager] answers joins from memory. Override [method _refresh] to poll for changes.
 
 const CHANNEL := "bans.store"
 
-## Seconds between [method refresh] calls. 0 disables polling.
-##
-## For a shared store: a ban added on another server should take effect here without
-## a restart. Local stores leave it at 0.
+## Seconds between [method refresh] calls; 0 disables polling. For a shared store, so a ban
+## added elsewhere takes effect without a restart.
 @export_range(0.0, 3600.0, 5.0) var refresh_interval_sec: float = 0.0
 
 
-# --- Subclass interface ----------------------------------------------------
 
 ## Short name, for `banlist` output and logs.
 func _store_name() -> String:
 	return "custom"
 
 
-## Loads every ban. Returns [code]{key: ban_dictionary}[/code].
-##
-## May be a coroutine. Called once at startup and again by [method refresh].
-##
-## [b]A failure here must not be treated as "no bans".[/b] [DotBanManager] keeps
-## whatever it already had and logs loudly, because silently starting with an empty
-## list readmits everyone who was ever removed.
+## Loads every ban as [code]{key: ban_dictionary}[/code]; may be a coroutine. Called at
+## startup and by [method refresh]. A failure must not mean "no bans": [DotBanManager] keeps
+## what it had and logs, since an empty list readmits everyone removed.
 func _load() -> DotResult:
 	return DotResult.success({})
 
@@ -73,24 +40,18 @@ func _remove(_key: String) -> DotResult:
 	)
 
 
-## Re-reads bans changed elsewhere. Defaults to a full [method _load].
-##
-## Override when the backing store can report a delta — reloading ten thousand bans
-## every thirty seconds to find the one that changed is wasteful.
+## Re-reads bans changed elsewhere; a full [method _load] by default. Override when the
+## backing store can report a delta.
 func _refresh() -> DotResult:
 	return await _load()
 
 
-## Whether this store accepts writes.
-##
-## False for a read-only mirror of a central list, where bans are managed elsewhere
-## and this server only enforces them. `ban` then reports that rather than appearing
-## to work.
+## Whether this store accepts writes. False for a read-only mirror of a central list, so
+## `ban` reports that rather than appearing to work.
 func _writable() -> bool:
 	return true
 
 
-# --- Public API ------------------------------------------------------------
 
 func store_name() -> String:
 	return _store_name()
@@ -142,14 +103,9 @@ func remove(key: String) -> DotResult:
 	return res
 
 
-## Logged here, in the base, because every store's write passes through it and the
-## admin who typed the command is the only one who otherwise hears about it -- in a
-## console that scrolls, on one of the eight servers sharing the list.
-##
-## ERROR: a ban that did not reach a shared store is a player the other servers still
-## let in. Only the backend's own failure; a read-only store refusing is configuration
-## and is said to the admin by the refusal itself. Load and refresh failures are
-## logged by DotBanManager, which knows whether the last good list is still in force.
+## Logged here because every store's write passes through it. ERROR: a ban that did not reach a
+## shared store is a player other servers still admit. Load and refresh failures are logged by
+## DotBanManager, which knows whether the last good list applies.
 func _report_write(what: String, key: String, res: DotResult) -> void:
 	if res == null or res.ok:
 		return
@@ -173,13 +129,9 @@ func describe() -> Dictionary:
 	}
 
 
-# --- Built-in file store ---------------------------------------------------
 
-## The default: a JSON file on this server.
-##
-## Correct for a single server, and the reason [DotBanManager] works with no
-## configuration. Its limitation is the whole reason this class is abstract — one
-## server, one list, no sharing.
+## The default: a JSON file on this server. Correct for a single server; one server, one
+## list, no sharing is why this class is abstract.
 class FileStore extends DotBanStore:
 	## Format version, so a future change can migrate rather than misread.
 	const FORMAT_VERSION := 1
@@ -218,11 +170,8 @@ class FileStore extends DotBanStore:
 
 		return DotResult.success(out)
 
-	## Writes the whole file.
-	##
-	## Per-key writes would mean a read-modify-write per ban; the whole list is a few
-	## hundred kilobytes at worst and [method DotPaths.write_json] is atomic, so a
-	## crash mid-write leaves the old list rather than half of a new one.
+	## Writes the whole file ([method DotPaths.write_json] is atomic, so a crash leaves the
+	## old list; the list is small enough that per-key writes would not pay).
 	func write_all(bans: Dictionary) -> DotResult:
 		return DotPaths.write_json(
 			path, {"version": FORMAT_VERSION, "bans": bans}, false

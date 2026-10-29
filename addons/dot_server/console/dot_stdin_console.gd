@@ -1,35 +1,9 @@
 class_name DotStdinConsole
 extends Node
 
-## Runs what an operator types into the server's own terminal.
-##
-## [b]`DotCmdContext.Source.CONSOLE` has been documented as "the server's own terminal
-## or startup config" since the console was written, and nothing ever fed it from a
-## terminal.[/b] A dedicated server's console is the oldest interface this genre has --
-## you start srcds, you type `status`, it answers -- and here the only ways in were RCON
-## and a chat trigger. An operator standing at the machine, with the process in the
-## foreground, typing `status` into it, got silence: nothing in the project read stdin at
-## all, so the characters were the shell echoing and the server never saw a byte.
-##
-## [b]A helper process on Linux and macOS, a thread elsewhere and for a file.[/b] See
-## [method _start_tap] for why a blocked thread cannot be allowed to outlive `quit`.
-##
-## [b]A thread, because the engine only offers a blocking read.[/b] `OS` exposes
-## `read_string_from_stdin` and nothing that polls, so the choice is a thread or a
-## server that stops simulating between keystrokes. Lines are run on the main thread,
-## where every command in this family expects to be.
-##
-## [b]The thread runs the engine's read itself, never a GDScript function.[/b] Each read
-## is one thread started on [code]OS.read_string_from_stdin.bind(BUFFER)[/code]; the main
-## thread collects the line in [method _process] and starts the next. A reader that was a
-## GDScript loop left a GDScript frame on a thread the engine cannot stop, and on a
-## terminal the process ended in SIGSEGV (exit 139) after a clean `quit` because of it
-## (docs/history.md, "quit on a terminal exited 139"). A thread blocked in native code
-## holds nothing that teardown frees.
-##
-## [b]Fully trusted, and that is not a shortcut.[/b] Whoever can type here can already
-## edit `cfg/`, read `rcon.yml` and restart the process. A permission check against the
-## terminal would be a lock on a door standing in open ground -- see [member source].
+## Runs what an operator types into the server's own terminal, as the CONSOLE source. The
+## engine only offers a blocking read, run as the engine's own call, never a GDScript loop
+## (see [method _start_tap]). Fully trusted: whoever types here owns the machine.
 
 const CHANNEL := "console.stdin"
 
@@ -37,47 +11,23 @@ const CHANNEL := "console.stdin"
 ## bounds a paste.
 const BUFFER := 4096
 
-## How many empty reads in a row mean end of input.
-##
-## [b]The engine returns "" both for an empty line and for end of input[/b] (it strips the
-## newline), so one empty read cannot be told from the other. An operator pressing enter
-## on its own is a line; a closed terminal or a file that ran out returns "" immediately
-## and forever. Sixty-four in a row is a file or a hangup, not a person.
+## How many empty reads in a row mean end of input. The engine returns "" for both an empty
+## line and end of input, so sixty-four in a row is a file or hangup, not a person.
 const EOF_EMPTY_READS := 64
 
 ## Seconds between looks at the tap file (see [method _start_tap]).
 const TAP_POLL_SEC := 0.1
 
-## Where typed lines are attributed from.
-##
-## [constant DotCmdContext.Source.CONSOLE] -- the same source a startup `.cfg` uses, and
-## the one the enum documents for this. It bypasses the `rcon_allowed` and chat gates
-## deliberately: those exist to bound a REMOTE caller, and this caller owns the machine.
+## Where typed lines are attributed from: [constant DotCmdContext.Source.CONSOLE], like a
+## startup `.cfg`. It bypasses the rcon and chat gates, which bound REMOTE callers.
 @export var source: DotCmdContext.Source = DotCmdContext.Source.CONSOLE
 
-## Print each line back before running it.
-##
-## Off by default: a terminal already shows what was typed, and echoing it again gives
-## every command a double. Worth turning on when the input is a pipe, where nothing
-## echoed it in the first place.
+## Print each line back before running it. Off: a terminal already shows it; useful for a pipe.
 @export var echo: bool = false
 
-## Also read stdin when it is a pipe, a socket or a device, rather than only a terminal
-## or a file.
-##
-## [b]Off, because a reader on a pipe nobody closes makes the process unable to exit.[/b]
-## The read cannot be cancelled (see [method _exit_tree]), and on a terminal or a file
-## that costs one warning at exit -- but on a pipe whose writer stays open (`sleep 600 |
-## godot ...`, a CI step, a supervisor that spawned this with `OS.execute_with_pipe`,
-## `docker run -i` without `-t`) Godot 4.7.2 prints everything, its leak report included,
-## and then hangs inside its own exit. Every suite in the family that booted a server
-## under a runner's pipe hung that way until each turned the whole console off by hand.
-##
-## A terminal is still read, which is the operator at the machine and a panel that
-## attaches one; a regular file is still read (`./server < commands.txt`), because it
-## ends. Turn this on for a supervisor that feeds commands down a pipe -- and close the
-## pipe to stop the server, because nothing else will wake the reader.
-## [member DotServerConfig.stdin_console_pipes] sets it.
+## Also read stdin when it is a pipe, socket or device. Off, because a pipe nobody closes hangs
+## the process at exit; turn on ([member DotServerConfig.stdin_console_pipes]) for a supervisor
+## feeding commands down a pipe, and close the pipe to stop the server.
 @export var read_pipes: bool = false
 
 var server: DotServer = null
@@ -102,10 +52,8 @@ func setup(p_server: DotServer) -> DotResult:
 			DotError.CODE_STATE, "A stdin console needs a server with a console."
 		)
 
-	# [b]No terminal is the ordinary case, not a failure.[/b] A container without `-i`,
-	# a systemd unit with no stdin, a CI run: all of them report INVALID, and a reader
-	# thread there would either spin on instant EOF or block forever on a handle nobody
-	# can type into.
+	# No terminal is the ordinary case (container without `-i`, systemd unit, CI): a reader
+	# there would spin on instant EOF or block forever.
 	var kind := OS.get_stdin_type()
 
 	if kind == OS.STD_HANDLE_INVALID:
@@ -154,13 +102,9 @@ func setup(p_server: DotServer) -> DotResult:
 	return DotResult.success(true)
 
 
-## Whether a stdin of this [method OS.get_stdin_type] is read at all.
-##
-## A terminal and a regular file are: the first is a person, the second ends. A pipe, and
-## UNKNOWN -- which is `/dev/null`, a socket, a character device -- only when asked,
-## because a blocked read on one that never closes keeps the process from exiting. See
-## [member read_pipes]. Static so a suite can check the rule for every kind of handle
-## without having to be started under each.
+## Whether a stdin of this [method OS.get_stdin_type] is read at all: a terminal and a file are;
+## a pipe and UNKNOWN only when [member read_pipes], since a never-closing read blocks exit.
+## Static so a suite can check every kind of handle.
 static func should_read(kind: int, pipes: bool) -> bool:
 	match kind:
 		OS.STD_HANDLE_CONSOLE, OS.STD_HANDLE_FILE:
@@ -215,14 +159,9 @@ func _start_read() -> bool:
 	return true
 
 
-## Reads stdin through a helper process instead of a thread, where there is a shell.
-##
-## [b]A thread blocked in the engine's read keeps the process from exiting.[/b] The read
-## holds stdio's lock on stdin, and the C library takes that lock when the process ends:
-## `quit` (or dot-cloud's auto-update `quit(75)`) on a terminal or an open pipe, which is
-## what a panel attaches, then hangs until a key is pressed, the supervisor kills it, and
-## the restart code never arrives. The helper (`cat`) inherits stdin, appends what it
-## reads to a file, and is killed in [method _exit_tree]; nothing of ours is ever blocked.
+## Reads stdin through a helper process instead of a thread, where there is a shell. A thread
+## blocked in the engine's read holds stdio's lock and hangs the process at exit (so `quit(75)`
+## never arrives). The helper (`cat`) appends to a file and is killed in [method _exit_tree].
 func _start_tap() -> bool:
 	if OS.get_name() not in ["Linux", "FreeBSD", "NetBSD", "OpenBSD", "macOS"]:
 		_tap_error = "no shell on this platform"
@@ -295,15 +234,8 @@ func _run(line: String) -> void:
 	var ctx := DotCmdContext.new()
 	ctx.source = source
 
-	# [b]ROOT, for the same reason a startup `.cfg` gets it[/b] -- and that file's own
-	# comment says it: "a config file on disk is as trusted as the terminal, whoever
-	# wrote it already had filesystem access to the server". This IS the terminal.
-	#
-	# It has to be granted explicitly. `_run_command` gates on `ctx.has_permission`,
-	# which reads this array and does NOT consult `ctx.is_trusted()` -- so a context
-	# that merely said CONSOLE would be refused every command that needs a flag, which
-	# is every command worth typing. An operator would get "You do not have permission
-	# to use 'changelevel'" from the machine's own keyboard.
+	# ROOT, as a startup `.cfg` gets it: this IS the terminal. It must be granted explicitly,
+	# because `_run_command` checks `ctx.has_permission` and does not consult `ctx.is_trusted()`.
 	ctx.permissions = PackedStringArray([DotAdminFlags.ROOT])
 	ctx.immunity = DotAdminFlags.MAX_IMMUNITY
 	ctx.address = "stdin"

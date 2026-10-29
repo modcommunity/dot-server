@@ -2,28 +2,9 @@
 class_name DotServer
 extends "res://addons/dot_server/server/dot_server_tick.gd"
 
-## The dedicated server. Place one in a scene and it boots.
-##
-## Owns the listener, the session table, the signon flow, the tick budget, and the
-## subsystems — console, admins, bans, audit, RCON, chat, votes, games. Every
-## subsystem is reached through a [DotNodeRef], so a host project can place them
-## itself, point at ones it already has, or let this create them.
-##
-## [codeblock]
-## var server := DotServer.new()
-## server.config = my_config
-## add_child(server)
-## await server.boot()
-## [/codeblock]
-##
-## [b]Boot order matters and is fixed.[/b] Config, then console and cvars, then
-## [code]server.cfg[/code] (which may change any startup cvar), then the subsystems,
-## then the listener, then [code]autoexec.cfg[/code], then
-## [code]+command[/code] arguments. A cvar marked
-## [constant DotConVar.FLAG_STARTUP_ONLY] is settable up to the point the listener
-## opens and refused afterwards, which is why the config runs before it.
-##
-## Registers itself as [code]dot_server[/code] in [DotRegistry].
+## The dedicated server: place one in a scene and it boots. Owns the listener, sessions, signon,
+## tick budget and subsystems, each reached through a [DotNodeRef]. Boot order is fixed, ending
+## with the listener, then autoexec and +commands; registers as [code]dot_server[/code].
 
 func _ready() -> void:
 	if Engine.is_editor_hint():
@@ -200,12 +181,8 @@ func shutdown(reason: String = "Server shutting down") -> void:
 	flush_log()
 
 
-## Writes out whatever the log destination is holding.
-##
-## Called on shutdown, and worth calling from anything that is about to do something it
-## might not come back from. A remote destination is started rather than waited for — the
-## only thing that can honestly be promised to a process that is stopping — and dot-log's
-## own [code]shutdown()[/code] is the path that waits.
+## Writes out whatever the log destination is holding. Call on shutdown or before anything
+## risky; a remote destination is started, not waited for (dot-log's [code]shutdown()[/code] waits).
 func flush_log() -> void:
 	if log_node == null or not is_instance_valid(log_node):
 		return
@@ -226,11 +203,8 @@ func _resolve_console() -> void:
 	console = _resolve(console_ref, "console") as DotConsole
 
 
-## Applies the configured levels, then attaches or creates somewhere for the log to go.
-##
-## Runs before the first line this boot emits, which is the whole point: a level applied
-## after the subsystems have started is a level that did not apply to the interesting
-## part.
+## Applies the configured levels, then attaches or creates somewhere for the log to go. Runs
+## before the first line this boot emits, so the levels apply to the interesting part.
 func _resolve_log_sink() -> void:
 	_apply_log_levels()
 
@@ -314,11 +288,9 @@ func _resolve_moderation() -> void:
 	audit = _resolve(audit_ref, "audit") as DotAuditLog
 	if audit != null:
 		audit.config = config
-		# Opened here, not in its `_ready`. A created node has already run `_ready` by the
-		# time this line assigns the config, so the log resolved no path, returned, and
-		# nothing recorded anything — in every configuration that did not place its own
-		# audit node, which is every default one. Same reason `admins.load_admins()` is
-		# explicit below.
+		# Opened here, not in its `_ready`: a created node has already run `_ready` before this
+		# assigns the config, so the log would resolve no path and record nothing. Same reason
+		# `admins.load_admins()` is explicit below.
 		audit.open_log()
 
 		if not audit.is_recording():
@@ -359,11 +331,9 @@ func _resolve_game_subsystems() -> void:
 	games = _resolve(games_ref, "games") as DotGameManager
 	if games != null:
 		games.setup(self)
-		# Awake while a game loads: a game reads its tick rate from the engine as it starts,
-		# and a server that hibernated from boot (or emptied before a vote's change) had the
-		# engine at hibernate_tickrate, so the delivered playground's netcode refused to start
-		# at 5 Hz ("snapshot_rate must not exceed tick_rate"). Back to sleep after the load,
-		# deferred, so a host's own game_loaded handler (which loads the module) runs awake.
+		# Awake while a game loads: a game reads its tick rate as it starts, and a hibernated
+		# engine (hibernate_tickrate) made a delivered game's netcode refuse to start. Back to
+		# sleep after the load, deferred, so a host's game_loaded handler runs awake.
 		game_changing.connect(func(_from: String, _to: String) -> void: _begin_game_load())
 		games.game_loaded.connect(func(_key: String) -> void: _end_game_load())
 		games.game_load_failed.connect(func(_key: String, _error: DotError) -> void: _end_game_load())
@@ -393,14 +363,9 @@ func _resolve_operator_io() -> void:
 			CHANNEL, "RCON is disabled (no rcon_password set)"
 		)
 
-	# [b]The console an operator standing at the machine actually has.[/b] Built
-	# unconditionally: it reports no terminal and does nothing when there is none --
-	# a unit file, a container without `-i`, CI -- so there is no setting to get
-	# wrong and no deployment it costs anything on.
-	#
-	# `stdin_console_enabled` exists for the one case that is a real decision rather
-	# than an environment: a server whose stdin carries something that is not
-	# commands.
+	# Built unconditionally: it does nothing when there is no terminal (unit file, container
+	# without `-i`, CI). `stdin_console_enabled` is for a server whose stdin carries something
+	# that is not commands.
 	if config.stdin_console_enabled:
 		if stdin_ref == null:
 			stdin_ref = DotNodeRef.of_created(&"StdinConsole", DotStdinConsole)
@@ -431,10 +396,8 @@ func _resolve(ref: DotNodeRef, what: String) -> Node:
 	return res.value
 
 
-## Attaches dot-auth's admin source when that addon is present.
-##
-## Discovered through [DotRegistry] rather than imported, so dot-server has no
-## dependency on dot-auth and works without it.
+## Attaches dot-auth's admin source when present, found through [DotRegistry] so dot-server
+## has no dependency on dot-auth.
 func _attach_auth_admin_source() -> void:
 	var auth := DotRegistry.get_service(&"dot_auth_server")
 	if auth == null:
@@ -525,11 +488,9 @@ func send_kind(
 	return true
 
 
-## [b]The six RPCs, and the only six this node will ever declare.[/b] Server to client on
-## the `_dot_down` three, client to server on the `_dot_up` three; one per lane. Their
-## NAMES are what Godot checksums and [DotSignon] hashes. Adding a seventh is a protocol
-## break for every shipped client -- add a kind to [member envelope] instead.
-## `signon_revision` fails on the commit that adds one.
+## The six RPCs, and the only six this node will ever declare: three server to client
+## (`_dot_down`), three client to server (`_dot_up`). Their names are what [DotSignon] hashes;
+## a seventh breaks every shipped client, so add a kind to [member envelope] instead.
 @rpc("authority", "reliable", "call_remote", CHANNEL_CONTROL)
 func _dot_down(_kind: Variant, _payload: Variant) -> void:
 	pass

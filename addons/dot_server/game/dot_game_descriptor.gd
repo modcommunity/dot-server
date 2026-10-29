@@ -2,12 +2,9 @@
 class_name DotGameDescriptor
 extends Resource
 
-## One game (or map, or mode) the server can run.
-##
-## A [Resource] so an operator configures it in the inspector or a
-## [code].tres[/code] file, and so a module can build one at runtime. Deliberately
-## thin: it names content and a scene, and everything about *fetching* that content
-## is dot-cloud's business.
+## One game (or map, or mode) the server can run. A [Resource] so an operator can
+## configure it in the inspector and a module can build one; it only names content and a
+## scene, since fetching content is dot-cloud's business.
 
 ## Stable identifier, used by `changelevel` and in config filenames.
 ##
@@ -22,79 +19,47 @@ extends Resource
 
 @export_group("Content")
 
-## dot-cloud manifest URL. [b]An override, not the switch.[/b]
-##
-## Whether a game is delivered is [method needs_delivered_content] — a relative scene
-## path — because a pack is findable by its content id against whatever bases a client
-## has. Set this only when the content lives somewhere those bases do not reach.
+## dot-cloud manifest URL: an override, not the switch. Delivery is decided by
+## [method needs_delivered_content] (a relative scene path); set this only when the content
+## lives somewhere a client's bases do not reach.
 @export var manifest_url: String = ""
 
-## Content id from the manifest, if it differs from [member game_id].
-##
-## They are usually the same. This exists for the case where one content set backs
-## several game modes.
+## Content id from the manifest, if it differs from [member game_id] (one content set
+## backing several modes).
 @export var content_id: String = ""
 
 ## Optional content groups to fetch. Empty fetches only required content.
 @export var content_groups: PackedStringArray = PackedStringArray()
 
-## Other packs this game needs mounted beside its own, as `<owner>/<name>@<version>`:
-## a map pack, a shared asset pack, somebody's library written without `class_name`.
-##
-## [b]Fetched by the server before the change and by every client in the same sync.[/b]
-## They travel as `content_extra` in the one `content.sync` a client already gets, so a
-## player joining mid-game and a player on the server through a game change both fetch
-## the same set, and a dependency the server cannot get abandons the change before
-## anybody is disturbed -- the rule the game's own pack already follows.
-##
-## [b]A concrete version, always.[/b] `@latest` is resolved by whatever installs the game
-## (dot-server-deploy's install-games), never here: a server that resolved it per join
-## would hand two players two different packs under one game, and the whole point of a
-## version in the key is that everybody mounts the same bytes.
+## Other packs mounted beside this game's own, as `<owner>/<name>@<version>`, fetched by the
+## server before a change and by every client in the same sync. A concrete version always:
+## `@latest` is resolved by the installer, so all players mount the same bytes.
 @export var dependencies: PackedStringArray = PackedStringArray()
 
-## Packs only the SERVER needs: mounted with the game's own, never sent to a client.
-##
-## For what runs on the server and nowhere else -- bot navigation, a ruleset, a large
-## lookup table, a recording a replay bot plays. [member dependencies] would make every
-## player download them for nothing; leaving them out of the descriptor would make the
-## game fetch them itself, which is how a game came to carry its own content-fetching
-## code. Same key rule: `<owner>/<name>@<version>`, a concrete version, pinned by the
-## installer.
+## Packs only the SERVER needs (bot navigation, a ruleset, a replay recording): mounted with
+## the game's own, never sent to a client, which [member dependencies] would force to
+## download them. Same key rule: `<owner>/<name>@<version>`, a concrete version.
 @export var server_dependencies: PackedStringArray = PackedStringArray()
 
-## The maps this game offers, as delivered packs: `<owner>/<map id>@<version>`.
-##
-## [b]Not mounted at load.[/b] A map is fetched when the server changes to it and a
-## client fetches the one being played, so a server offering twenty-six courses does not
-## make a player download twenty-six. The game turns these into [code]DotMapDef[/code]s
-## (dot-map's [code]DotMapCatalogue.add_delivered[/code]); the server only carries them,
-## because which scene in a map pack to load and what a map's id means are the game's.
-## The installer pins each version and checks each pack exists, is signed, and asks for
-## no addon this server lacks -- so a typo or an unpublished map fails at startup, not
-## when somebody votes for it.
+## The maps this game offers, as delivered packs `<owner>/<map id>@<version>`. Not mounted at
+## load: a map is fetched when the server changes to it. The game turns these into
+## [code]DotMapDef[/code]s; the installer checks each pack, so a typo fails at startup.
 @export var maps: PackedStringArray = PackedStringArray()
 
 @export_group("Scenes")
 
-## Scene the server instantiates.
-##
-## May be a [code]res://[/code] path in the build, or a path inside downloaded
-## content — in which case it resolves under the mount prefix.
+## Scene the server instantiates: a [code]res://[/code] path in the build, or a path inside
+## downloaded content (resolved under the mount prefix).
 @export var scene: String = ""
 
-## Scene the client instantiates, when it differs.
-##
-## A dedicated server usually loads a headless authoritative scene while clients
-## load one with rendering and UI. Empty means clients use [member scene].
+## Scene the client instantiates, when it differs (a dedicated server loads a headless one).
+## Empty means clients use [member scene].
 @export var client_scene: String = ""
 
 @export_group("Rules")
 
-## Cvars applied when this game loads, as [code]name -> value[/code].
-##
-## Convenient for per-game rules without a config file. The per-game
-## [code].cfg[/code] still runs afterwards, so an operator can override these.
+## Cvars applied when this game loads, as [code]name -> value[/code]. The per-game
+## [code].cfg[/code] runs afterwards, so an operator can override these.
 @export var cvars: Dictionary = {}
 
 ## Player slots for this game. 0 uses the server's.
@@ -109,10 +74,8 @@ extends Resource
 @export var metadata: Dictionary = {}
 
 
-## Checks the descriptor is usable before a change is attempted.
-##
-## Called by [DotGameManager] on every change, so a mistake surfaces as a refused
-## command rather than a half-completed switch.
+## Checks the descriptor is usable before a change is attempted, so a mistake is a refused
+## command rather than a half-completed switch. Called by [DotGameManager] on every change.
 func validate() -> DotResult:
 	if game_id.strip_edges() == "":
 		return DotResult.fail(
@@ -175,19 +138,9 @@ static func split_key(key: String) -> PackedStringArray:
 	return PackedStringArray([key.substr(0, at).strip_edges(), key.substr(at + 1).strip_edges()])
 
 
-## Whether this game's files have to be fetched and mounted before it can load.
-##
-## [b]A relative path IS the statement, and [member manifest_url] is only an override.[/b]
-## This used to be "manifest_url is set", and it forced every delivered game to carry an
-## address -- which is a per-deployment fact written into a per-game file. A server that
-## published its own packs into `dist/` had to spell out an absolute path that was true
-## on one box, and bumping a version meant editing it again.
-##
-## A relative scene path can only ever resolve against a mount, so a descriptor carrying
-## one has already said it is delivered; the id and the version say WHICH content, and
-## [method DotCloudClient.ensure] finds it against whatever bases that client has --
-## local directories first, then the network. An explicit [member manifest_url] still
-## wins, for content that lives somewhere its client has no base for.
+## Whether this game's files must be fetched and mounted before it can load. A relative scene
+## path IS the statement; [member manifest_url] is only an override for content whose client
+## has no base for it.
 func needs_delivered_content() -> bool:
 	if manifest_url != "":
 		return true
@@ -201,18 +154,12 @@ func effective_content_id() -> String:
 	return content_id if content_id != "" else game_id
 
 
-## Key identifying this exact content, matching dot-cloud's.
-##
-## [code]id@version[/code], so two versions of one game are distinct — which is what
-## lets a client's reported content be checked against the server's.
+## Key identifying this exact content, matching dot-cloud's: [code]id@version[/code], so a
+## client's reported content can be checked against the server's.
 func content_key() -> String:
-	# [b]Delivered, not "has a URL".[/b] This read `manifest_url == ""` and returned the
-	# empty string, which was the same statement everywhere else in this file — and once a
-	# pack became findable by id, a delivered game with no URL had no key. The key is what
-	# a client reports back, what `report_content_ready` checks it against, and what
-	# `DotClientLink._resolve_scene` splits to build the mount path, so an empty one is
-	# not a missing label: the client is told to download something with no name, and
-	# refuses.
+	# Never empty for a delivered game: the key is what a client reports back and what
+	# `DotClientLink._resolve_scene` splits to build the mount path, so an empty one would
+	# tell the client to download something with no name.
 	if not needs_delivered_content():
 		return ""
 	return "%s@%s" % [
@@ -221,10 +168,8 @@ func content_key() -> String:
 	]
 
 
-## Absolute path of the scene the server loads.
-##
-## An absolute path is used as-is; a relative one resolves under dot-cloud's mount
-## prefix, which is [code]res://dot_cloud/<content_id>/<version>/[/code].
+## Absolute path of the scene the server loads. A relative path resolves under dot-cloud's
+## mount prefix, [code]res://dot_cloud/<content_id>/<version>/[/code].
 func resolve_scene_path() -> String:
 	return _resolve(scene)
 
@@ -246,21 +191,9 @@ func _resolve(path: String) -> String:
 	]
 
 
-## The client scene path as sent to clients.
-##
-## Relative when the content is downloaded, so a client resolves it against its own
-## mount prefix rather than trusting a server-supplied absolute path — which would
-## let a server name [code]res://addons/…[/code] and have the client load it.
-##
-## [b]Empty for a game that ships inside the build.[/b] There is no mount for a path to
-## be inside, and [method DotClientLink._resolve_scene] refuses every absolute path that
-## is not — so falling back to the server's own [member scene] could produce nothing but
-## a refusal, and a game shipped with its client could not be joined at all. The empty
-## string is the documented "you already have it" path: the client reports ready, enters
-## play, and loads whatever scene its own build says is the client.
-##
-## A game delivered through dot-cloud sets [member client_scene] to a relative path
-## and gets the mounted one instead.
+## The client scene path as sent to clients: relative when downloaded, so a client resolves it
+## under its own mount, never a server-named [code]res://addons/…[/code]. Empty for a game
+## shipped in the build: the client reports ready and loads its own scene.
 func client_scene_or_scene() -> String:
 	if client_scene != "":
 		return client_scene
