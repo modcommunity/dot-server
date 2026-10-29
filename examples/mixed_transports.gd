@@ -1,34 +1,8 @@
 extends "res://examples/selftest/selftest_harness.gd"
 
-## A browser player and a desktop player in one match, which is what `transport_mode: dual`
-## is for and what nothing else asserts end to end.
-##
-## dot-core's `dual_transport_selftest` proves the peer: two engine peers behind one
-## [DotDualPeer], packets routed to the right one. `signon_revision` proves a native client
-## joins over ENet. Neither has a WebSocket player and an ENet player [b]in the same game[/b],
-## and that is the claim the platform makes: a browser tab (TCP, it has no UDP) and the
-## desktop app (UDP) play together, and a desktop player who cannot or will not use UDP
-## falls back to, or chooses, the WebSocket and still plays with both.
-##
-## What is driven, over real loopback sockets:
-##
-##   1. A dual server boots and loads a game whose one rule is "the server relays what a
-##      player says to everybody else" (fixtures/mixed_world).
-##   2. A browser-style player joins over WebSocket (`transport_preference = "ws"`, which is
-##      also what `--transport ws` makes the shell do: the opt-out).
-##   3. A desktop player joins with the default `auto` and lands on ENet.
-##   4. The server sees one match: both sessions playing, and each client's scoreboard lists both.
-##   5. Reliable game RPCs cross both ways, WebSocket to ENet and ENet to WebSocket.
-##   6. An unreliable stream crosses both ways, nearly whole on loopback.
-##   6b. Which addresses a native WebSocket join tries over TLS first.
-##   7. A desktop player whose UDP gets no answer falls back to WebSocket in about
-##      `udp_connect_timeout_sec`, and plays with the other two.
-##   8. The ENet player leaving disturbs nobody else.
-##
-## Run:
-## [codeblock]
-## godot --headless --path . res://examples/mixed_transports.tscn
-## [/codeblock]
+## A browser player and a desktop player in one match, which is what `transport_mode: dual` is for.
+## Over real loopback sockets: a dual server relays a game rule between a WebSocket and an ENet player; checks the
+## scoreboard, reliable and unreliable traffic both ways, the UDP-blocked fallback to WebSocket, and a departure.
 
 const PORT := 27731
 ## Nothing listens here, so a UDP connect to it is never answered: a firewall that drops UDP.
@@ -97,7 +71,7 @@ func _run() -> void:
 	get_tree().quit(1 if _failed > 0 else 0)
 
 
-# --- 1. The server -----------------------------------------------------------
+# 1. The server
 
 func _boot() -> bool:
 	_section("a dual-stack server boots")
@@ -148,7 +122,7 @@ func _boot() -> bool:
 	return true
 
 
-# --- 2, 3. One of each -------------------------------------------------------
+# 2, 3. One of each
 
 func _test_browser_joins_over_websocket() -> DotClientLink:
 	_section("a browser-style player joins over WebSocket")
@@ -188,7 +162,7 @@ func _test_desktop_joins_over_enet() -> DotClientLink:
 	return link
 
 
-# --- 4. One match ------------------------------------------------------------
+# 4. One match
 
 func _test_one_match(browser: DotClientLink, desktop: DotClientLink) -> void:
 	_section("the server holds one match with both of them in it")
@@ -213,7 +187,7 @@ func _test_one_match(browser: DotClientLink, desktop: DotClientLink) -> void:
 	_done()
 
 
-# --- 5. Reliable -------------------------------------------------------------
+# 5. Reliable
 
 func _test_reliable_crosses(browser: DotClientLink, desktop: DotClientLink) -> void:
 	_section("a reliable game RPC crosses from one transport to the other")
@@ -248,7 +222,7 @@ func _test_reliable_crosses(browser: DotClientLink, desktop: DotClientLink) -> v
 	_done()
 
 
-# --- 6. Unreliable -----------------------------------------------------------
+# 6. Unreliable
 
 func _test_unreliable_crosses(browser: DotClientLink, desktop: DotClientLink) -> void:
 	_section("an unreliable stream crosses both ways")
@@ -273,12 +247,10 @@ func _test_unreliable_crosses(browser: DotClientLink, desktop: DotClientLink) ->
 	_done()
 
 
-# --- 6b. Which WebSocket joins try TLS first ------------------------------------
+# 6b. Which WebSocket joins try TLS first
 
-## A listed server's game port is a TLS port (browsers reach it from an HTTPS page), so a
-## native WebSocket join to a public bare host:port tries wss:// first; anything local, and
-## anything that names its scheme, does not. Real TLS is proven by hand against nginx (see
-## docs/transports.md); this pins the rule that picks it.
+## A listed server's game port is a TLS port, so a native WebSocket join to a public bare host:port tries wss:// first;
+## local hosts and explicit schemes do not. Real TLS is proven by hand (docs/transports.md); this pins the rule.
 func _test_which_addresses_try_tls_first(link: DotClientLink) -> void:
 	_section("a native WebSocket join tries TLS first only at a public bare host:port")
 
@@ -299,7 +271,7 @@ func _test_which_addresses_try_tls_first(link: DotClientLink) -> void:
 	_done()
 
 
-# --- 7. A desktop player whose UDP is blocked --------------------------------
+# 7. A desktop player whose UDP is blocked
 
 func _test_blocked_udp_falls_back(browser: DotClientLink, desktop: DotClientLink) -> DotClientLink:
 	_section("a desktop player whose UDP gets no answer falls back to WebSocket and plays")
@@ -343,7 +315,7 @@ func _test_blocked_udp_falls_back(browser: DotClientLink, desktop: DotClientLink
 	return link
 
 
-# --- 8. Leaving ---------------------------------------------------------------
+# 8. Leaving
 
 func _test_a_leaver_disturbs_nobody(browser: DotClientLink, desktop: DotClientLink, fallback: DotClientLink) -> void:
 	_section("the ENet player leaving disturbs nobody else")
@@ -368,7 +340,7 @@ func _test_a_leaver_disturbs_nobody(browser: DotClientLink, desktop: DotClientLi
 	_done()
 
 
-# --- Helpers -------------------------------------------------------------------
+# Helpers
 
 func _new_link(label: String, configure: Callable) -> DotClientLink:
 	var root := Node.new()
@@ -442,7 +414,7 @@ func _peer_of(label: String) -> int:
 	return 0
 
 
-## The relay world this link's client loaded, found by the unique id of its MultiplayerAPI.
+## The relay world this link's client loaded, located by the unique id of its MultiplayerAPI.
 func _world_of(link: DotClientLink) -> Node:
 	if not is_instance_valid(link) or not link.is_inside_tree():
 		return null

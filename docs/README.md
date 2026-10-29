@@ -13,3 +13,5 @@ The reasoning behind [../CLAUDE.md](../CLAUDE.md)'s rules.
 | [game-switching.md](game-switching.md) | The change flow, delivered vs built-in games, pack lists, optional addons, the query hook |
 | [testing.md](testing.md) | The four suites and what each covers |
 | [history.md](history.md) | Bug stories worth keeping |
+| [design-notes.md](design-notes.md) | The reasoning behind the envelope, the address guard, the event bus, modules and the bot quota, with usage examples |
+| [api-levels.md](api-levels.md) | What each `DotServerApi` level added |

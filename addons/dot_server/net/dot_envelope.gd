@@ -2,37 +2,9 @@
 class_name DotEnvelope
 extends RefCounted
 
-## The named kinds a [DotServer] and a [DotClientLink] say to each other, over six RPCs
-## that do not change.
-##
-## [b]Why the RPC surface is frozen.[/b] Godot refuses every RPC between two nodes unless
-## both declare the same set of [code]@rpc[/code] method names -- it checksums them -- so
-## each feature this addon grew as an RPC pair was a protocol break: adding
-## [code]_notice[/code] in September moved the signon revision and stopped every shipped
-## client from joining every server built after it. A server one release ahead of its
-## clients could host none of them.
-##
-## So the RPCs are an envelope: one per lane (reliable control, unreliable control,
-## reliable event) in each direction, carrying a KIND and a Dictionary. Everything that
-## used to be a method -- the challenge, credentials, content sync, loading, heartbeats,
-## visibility, notices, chat -- is a kind. The six names are what Godot checksums and what
-## [DotSignon] hashes, and they move only if the envelope itself does. A new feature is a
-## new kind, and a peer that has never heard of it is simply not sent it.
-##
-## [b]Each end advertises what it knows.[/b] The challenge carries the server's
-## [method advert], the credentials the client's. A kind is "known" if this end handles it
-## or sends it. Then:
-##
-## - a kind the peer does not know is not sent to it -- dropped here with a DEBUG line;
-## - a kind that arrives and has no handler is dropped the same way;
-## - a kind either end marks REQUIRED that the other does not know refuses the join, with
-##   [method explain]'s sentence, from the server -- which is the end that decides who
-##   joins, and the one whose log an operator reads.
-##
-## [b]Payloads are Dictionaries, and a field is only ever added.[/b] The same rule as
-## [DotNotice], for the same reason: a field added to a dictionary breaks nobody, so a kind
-## changes by growing, and a reader defaults and type-checks every field it takes. A change
-## that cannot be an addition is a new kind with a new name.
+## The named kinds a [DotServer] and a [DotClientLink] say to each other, over six RPCs that do not change.
+## The RPC surface is frozen because Godot checksums the @rpc set; a feature is a new kind, and each end
+## advertises what it knows. Unknown kinds are dropped, REQUIRED ones refuse the join (docs/design-notes.md).
 
 const CHANNEL := "signon.kinds"
 
@@ -48,8 +20,6 @@ enum Lane {
 	EVENT,
 }
 
-# --- The core kinds ------------------------------------------------------------------
-#
 # Server to client.
 const CHALLENGE := &"signon.challenge"          ## CONTROL. Identify yourself.
 const DISCONNECT := &"signon.disconnect"        ## CONTROL. Why the socket is about to close.
@@ -113,14 +83,9 @@ var dropped_arrivals: int = 0
 var _noted: Dictionary = {}
 
 
-## Declares a kind this end knows. [param handler] is
-## [code]func(peer_id: int, payload: Dictionary) -> void[/code], or empty for a kind this
-## end only sends. Registering again replaces the handler and the requirement.
-##
-## [param required] means a peer that does not know this kind cannot play with this end.
-## Use it for a kind the join cannot complete without; a feature that a peer can go
-## without -- which is nearly every new one -- is optional, and costs an older peer only
-## the feature.
+## Declares a kind this end knows. [param handler] is [code]func(peer_id: int, payload: Dictionary) -> void[/code],
+## or empty for a kind this end only sends. [param required] means a peer that does not know the kind cannot play
+## with this end; use it only where the join cannot complete without it.
 func register(kind: StringName, handler: Callable = Callable(), required: bool = false) -> void:
 	if kind == &"":
 		push_error("DotEnvelope.register: a kind needs a name")
@@ -186,13 +151,9 @@ func advert() -> Dictionary:
 	return {"kinds": Array(kinds()), "required": Array(required_kinds())}
 
 
-# --- The peer ------------------------------------------------------------------------
 
-## Takes a peer's [method advert] and says whether the two ends can play.
-##
-## Both directions, because either end can be the newer. [param is_server] only chooses
-## the words. A malformed advert is refused as one: this is off the wire, before the peer
-## has authenticated.
+## Takes a peer's [method advert] and says whether the two ends can play, in both directions.
+## A malformed advert is refused as one: this is off the wire, before the peer has authenticated.
 func adopt(peer_id: int, raw: Variant, is_server: bool) -> DotResult:
 	if not (raw is Dictionary):
 		return DotResult.fail(
@@ -289,10 +250,7 @@ func should_send(peer_id: int, kind: StringName) -> bool:
 
 
 ## Hands an arrival to its handler. False when there was none, or it was malformed.
-##
-## [b]Nothing here trusts the arrival.[/b] The kind and the payload are Variants off the
-## wire; a kind that is not a string, or a payload that is not a Dictionary, is dropped
-## rather than handed to a handler that would have to ask.
+## Nothing here trusts the arrival: a non-string kind or non-Dictionary payload is dropped, not passed on.
 func dispatch(peer_id: int, kind: Variant, payload: Variant) -> bool:
 	if not (kind is String or kind is StringName):
 		dropped_arrivals += 1
@@ -324,12 +282,8 @@ func _note(peer_id: int, kind: StringName, what: String) -> void:
 	DotLog.debug(CHANNEL, what, {"peer": peer_id, "kind": String(kind)})
 
 
-## What to tell a player, and what to log, when two ends' kinds cannot work together.
-## Null when they can.
-##
-## [b]Says who has to update, not which kinds differ.[/b] Same shape as
-## [method DotSignon.explain]: the player can act on "needs a newer game client"; the kind
-## names are in the detail, for the operator reading the same line in a log.
+## What to tell a player, and what to log, when two ends' kinds cannot work together. Null when they can.
+## Says who has to update, not which kinds differ (like [method DotSignon.explain]); the names go in the detail.
 static func explain(
 	missing_there: PackedStringArray,
 	missing_here: PackedStringArray,
@@ -365,11 +319,8 @@ static func explain(
 	)
 
 
-# --- Reading a payload ---------------------------------------------------------------
-#
-# Every field off the wire is a Variant whose type the sender chose, and comparing one
-# with the wrong type is a runtime error inside an RPC handler. These default and convert,
-# so a field a newer peer added is ignored and one an older peer left out is its default.
+# Every wire field is a Variant whose type the sender chose; comparing it with the wrong type is a
+# runtime error in an RPC handler. These default and convert, so a missing or extra field is harmless.
 
 static func number(payload: Dictionary, key: String, default: float = 0.0) -> float:
 	var v: Variant = payload.get(key, default)

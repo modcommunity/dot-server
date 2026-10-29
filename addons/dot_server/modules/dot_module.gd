@@ -2,31 +2,9 @@
 class_name DotModule
 extends Node
 
-## Base class for a server plugin.
-##
-## A module is a [Node] with a lifecycle the host manages. Subclass it, override
-## [method _module_load], register whatever you need, and the host guarantees
-## [method _module_unload] runs before you are freed.
-##
-## [b]Why the registration helpers exist.[/b] A module that registers a console
-## command and is then unloaded leaves a command whose handler points at a freed
-## object — the console calls it and the server crashes. Every helper here records
-## what it registered so [DotModuleHost] can undo it. Register through them, not
-## directly, and unloading is safe by construction.
-##
-## [codeblock]
-## extends DotModule
-##
-## func _module_name() -> String: return "welcome"
-##
-## func _module_load() -> DotResult:
-##     add_command("welcome", _cmd_welcome, "Greet a player", DotAdminFlags.CHAT)
-##     hook_post("client_spawn", _on_spawn)
-##     return DotResult.success(null)
-##
-## func _on_spawn(e: DotEvent) -> void:
-##     server.broadcast_message("Welcome, %s!" % e.get_string("name"))
-## [/codeblock]
+## Base class for a server plugin: a [Node] with a lifecycle the host manages.
+## Subclass it and override [method _module_load]; register through the helpers here, not directly, so
+## [DotModuleHost] can undo it all on unload. Example: docs/design-notes.md.
 
 ## The server this module is loaded into. Set by the host before [method _module_load].
 var server: DotServer = null
@@ -43,7 +21,6 @@ var _hooks: Array = []
 var _query_providers: Array[Object] = []
 
 
-# --- Subclass interface ----------------------------------------------------
 
 ## Identifier used by `module_load` / `module_unload`. Must be unique.
 func _module_name() -> String:
@@ -63,17 +40,12 @@ func _module_author() -> String:
 
 
 ## Sets everything up. Return a failure to refuse to load.
-##
-## A module that cannot work — a missing dependency, a bad config — must fail here
-## rather than load broken. The host reports it and unloads.
+## A module that cannot work (missing dependency, bad config) must fail here rather than load broken.
 func _module_load() -> DotResult:
 	return DotResult.success(null)
 
 
-## Tears down anything the helpers below did not cover.
-##
-## Commands, cvars and hooks registered through the helpers are undone
-## automatically. Override for anything else: timers, files, sockets.
+## Tears down anything the helpers below did not cover (timers, files, sockets); commands, cvars and hooks are undone automatically.
 func _module_unload() -> void:
 	pass
 
@@ -83,7 +55,6 @@ func _module_game_changed(_content_key: String) -> void:
 	pass
 
 
-# --- Registration helpers -------------------------------------------------
 
 ## Registers a console command that is removed when this module unloads.
 func add_command(
@@ -135,10 +106,7 @@ func hook_post(event_name: String, callback: Callable) -> void:
 
 
 ## Registers a query provider, removed when this module unloads.
-##
-## The same reasoning as every other helper, and a sharper case for it: a provider
-## left behind by an unloaded module is called on the next query, from a socket
-## anyone can reach, with [code]self[/code] pointing at a freed object.
+## A provider left behind would be called from a socket anyone can reach, on a freed object.
 func add_query_provider(provider: Object) -> DotResult:
 	if server == null or server.query_source == null:
 		return DotResult.fail(
@@ -175,7 +143,6 @@ func _cleanup_registrations() -> void:
 	_query_providers.clear()
 
 
-# --- Convenience ----------------------------------------------------------
 
 func log_info(message: String, fields: Dictionary = {}) -> void:
 	DotLog.info("mod." + _module_name(), message, fields)

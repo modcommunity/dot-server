@@ -1,20 +1,8 @@
 extends "res://examples/selftest/dedicated_tests_d.gd"
 
-## Boots a dedicated server and exercises the console, admin and moderation paths.
-##
-## Runs headless with no clients, which is enough to verify everything a client does
-## not participate in: cvar flags, permission enforcement, config execution, the
-## command buffer, bans and durations, votes, modules, and the audit trail.
-##
-## [codeblock]
-## godot --headless --path . res://examples/dedicated_server.tscn
-##
-## # As a real server, with the usual dedicated-server arguments:
-## godot --headless --path . res://examples/dedicated_server.tscn -- \
-##     --sv-port 27015 --sv-hostname "My Server" +sv_maxplayers 24
-## [/codeblock]
-##
-## Exits non-zero if any check fails, so it works as a smoke test in CI.
+## Boots a dedicated server and exercises the console, admin and moderation paths, headless with no clients.
+## Covers cvar flags, permissions, config execution, the command buffer, bans, votes, modules and the audit trail.
+## Exits non-zero if any check fails, so it works as a CI smoke test.
 
 func _ready() -> void:
 	DotLog.set_level(DotLog.Level.INFO)
@@ -22,11 +10,8 @@ func _ready() -> void:
 
 	var config := _make_config()
 
-	# [b]A self-test starts from nothing in user://example.[/b] The ban list, the audit log
-	# and the admin file there are read back at boot, and they used to carry over: every
-	# run began with the previous run's permanent address ban already in place, and the
-	# audit log had grown past a quarter of a megabyte. Not when serving — an operator
-	# trying this scene out may want to keep what they did. See docs/testing.md.
+	# A self-test starts from nothing in user://example: the ban list, audit log and admin file are read
+	# back at boot, so a stale permanent ban or a huge audit log would carry over. Not when serving. See docs/testing.md.
 	if _should_selftest():
 		DotPaths.remove_tree("user://example")
 
@@ -93,11 +78,8 @@ func _make_config() -> DotServerConfig:
 	config.audit_log_path = "user://example/audit.jsonl"
 	config.hibernate_when_empty = false
 
-	# No boot configs. The addon ships a default server.cfg (setting
-	# sv_maxplayers 32 among other things) and the search path finds it, which is
-	# correct behaviour — a file layer beats exported defaults — but it would make
-	# this self-test assert against whatever that file happens to contain.
-	# Config execution is tested explicitly in _test_config_files().
+	# No boot configs: the addon's default server.cfg (sv_maxplayers 32 and more) would be found and the
+	# self-test would assert against its contents. Config execution is tested in _test_config_files().
 	config.startup_config = ""
 	config.autoexec_config = ""
 	return config
@@ -112,7 +94,6 @@ func _should_selftest() -> bool:
 		return false
 	return DotPlatform.is_headless()
 
-# --- Self-test -------------------------------------------------------------
 
 func _run_selftest() -> void:
 	print("=== self-test ===")

@@ -2,17 +2,8 @@
 class_name DotModuleHost
 extends Node
 
-## Loads, unloads and reloads [DotModule]s at runtime.
-##
-## Server plugins, in the usual sense: a community operator drops a script in a
-## directory and gets new commands without rebuilding the game. Modules load from
-## [code]res://[/code] or [code]user://[/code], and unloading undoes their console
-## registrations and event hooks.
-##
-## [b]On reloading.[/b] `module_reload` frees and re-instantiates, which works
-## because the helpers on [DotModule] track everything a module registered. What it
-## cannot do is reclaim a mounted resource pack or undo changes a module made to the
-## world — reload is for iterating on a plugin's own logic, not a general undo.
+## Loads, unloads and reloads [DotModule]s at runtime from [code]res://[/code] or [code]user://[/code].
+## Reload re-instantiates; it cannot reclaim a mounted resource pack or undo changes a module made to the world.
 
 const CHANNEL := "modules"
 const SERVICE := &"dot_module_host"
@@ -28,10 +19,7 @@ signal module_unloaded(module_name: String)
 ## Load everything in [member search_dirs] on setup.
 @export var auto_load: bool = true
 
-## Modules that must not be loaded, by name.
-##
-## Lets an operator keep a broken module on disk while disabling it, which is what
-## you want at 3am — the alternative is deleting the file and losing its config.
+## Modules that must not be loaded, by name: disable a broken module without deleting its file and config.
 @export var blocklist: PackedStringArray = PackedStringArray()
 
 var server: DotServer = null
@@ -52,11 +40,8 @@ func setup(p_server: DotServer) -> void:
 		server.games.game_loaded.connect(_on_game_changed)
 
 	if auto_load:
-		# Not awaited, and it cannot be: `setup` is called from [DotServer]'s boot, which
-		# is itself a coroutine, and making this one would mean every caller of `setup`
-		# had to be. A module that suspends during a scan-load finishes on a later frame;
-		# what matters is that `load_module` itself awaits the module, which is what was
-		# missing and what produced "Trying to call an async function without 'await'".
+		# Not awaited, and cannot be: `setup` runs from [DotServer]'s boot coroutine. A module that
+		# suspends during a scan-load finishes on a later frame; `load_module` itself awaits the module.
 		load_all()
 
 
@@ -65,7 +50,6 @@ func _exit_tree() -> void:
 	DotRegistry.unregister_instance(SERVICE, self)
 
 
-# --- Loading ---------------------------------------------------------------
 
 ## Loads every [code].gd[/code] in the search directories.
 func load_all() -> int:
@@ -191,7 +175,6 @@ func load_module(path: String) -> DotResult:
 	return DotResult.success(module)
 
 
-# --- Unloading -------------------------------------------------------------
 
 func unload_module(module_name: String) -> DotResult:
 	if not _modules.has(module_name):
@@ -201,21 +184,9 @@ func unload_module(module_name: String) -> DotResult:
 
 	var module: DotModule = _modules[module_name]
 
-	# The module's own teardown runs first, while its registrations still exist —
-	# a module that wants to announce its departure needs its command to work.
-	# [b]`_module_unload` must be SYNCHRONOUS, and this is where that is enforced.[/b]
-	# Unlike `_module_load`, this one cannot be awaited: `unload_all` runs from
-	# `_exit_tree`, where the node is already leaving and there is no frame left to
-	# resume a coroutine in -- so awaiting here would make shutdown depend on a
-	# suspension that can no longer complete. A module with something to flush on the
-	# way out has to have flushed it by the time it returns.
-	#
-	# Detected rather than assumed: a GDScript coroutine that suspends returns a
-	# [Signal] instead of its value, so a module that ignored this is visible right
-	# here, by name, instead of leaving half a teardown behind and no message at all.
-	# Through `call`, because GDScript refuses to take the return value of a function
-	# declared `-> void` -- which is exactly what a module's teardown is declared as, and
-	# is also what makes the suspension invisible without this.
+	# Teardown runs first, while registrations still exist. `_module_unload` must be SYNCHRONOUS:
+	# `unload_all` runs from `_exit_tree`, with no frame left to resume a coroutine. A coroutine that
+	# suspends returns a [Signal], detected via `call` (a `-> void` return cannot be read directly).
 	var teardown: Variant = module.call("_module_unload")
 
 	if teardown is Signal:
@@ -273,7 +244,6 @@ func reload_module(module_name: String) -> DotResult:
 	return await load_module(path)
 
 
-# --- Queries ---------------------------------------------------------------
 
 func get_module(module_name: String) -> DotModule:
 	return _modules.get(module_name)

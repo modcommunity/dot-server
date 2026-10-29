@@ -2,12 +2,8 @@ class_name DotCmdContext
 extends RefCounted
 
 ## Who ran a command, with what arguments, and where output should go.
-##
-## The reason commands take a context object rather than an argument array: almost
-## every interesting command needs to know the caller. [code]kick[/code] must
-## refuse a target with higher immunity, [code]say[/code] must attribute the
-## message, and any of them may be answering an RCON socket rather than the
-## server's own stdout — so [method reply] has to route somewhere caller-specific.
+## Commands take a context, not an argument array, because most need the caller (immunity, attribution)
+## and [method reply] must reach an RCON socket or stdout.
 
 ## Where a command came from. Different origins get different trust.
 enum Source {
@@ -34,9 +30,7 @@ var command: String = ""
 var args: PackedStringArray = PackedStringArray()
 
 ## The identity of the caller, when there is one. Null for console and config.
-##
-## Typed loosely because dot-server does not depend on dot-auth — this holds a
-## [code]DotAuthIdentity[/code] when dot-auth is installed.
+## Typed loosely because dot-server does not depend on dot-auth.
 var identity: Object = null
 
 ## The calling client's session, when a client ran this.
@@ -48,19 +42,13 @@ var permissions: PackedStringArray = PackedStringArray()
 ## Immunity level of the caller. Compared against a target's before acting.
 var immunity: int = 0
 
-## Where replies go. Set by whoever built the context.
-##
-## An RCON session sets one that accumulates into its response packet; the local
-## console sets one that prints. Commands never need to know which.
+## Where replies go, set by whoever built the context (RCON accumulates, the console prints).
 var reply_sink: Callable = Callable()
 
 ## Address the command came from, for logs.
 var address: String = ""
 
-## Lines this command produced, kept regardless of the sink.
-##
-## Lets a caller read the output of a command it dispatched programmatically
-## without having to install a sink for it.
+## Lines this command produced, kept regardless of the sink so a programmatic caller can read them.
 var output: PackedStringArray = PackedStringArray()
 
 
@@ -83,7 +71,6 @@ static func internal(command_name: String, arguments: PackedStringArray) -> DotC
 	return ctx
 
 
-# --- Arguments -------------------------------------------------------------
 
 func argc() -> int:
 	return args.size()
@@ -114,17 +101,13 @@ func arg_bool(index: int, default: bool = false) -> bool:
 	return ["true", "yes", "on", "enabled"].has(s)
 
 
-## Every argument from [param from] onwards, joined with spaces.
-##
-## For commands whose last parameter is free text — a kick reason, a chat message —
-## where quoting the whole thing is a burden nobody remembers.
+## Every argument from [param from] onwards, joined with spaces (free text such as a kick reason).
 func rest(from: int = 0) -> String:
 	if from >= args.size():
 		return ""
 	return " ".join(Array(args).slice(from))
 
 
-# --- Output ----------------------------------------------------------------
 
 ## Sends a line back to whoever ran the command.
 func reply(text: String) -> void:
@@ -147,17 +130,13 @@ func reply_error(res: DotResult) -> void:
 		reply("  %s" % res.error.detail)
 
 
-# --- Permissions -----------------------------------------------------------
 
 func has_permission(flag: String) -> bool:
 	return DotAdminFlags.granted(permissions, flag)
 
 
 ## Whether this caller may act on a target with [param target_immunity].
-##
-## Equal immunity cannot act on equal, which is the rule every long-lived admin
-## system converges on: two admins at the same level kicking each other in a loop
-## has no correct resolution, so it is forbidden rather than raced.
+## Equal immunity cannot act on equal: two admins at one level kicking each other has no resolution.
 func outranks(target_immunity: int) -> bool:
 	if has_permission(DotAdminFlags.ROOT):
 		return true

@@ -2,17 +2,9 @@
 class_name DotAuditLog
 extends Node
 
-## An append-only record of every administrative action.
-##
-## [b]Separate from the general server log on purpose.[/b] The general log rotates,
-## is full of routine noise, and gets truncated when a disk fills. This is the record
-## a moderation dispute is resolved from — "who banned this player, when, and why" —
-## and it needs to survive all of that.
-##
-## One JSON object per line (JSONL), so it can be tailed, grepped, and fed to
-## anything that reads a stream of events without needing a parser for a bespoke
-## format. Appended and flushed immediately: an action that happened but was not
-## recorded because the process crashed is exactly the case an audit log exists for.
+## An append-only record of every administrative action, separate from the rotating general log.
+## One JSON object per line (JSONL), appended and flushed immediately so a crash cannot lose an action:
+## that is the case an audit log exists for.
 
 const CHANNEL := "audit"
 const SERVICE := &"dot_audit_log"
@@ -28,10 +20,7 @@ signal action_recorded(entry: Dictionary)
 ## Also log every action to [DotLog] at INFO.
 @export var mirror_to_log: bool = true
 
-## Entries kept in memory for the `audit` console command.
-##
-## The file is the record; this is a convenience so an admin can see recent actions
-## without shelling into the box.
+## Entries kept in memory for the `audit` console command; the file is the record.
 @export_range(0, 10000, 10) var recent_limit: int = 200
 
 var _recent: Array[Dictionary] = []
@@ -49,20 +38,8 @@ func _ready() -> void:
 
 
 ## Resolves the path and opens the file. Safe to call again once [member config] is set.
-##
-## [b]Called twice, and the second time is the one that works.[/b] Every subsystem on
-## [DotServer] is a [DotNodeRef] defaulting to `of_created(...)`, and a created node has
-## already run [method Node._ready] by the time [DotServer] assigns its [member config] —
-## which is why `admins.load_admins()` is triggered explicitly rather than left to `_ready`
-## ordering. This was the one that was missed: `_ready` found no config, took the
-## "no audit log path" branch and returned, and nothing ever opened the file afterwards.
-##
-## So in the default configuration — every server that does not place its own audit node —
-## no administrative action was ever recorded. The warning said so on every boot and reads
-## like a setting nobody had filled in.
-##
-## Idempotent: a log already open is left alone, so calling this from both places cannot
-## reopen the file or truncate it.
+## Called twice: a created node has run [method Node._ready] before [DotServer] assigns its config, so the first call finds none.
+## Idempotent: a log already open is left alone, so it is neither reopened nor truncated.
 func open_log() -> DotResult:
 	if _file != null:
 		return DotResult.success(_path)
@@ -125,14 +102,10 @@ func _open() -> DotResult:
 	return DotResult.success(_path)
 
 
-# --- Recording -------------------------------------------------------------
 
 ## Records an action.
-##
-## [param action] is a short verb: [code]ban[/code], [code]kick[/code],
-## [code]cvar[/code], [code]changelevel[/code]. [param actor] is who did it, as a
-## label including their account id where there is one. [param target] is who or
-## what it was done to.
+## [param action] is a short verb ([code]ban[/code], [code]kick[/code]), [param actor] a label including the account id,
+## [param target] who or what it was done to.
 func record(
 	action: String,
 	actor: String,
@@ -168,10 +141,7 @@ func record(
 
 
 ## Records a command a caller ran. Wired to [signal DotConsole.command_executed].
-##
-## Not every command is interesting — `status` and `help` change nothing and would
-## bury the record. Only commands that carry a permission are recorded, which is a
-## reasonable proxy for "changes something".
+## Only commands that carry a permission are recorded, a proxy for "changes something", so `status` does not bury the record.
 func record_command(ctx: DotCmdContext, permission: String) -> void:
 	if permission == "":
 		return
@@ -210,7 +180,6 @@ func _append(entry: Dictionary) -> void:
 		)
 
 
-# --- Reading ---------------------------------------------------------------
 
 ## Recent entries, newest last.
 func recent(limit: int = 50) -> Array[Dictionary]:

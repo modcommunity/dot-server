@@ -3,11 +3,7 @@ class_name DotVoteManager
 extends Node
 
 ## Player votes: map changes, kicks, and anything a game defines.
-##
-## One vote at a time, with a deadline, a quorum and per-player cooldowns. The
-## cooldowns matter more than they look: without them, one player can call a
-## votekick against somebody every thirty seconds until it eventually passes, which
-## is harassment the vote system enables rather than prevents.
+## One vote at a time with a deadline, quorum and per-player cooldowns; without cooldowns a votekick could be repeated until it passes.
 
 const CHANNEL := "votes"
 const SERVICE := &"dot_vote_manager"
@@ -23,10 +19,7 @@ signal vote_ended(vote: Dictionary, passed: bool)
 ## Fraction of voters who must vote yes, of those who voted.
 @export_range(0.1, 1.0, 0.05) var pass_threshold: float = 0.6
 
-## Fraction of playing clients who must vote at all for the result to count.
-##
-## Without a quorum, a vote on a 30-player server passes 2–1 with 27 people
-## ignoring it.
+## Fraction of playing clients who must vote at all for the result to count, so 2-1 among 30 players cannot pass.
 @export_range(0.0, 1.0, 0.05) var quorum: float = 0.4
 
 ## Seconds before the same player may start another vote.
@@ -73,13 +66,9 @@ func _exit_tree() -> void:
 	DotRegistry.unregister_instance(SERVICE, self)
 
 
-# --- Starting --------------------------------------------------------------
 
 ## Opens a vote.
-##
-## [param kind] is a short tag the caller branches on when it passes
-## ([code]"changelevel"[/code], [code]"kick"[/code]). [param on_passed] runs only if
-## it passes, and only once.
+## [param kind] is a short tag the caller branches on when it passes; [param on_passed] runs only if it passes, once.
 func start(
 	kind: String,
 	question: String,
@@ -165,7 +154,6 @@ func start(
 	return DotResult.success(_vote)
 
 
-# --- Voting ----------------------------------------------------------------
 
 ## Records a ballot. A player may change their vote until the deadline.
 func cast_vote(session: DotClientSession, yes: bool) -> DotResult:
@@ -214,7 +202,6 @@ func _on_client_left(session: DotClientSession, _reason: String) -> void:
 		_vote["started_by"] = "%s (left)" % str(_vote.get("started_by", ""))
 
 
-# --- Finishing -------------------------------------------------------------
 
 func _finish() -> void:
 	if not is_active():
@@ -317,7 +304,6 @@ func force_finish() -> DotResult:
 	return DotResult.success(true)
 
 
-# --- Queries ---------------------------------------------------------------
 
 func is_active() -> bool:
 	return not _vote.is_empty()

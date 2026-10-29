@@ -3,25 +3,8 @@ class_name DotEventBus
 extends Node
 
 ## Named game events with pre-hooks that can veto and post-hooks that observe.
-##
-## Modelled on the game-event and forward systems server plugins have always had.
-## The point is letting
-## a module react to — and sometimes prevent — something without the code that fires
-## the event knowing the module exists.
-##
-## [b]Pre-hooks can cancel.[/b] That is the difference between an event bus and a
-## signal: a plugin that wants to stop a map change, block a chat message, or refuse
-## a kick needs a hook whose answer is honoured. Godot signals cannot do that.
-##
-## [codeblock]
-## events.hook_pre("player_chat", func(e: DotEvent) -> void:
-##     if e.get_string("text").contains("badword"):
-##         e.cancel("filtered"))
-##
-## var e := events.fire("player_chat", {"userid": 3, "text": msg})
-## if e.cancelled:
-##     return
-## [/codeblock]
+## Pre-hooks can cancel, which a Godot signal cannot: a module can block a chat message or a kick
+## without the firing code knowing it exists. Example: docs/design-notes.md.
 
 const CHANNEL := "events"
 const SERVICE := &"dot_event_bus"
@@ -32,10 +15,7 @@ signal event_fired(event: DotEvent)
 ## Log every fired event at TRACE. Very noisy; for debugging a hook order problem.
 @export var trace_events: bool = false
 
-## Events fired per frame before a warning.
-##
-## An event that fires an event that fires the first is a loop, and without a
-## ceiling it takes the server down with no clue as to which event it was.
+## Events fired per frame before a warning: an event loop would otherwise take the server down unnamed.
 @export_range(16, 100000, 16) var max_events_per_frame: int = 4096
 
 ## name -> Array[Callable]
@@ -83,10 +63,7 @@ func _declare_builtin() -> void:
 
 
 ## Records that an event exists, with a description.
-##
-## Optional — [method fire] works for undeclared names — but a declared event shows
-## up in `event_list`, which is how a module author discovers what to hook without
-## reading the source.
+## Optional ([method fire] works for undeclared names), but a declared event shows up in `event_list`.
 func declare(name: String, description: String = "") -> void:
 	_declared[name] = description
 
@@ -97,12 +74,9 @@ func declared_events() -> PackedStringArray:
 	return out
 
 
-# --- Hooking ---------------------------------------------------------------
 
 ## Adds a hook that runs before the event and may cancel it.
-##
-## Hooks run in registration order. A hook that cancels stops the remaining
-## pre-hooks, because a cancelled event should not have half its handlers run.
+## Hooks run in registration order; a cancel stops the remaining pre-hooks.
 func hook_pre(name: String, callback: Callable) -> void:
 	if not _pre_hooks.has(name):
 		_pre_hooks[name] = []
@@ -125,10 +99,7 @@ func unhook(name: String, callback: Callable) -> void:
 		(_post_hooks[name] as Array).erase(callback)
 
 
-## Removes every hook whose callable is bound to [param owner].
-##
-## What lets a module unload cleanly. Without it, an unloaded module's hooks keep
-## firing into freed objects.
+## Removes every hook whose callable is bound to [param owner], so an unloaded module's hooks cannot fire into freed objects.
 func unhook_all(owner: Object) -> int:
 	var removed := 0
 
@@ -155,7 +126,6 @@ func hook_count(name: String) -> int:
 	return pre.size() + post.size()
 
 
-# --- Firing ---------------------------------------------------------------
 
 ## Fires an event and returns it, so the caller can check [member DotEvent.cancelled].
 ##
@@ -202,10 +172,7 @@ func fire(name: String, data: Dictionary = {}) -> DotEvent:
 	return event
 
 
-## Fires an event whose result nobody checks.
-##
-## Reads better at call sites that only want to notify, and makes the intent
-## visible: a cancellable event fired with this is a bug.
+## Fires an event whose result nobody checks; a cancellable event fired with this is a bug.
 func notify(name: String, data: Dictionary = {}) -> void:
 	fire(name, data)
 

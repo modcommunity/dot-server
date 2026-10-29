@@ -3,24 +3,8 @@ class_name DotGameManager
 extends "res://addons/dot_server/game/dot_game_manager_switch.gd"
 
 ## Loads and switches the running game while clients stay connected.
-##
-## [b]This is the flow the whole family exists to support.[/b] A `changelevel` on a
-## dot-server is not a scene swap — it is: announce the new content, wait for every
-## client to download and mount it, tear down the old scene, load the new one, and
-## re-spawn everyone. Any of those can fail per-client, and a client that cannot get
-## the new content has to be dropped rather than left in a world nobody else is in.
-##
-## [codeblock]
-## announce -> clients DOWNLOADING -> all ready (or timeout) -> swap -> re-spawn
-## [/codeblock]
-##
-## Server-side content handling delegates to dot-cloud when it is installed, which is
-## discovered through [DotRegistry] rather than imported — a server whose games ship
-## inside the build needs none of it.
-##
-## [b]On unloading.[/b] Godot cannot unmount a resource pack, so "unload" means
-## freeing the scene and dropping references; dot-cloud's version-namespaced mount
-## paths are what make that sufficient. See dot-cloud's docs/mounting.md.
+## A changelevel is announce, clients download and mount, swap, re-spawn; a client that cannot get the content is dropped.
+## dot-cloud is found through [DotRegistry]. Godot cannot unmount a pack, so unload frees the scene (docs/game-switching.md).
 
 
 func setup(p_server: DotServer) -> void:
@@ -48,9 +32,7 @@ func _exit_tree() -> void:
 
 
 ## Switches to a game, syncing clients first.
-##
-## Returns when the new game is live, or with a failure that leaves the previous
-## game running — a failed change must never leave the server with no game.
+## A failed change leaves the previous game running, never no game.
 func change_game(game_id: String, by: String = "console") -> DotResult:
 	if phase != Phase.IDLE:
 		return DotResult.fail(

@@ -2,17 +2,9 @@
 class_name DotServerConfig
 extends "res://addons/dot_server/server/dot_server_config_base.gd"
 
-## Everything configurable about the server itself.
-##
-## Layered like every [DotConfig]: exported defaults, then a JSON file, then
-## [code]DOT_SERVER_*[/code] environment variables, then [code]--sv-*[/code]
-## arguments.
-##
-## Note that most of these are also exposed as [DotConVar]s by [DotServer], so an
-## operator can change at runtime whatever is safe to change at runtime. This
-## resource is the boot-time source; cvars are the live view. Anything that cannot
-## be changed on a running server carries
-## [constant DotConVar.FLAG_STARTUP_ONLY] there.
+## Everything configurable about the server itself, layered like every [DotConfig].
+## Most fields are also [DotConVar]s on [DotServer]; this is the boot-time source, cvars the live view.
+## Anything not changeable on a running server carries [constant DotConVar.FLAG_STARTUP_ONLY].
 
 
 ## Parses one of the level names this config accepts, or -1.
@@ -139,11 +131,8 @@ func _validate_transport() -> DotResult:
 			DotError.CODE_INVALID, "enet_port must be between 0 and 65535."
 		)
 
-	# Only the TCP listeners can collide with each other. The query, A2S and ENet
-	# ports are UDP, and sharing a number with a TCP listener is not a conflict.
-	# ENet on the same UDP port as A2S/DQP is legal too: DotTransportDual shares it
-	# through a demux (enet_share_udp_port). With sharing off, the clash is caught
-	# at bind time, where the transport is actually known.
+	# Only TCP listeners can collide; query, A2S and ENet ports are UDP. ENet may share the A2S/DQP port
+	# through DotTransportDual's demux (enet_share_udp_port); with sharing off the clash is caught at bind time.
 	if query_enabled and query_websocket:
 		var ws_port := effective_query_websocket_port()
 		for taken in [
@@ -169,10 +158,8 @@ func warn_about_risky_settings() -> void:
 			{"setting": "rcon_allowed_addresses"}
 		)
 
-	# An entry that can never match is worse than no entry: the operator believes
-	# they have an allow-list, and the only symptom is being refused by their own
-	# console. "192.168" is the shape that produces it — a subnet prefix written
-	# without the trailing dot that makes it one.
+	# An entry that can never match is worse than none: the operator believes they have an allow-list.
+	# "192.168" is the typical case, a subnet prefix without the trailing dot.
 	for raw in rcon_allowed_addresses:
 		var entry := DotBanManager.normalise_address(raw)
 		if entry == "":
@@ -232,10 +219,7 @@ func effective_rcon_websocket_port() -> int:
 
 
 ## UDP port A2S answers on. 0 when there is none to derive.
-##
-## Defaults to the game port, because that is the only port a tracker will try.
-## With a UDP game transport that port is already taken and an explicit one is
-## required; the bind failure says so.
+## Defaults to the game port, the only one a tracker tries; with a UDP game transport set one explicitly.
 func effective_a2s_port() -> int:
 	if a2s_port > 0:
 		return a2s_port
@@ -243,10 +227,7 @@ func effective_a2s_port() -> int:
 
 
 ## UDP port the dot query protocol answers on. 0 when there is none to derive.
-##
-## The same port as A2S by default: the two are told apart by their first four
-## bytes, so one socket serves both and a tracker that found this server over A2S
-## can be pointed at the better protocol without being given a second address.
+## The same port as A2S by default: the first four bytes tell the two apart, so one socket serves both.
 func effective_query_port() -> int:
 	if query_port > 0:
 		return query_port

@@ -1,9 +1,7 @@
 extends Node
 
-## The game half of `mixed_transports`: a world whose only rule is "what one player says,
-## every other player hears", relayed by the server the way a game relays a shot or a
-## chat line. It is a script of its own, rather than a method on the suite, because a
-## game's RPCs live on nodes inside the game scene, and that is the path that has to
+## The game half of `mixed_transports`: a world whose only rule is that what one player says, every other hears.
+## It is a script of its own because a game's RPCs live on nodes in the game scene, and that path must
 ## route the same way for a WebSocket peer and an ENet peer.
 
 ## Every instance in this process, keyed by its MultiplayerAPI's unique id (1 is the

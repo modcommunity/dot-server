@@ -17,22 +17,9 @@ func _exit_tree() -> void:
 	DotRegistry.unregister_instance(SERVICE, self)
 
 
-## Completions for what is in the input box, as whole command lines.
-##
-## [b]Whole lines, not tokens, and that is the contract the callers already have.[/b]
-## dot-console's panel replaces the input box with the candidate it picked, so a candidate
-## that was only the argument would delete the command word with it. For a one-word partial
-## a name IS the whole line, which is why this reads as a name list until an argument is
-## being completed.
-##
-## [b]Once there is a space, the command's own completer answers.[/b] It used to be that
-## nothing did: [member DotConCommand.completer] was set by seven builtins -- `kick`,
-## `ban`, `mute`, `gag`, `unban`, and both game commands -- read only by
-## [method complete_argument], and [method complete_argument] had no callers anywhere in
-## this family. Every one of those completers was correct, reachable and never once run,
-## which is why tab on `kick ` offered nothing on a server that knew exactly who was
-## connected. The name list still comes back for a bare word, so nothing that completed
-## before completes differently.
+## Completions for what is in the input box, as whole command lines, because dot-console's panel
+## replaces the input box with the candidate. Once there is a space the command's own completer
+## answers; a bare word returns the name list.
 func complete(partial: String, limit: int = 24) -> PackedStringArray:
 	# Leading whitespace is never meaningful and a trailing space always is, so only the
 	# left is stripped. `strip_edges()` here would turn "kick " -- completing the first
@@ -71,11 +58,7 @@ func complete(partial: String, limit: int = 24) -> PackedStringArray:
 
 
 ## Argument completions for a partial line, put back together as whole lines.
-##
-## The trailing space matters and is the whole of the parsing here: `kick ` is completing
-## argument 0 with an empty prefix, and `kick Bo` is completing argument 0 with the prefix
-## `Bo`. Getting that backwards offers the second player's name while the first is being
-## typed, which reads as the completer being broken rather than off by one.
+## The trailing space is the whole parsing: `kick ` completes argument 0 with an empty prefix, `kick Bo` with `Bo`.
 func _complete_arguments(partial: String, limit: int) -> PackedStringArray:
 	var tokens := tokenize(partial)
 
@@ -138,9 +121,7 @@ func _complete_arguments(partial: String, limit: int) -> PackedStringArray:
 
 
 ## Completions for one argument, as bare tokens, via the command's own completer.
-##
-## [method complete] is what a console calls; this is the piece under it, kept public
-## because a game with its own input box may want the tokens rather than the lines.
+## Public for a game with its own input box that wants tokens rather than lines.
 func complete_argument(
 	command_name: String,
 	partial: String,

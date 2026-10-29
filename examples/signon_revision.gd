@@ -1,49 +1,8 @@
 extends "res://examples/selftest/signon_revision_tests_a.gd"
 
-## The check nobody could make: whether this client and this server can finish a join.
-##
-## [b]The bug this suite exists for has been hit, diagnosed by hand, and written up in
-## a comment, and nothing could see it.[/b] Godot refuses an RPC unless both ends
-## declare the same set of [code]@rpc[/code] methods on the node. Add one to
-## [DotServer] and forget [DotClientLink] and every shipped client stops being able to
-## join, with this and nothing else:
-##
-## [codeblock]
-## ERROR: The rpc node checksum failed. Make sure to have the same methods on both
-##        nodes. Node path: /root/Server
-## [/codeblock]
-##
-## The server then reports "timed out during join". Neither end says "version".
-##
-## The four sections here are, in the order they would have caught it:
-##
-##   1. The two sides of the handshake declare the SAME rpc method names. This is the
-##      regression guard proper -- it fails on the commit that adds a method to one
-##      side, rather than on the deployment that ships it.
-##   2. [DotSignon] is derived from the same declaration the engine checksums, is
-##      stable, and is not a hash of nothing.
-##   3. A real join carries the revision, and the client keeps it.
-##   4. A client meeting a server it cannot match fails with a sentence, immediately,
-##      instead of waiting out a timeout that blames the network.
-##
-## And, since the RPCs became an envelope (see [DotEnvelope]): the surface is exactly the
-## six names in [constant DotSignon.ENVELOPE], so adding a seventh fails here; and two
-## builds that know different KINDS play together over a real socket -- an older client
-## on a newer server, a newer client on an older server, each ignoring what it has never
-## heard of -- while a kind one end REQUIRES and the other lacks refuses the join in words,
-## in seconds, rather than as a timeout. "Older" is a link or a server with fewer kinds
-## registered, which is exactly what an older build is.
-##
-## And one section for the pair that most recently changed the revision: a [DotNotice]
-## sent over the same real socket arrives whole, on the node the join used. It is here
-## rather than in `dedicated_server` because that suite has no client, and a message whose
-## only failure mode is "the two ends disagree about the RPC set" is not tested by a suite
-## that has one end.
-##
-## Run:
-## [codeblock]
-## godot --headless --path . res://examples/signon_revision.tscn
-## [/codeblock]
+## Whether this client and this server can finish a join. Godot refuses an RPC unless both ends declare the same @rpc set,
+## and the failure reads "timed out during join", never "version" (docs/design-notes.md). Covers the RPC names, [DotSignon],
+## a real join, a mismatch failing with a sentence, the six envelope names, differing kinds, and [DotNotice] over the socket.
 
 func _ready() -> void:
 	DotLog.set_level(
@@ -113,11 +72,8 @@ func _boot() -> bool:
 	config.startup_config = ""
 	config.autoexec_config = ""
 
-	# [b]Each half gets its own MultiplayerAPI, scoped to its own subtree.[/b] Godot
-	# addresses an RPC by the receiver's node path relative to its API root, so without
-	# this the client answers every call with `Node not found` -- the handshake
-	# included -- and the only symptom is a timeout, which is the failure this suite is
-	# about wearing a different hat.
+	# Each half gets its own MultiplayerAPI scoped to its own subtree: RPCs are addressed by node path
+	# relative to the API root, so without this every call, the handshake included, answers `Node not found`.
 	var server_side := Node.new()
 	server_side.name = "ServerSide"
 	add_child(server_side)
@@ -162,12 +118,8 @@ func _boot() -> bool:
 	_done()
 	return true
 
-## [b]The pair that changed the revision, driven over the socket the join used.[/b]
-##
-## What can go wrong here is exactly what section 1 exists for — `_notice` on one side and
-## not the other — plus the one thing a dictionary on the wire adds: a field that goes out
-## and does not come back, because the decoder and the encoder disagree about its name or
-## its type. So every field is sent and every field is read back on the far side.
+## The pair that changed the revision, driven over the socket the join used.
+## Checks every field is sent and read back, since an encoder and decoder can disagree about a name or type.
 func _test_a_notice_reaches_the_client() -> void:
 	_section("a notice reaches the client over the socket")
 
@@ -176,10 +128,8 @@ func _test_a_notice_reaches_the_client() -> void:
 	_link.notice_received.connect(func(n: DotNotice) -> void: received.append(n))
 	_server.notice_sent.connect(func(_n: DotNotice, count: int) -> void: sent.append(count))
 
-	# [b]The client's `spawned` is not the server's.[/b] The client announces it has
-	# loaded and considers itself in; the server moves the session to SPAWNED when that
-	# announcement arrives, a poll later. A broadcast in between reaches nobody, correctly
-	# -- a notice goes to playing sessions -- and reads as a broken RPC.
+	# The client's `spawned` is not the server's: the session reaches SPAWNED a poll later, and a
+	# broadcast in between correctly reaches nobody, which reads as a broken RPC.
 	await _until(func() -> bool: return _server.playing_sessions().size() == 1, 5.0)
 
 	var full := DotNotice.make(

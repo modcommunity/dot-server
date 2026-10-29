@@ -2,10 +2,7 @@
 extends EditorPlugin
 
 ## Editor entry point for dot-server. Registers inspector types only.
-##
-## No autoloads: a project may run a server and a client in one process — which is
-## exactly what testing a listen server means — and a singleton would make that
-## impossible.
+## No autoloads: a project may run a server and a client in one process, which a singleton would forbid.
 
 const _ICON := "res://addons/dot_server/icon_placeholder.svg"
 

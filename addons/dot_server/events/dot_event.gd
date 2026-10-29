@@ -2,11 +2,7 @@ class_name DotEvent
 extends RefCounted
 
 ## One fired event, carrying its data and whether a hook cancelled it.
-##
-## Passed by reference to every hook, so a pre-hook can both inspect and modify it:
-## a chat filter rewrites [code]text[/code], a rate limiter cancels outright. That
-## mutability is the point — a hook that could only observe would need a separate
-## mechanism to act.
+## Passed by reference to every hook, so a pre-hook can inspect and modify it (a chat filter rewrites text).
 
 var name: String
 
@@ -38,11 +34,8 @@ func cancel(reason: String = "", by: String = "") -> void:
 	cancelled_by = by
 
 
-# --- Typed accessors -------------------------------------------------------
-#
-# Event data arrives from RPCs and config files, so a field's type is not
-# guaranteed. These coerce rather than crash, because a hook that fails on an
-# unexpected type takes the event — and often the frame — with it.
+# Event data arrives from RPCs and config files, so a field's type is not guaranteed.
+# These accessors coerce rather than crash: a failing hook takes the event, and often the frame, with it.
 
 func get_string(key: String, default: String = "") -> String:
 	var v: Variant = data.get(key)

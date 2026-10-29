@@ -1,23 +1,9 @@
 class_name DotGuestIdentity
 extends RefCounted
 
-## A minimal identity for servers running without dot-auth.
-##
-## dot-server must work with dot-auth absent, and the rest of the server reads an
-## identity through a small duck-typed surface — [code]uid[/code],
-## [code]display_name[/code], [code]is_guest[/code], [method is_valid],
-## [method label]. This provides exactly that surface so no other code has to branch
-## on whether dot-auth is installed.
-##
-## [b]Why this is a real class and not a script generated at runtime.[/b] The first
-## version built one with [code]GDScript.new()[/code] and
-## [method GDScript.reload] on a source string. That is fragile in exported builds,
-## impossible to type-check, and — because a server with dot-auth installed never
-## reaches it — would only have failed in the one configuration nobody tests.
-##
-## Guests get a stable-per-device id so they can be muted or kicked for the session,
-## and nothing that survives a reinstall. A ban on a guest means very little, which is
-## why [member DotAuthConfig.allow_guests] warns when it is on.
+## A minimal identity for servers without dot-auth, with the duck-typed surface the server reads
+## ([code]uid[/code], [code]display_name[/code], [code]is_guest[/code], [method is_valid], [method label]).
+## A real class, not a runtime-built script (fragile in exports). Guest ids are per device, so a guest ban means little.
 
 var uid: String = ""
 var provider: String = "guest"
@@ -35,10 +21,7 @@ var is_guest: bool = true
 
 
 ## Builds a guest identity from a client-supplied device id.
-##
-## The device id is hashed rather than stored: it is client-supplied and arbitrary,
-## and a raw value would end up in ban lists and audit logs where a 200-character
-## string is a nuisance and a fingerprint is not wanted.
+## The id is hashed, not stored: it is arbitrary client input that should not reach ban lists and audit logs raw.
 static func from_device(device_id: String, name: String = "") -> DotGuestIdentity:
 	var seed_value := device_id
 	if seed_value.strip_edges() == "":
