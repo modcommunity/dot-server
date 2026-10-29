@@ -53,6 +53,9 @@ const CVAR := "cvar"
 ## distinct from [constant CVAR]: "may adjust the round timer" is not "may turn on noclip".
 const CHEATS := "cheats"
 
+## May toggle noclip on themselves, and nothing else of [constant CHEATS]. A game that offers a free-fly key checks this (or CHEATS, which implies it).
+const NOCLIP := "noclip"
+
 ## Act on a player's body without changing the rules: slay, slap, freeze, respawn, rename,
 ## burn. The moderator's live toolkit, and not [constant CHEATS] on purpose — freezing a
 ## griefer is handling a person, giving somebody a rocket launcher is changing the game,
@@ -96,7 +99,7 @@ const ADMIN := "admin"
 ## Every flag this addon defines. A game's own flags are simply not in this list.
 const ALL: Array[String] = [
 	ROOT, RESERVATION, GENERIC, KICK, BAN, UNBAN, MUTE, CHANGEMAP,
-	CVAR, CHEATS, SLAY, TELEPORT, CONFIG, RCON, CHAT, VOTE, PASSWORD, MODULES, LOGS, ADMIN,
+	CVAR, CHEATS, NOCLIP, SLAY, TELEPORT, CONFIG, RCON, CHAT, VOTE, PASSWORD, MODULES, LOGS, ADMIN,
 ]
 
 ## Human-readable descriptions, for `admin_flags` output.
@@ -110,6 +113,7 @@ const DESCRIPTIONS := {
 	MUTE: "mute and gag players",
 	CHANGEMAP: "change the game or map",
 	CVAR: "change console variables",
+	NOCLIP: "toggle noclip on yourself",
 	CHEATS: "change cheat-flagged variables; noclip, god, health, speed, give",
 	SLAY: "slay, slap, freeze, respawn and rename players",
 	TELEPORT: "bring, goto, send and return players",
