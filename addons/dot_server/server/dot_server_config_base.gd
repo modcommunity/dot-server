@@ -272,6 +272,12 @@ var query_player_detail: String = "full"
 
 @export var bans_path: String = "user://cfg/bans.json"
 
+## Banning an account also refuses guests from its address, so it cannot return as a guest. Guests only: signed-in players behind the same address are untouched.
+@export var ban_guests_with_account: bool = true
+
+## Longest a guests-only address ban lasts, in seconds, whatever the account ban's length (a shared address punishes bystanders). 0 follows the account ban.
+@export var guest_ban_max_sec: int = 604800
+
 ## Audit log of every administrative action. Separate from the general log because moderation disputes are resolved from it.
 @export var audit_log_path: String = "user://logs/audit.jsonl"
 

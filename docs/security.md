@@ -56,3 +56,7 @@ Whatever registers under `dot_ban_source` (dot-moderation, in this family) answe
 - **Loopback is never limited**, or it locks the operator and every headless test out.
 - **An address the transport could not report (`"unknown"`) is never limited**, or every such client shares one bucket.
 - **Live, not startup-only**: an operator turns it on while the problem is happening.
+
+## Banning an account also bars guests from its address
+
+`DotBanManager.ban_session` on a signed-in account also records a guests-only address ban (`gip:<address>`, `ban_guests_with_account`, default on; length capped by `guest_ban_max_sec`, default 7 days). Signed-in players behind the same address are not affected, and `unban` of the account lifts it. A ban placed through a `dot_ban_source` (dot-moderation) is not covered yet.

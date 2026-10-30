@@ -70,6 +70,11 @@ static func ip_key(address: String) -> String:
 	return "ip:%s" % normalise_address(address)
 
 
+## Key of the guests-only address ban a banned account leaves behind.
+static func guest_ip_key(address: String) -> String:
+	return "gip:%s" % normalise_address(address)
+
+
 ## Strips a port and normalises an address, so a ban on [code]1.2.3.4[/code] matches
 ## [code]1.2.3.4:51234[/code] in any IPv6 form.
 static func normalise_address(address: String) -> String:
@@ -103,6 +108,10 @@ func check_session(session: DotClientSession) -> DotResult:
 	var by_uid := check_uid(session.uid())
 	if not by_uid.ok:
 		return by_uid
+
+	# A guest is a new identity every device id, so a banned account would walk back in as one.
+	if not session.is_account() and session.address != "":
+		return _check(guest_ip_key(session.address))
 
 	return DotResult.success(null)
 
@@ -224,7 +233,10 @@ func ban_session(
 	var uid := session.uid()
 
 	if session.is_account() and uid != "":
-		return await ban_uid(uid, reason, duration_sec, by, session.display_name)
+		var res := await ban_uid(uid, reason, duration_sec, by, session.display_name)
+		if res.ok:
+			await _ban_guests_at(session.address, uid, reason, duration_sec, by, session.display_name)
+		return res
 
 	DotLog.info(
 		CHANNEL,
@@ -235,6 +247,35 @@ func ban_session(
 	return await ban_address(
 		session.address, reason, duration_sec, by, session.display_name
 	)
+
+
+## Refuses guests (not accounts) from the banned account's address, capped by
+## [member DotServerConfig.guest_ban_max_sec] since a NAT shares the address with innocents.
+func _ban_guests_at(
+	address: String, uid: String, reason: String, duration_sec: int, by: String, name: String
+) -> void:
+	if config != null and not config.ban_guests_with_account:
+		return
+
+	var host := normalise_address(address)
+	if host == "" or host == "127.0.0.1" or host == "::1" or host == "localhost":
+		return
+
+	var cap := config.guest_ban_max_sec if config != null else 604800
+	if cap > 0 and (duration_sec <= 0 or duration_sec > cap):
+		duration_sec = cap
+
+	await _add(guest_ip_key(host), {
+		"kind": "guest_ip",
+		"target": host,
+		"linked_uid": uid,
+		"name": name,
+		"reason": reason,
+		"by": by,
+		"created_at": int(Time.get_unix_time_from_system()),
+		"expires_at": _expiry(duration_sec),
+		"duration_sec": duration_sec,
+	})
 
 
 func _add(key: String, ban: Dictionary) -> DotResult:
@@ -297,6 +338,8 @@ func unban(key_or_target: String, by: String = "console") -> DotResult:
 			_bans.erase(key)
 			_dirty = true
 
+			await _lift_linked_guest_bans(key)
+
 			DotLog.info(CHANNEL, "ban lifted", {"key": key, "by": by})
 
 			if audit != null:
@@ -310,6 +353,18 @@ func unban(key_or_target: String, by: String = "console") -> DotResult:
 	return DotResult.fail(
 		DotError.CODE_INVALID, "No ban found for '%s'." % key_or_target
 	)
+
+
+func _lift_linked_guest_bans(key: String) -> void:
+	if not key.begins_with("uid:"):
+		return
+
+	var uid := key.substr(4)
+	for k in _bans.keys():
+		var ban: Dictionary = _bans[k]
+		if str(ban.get("kind", "")) == "guest_ip" and str(ban.get("linked_uid", "")) == uid:
+			if (await _store().remove(k)).ok:
+				_bans.erase(k)
 
 
 ## Removes expired bans from the in-memory set. Local only: a shared [DotBanStore] owns its

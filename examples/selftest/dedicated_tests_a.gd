@@ -319,6 +319,25 @@ func _test_bans() -> void:
 	_check("address ban works", by_address.ok)
 	_check("banned address refused", not bans.check_address("203.0.113.5:51234").ok)
 
+	var acct := DotClientSession.new(71, 71)
+	acct.address = "198.51.100.7:4000"
+	acct.identity = DotAuthIdentityStub.make("backbone:badguy", false)
+	var gst := DotClientSession.new(72, 72)
+	gst.address = "198.51.100.7:4001"
+	gst.identity = DotAuthIdentityStub.make("guest:abc", true)
+	var other := DotClientSession.new(73, 73)
+	other.address = "198.51.100.7:4002"
+	other.identity = DotAuthIdentityStub.make("backbone:neighbour", false)
+	_check("guest admitted before the ban", bans.check_session(gst).ok)
+	var sb := await bans.ban_session(acct, "cheating", 0, "test")
+	_check("session ban ok", sb.ok)
+	_check("the banned account's address refuses a guest", not bans.check_session(gst).ok)
+	_check("but not another signed-in account behind it", bans.check_session(other).ok)
+	var gb: Dictionary = bans._bans[DotBanManager.guest_ip_key("198.51.100.7")]
+	_check("guest ban is capped at the config default", int(gb["duration_sec"]) == 604800)
+	await bans.unban("backbone:badguy")
+	_check("unbanning the account lifts the guest ban", bans.check_session(gst).ok)
+
 	var lifted := await bans.unban("backbone:evil")
 	_check("unban by uid", lifted.ok)
 	_check("unbanned account allowed", bans.check_uid("backbone:evil").ok)
@@ -632,3 +651,11 @@ func _named(session: DotClientSession, uid: String, username: String) -> void:
 	identity.username = username
 	identity.display_name = session.display_name
 	session.identity = identity
+
+
+class DotAuthIdentityStub:
+	static func make(uid: String, guest: bool) -> DotGuestIdentity:
+		var id := DotGuestIdentity.new()
+		id.uid = uid
+		id.is_guest = guest
+		return id

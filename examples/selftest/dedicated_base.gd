@@ -30,7 +30,7 @@ const SECTIONS := 29
 ## Every check this suite runs, including the two at the end that compare the counts. The
 ## section counter cannot see a section that aborted after announcing itself — its remaining
 ## checks simply never run — and a total can. See docs/testing.md.
-const CHECKS := 363
+const CHECKS := 369
 
 var _entered := 0
 var _completed := 0
