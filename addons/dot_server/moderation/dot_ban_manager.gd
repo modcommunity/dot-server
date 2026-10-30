@@ -235,7 +235,7 @@ func ban_session(
 	if session.is_account() and uid != "":
 		var res := await ban_uid(uid, reason, duration_sec, by, session.display_name)
 		if res.ok:
-			await _ban_guests_at(session.address, uid, reason, duration_sec, by, session.display_name)
+			await ban_guests_at(session.address, uid, reason, duration_sec, by, session.display_name)
 		return res
 
 	DotLog.info(
@@ -251,7 +251,7 @@ func ban_session(
 
 ## Refuses guests (not accounts) from the banned account's address, capped by
 ## [member DotServerConfig.guest_ban_max_sec] since a NAT shares the address with innocents.
-func _ban_guests_at(
+func ban_guests_at(
 	address: String, uid: String, reason: String, duration_sec: int, by: String, name: String
 ) -> void:
 	if config != null and not config.ban_guests_with_account:
@@ -338,7 +338,8 @@ func unban(key_or_target: String, by: String = "console") -> DotResult:
 			_bans.erase(key)
 			_dirty = true
 
-			await _lift_linked_guest_bans(key)
+			if key.begins_with("uid:"):
+				await lift_guest_bans(key.substr(4))
 
 			DotLog.info(CHANNEL, "ban lifted", {"key": key, "by": by})
 
@@ -355,11 +356,8 @@ func unban(key_or_target: String, by: String = "console") -> DotResult:
 	)
 
 
-func _lift_linked_guest_bans(key: String) -> void:
-	if not key.begins_with("uid:"):
-		return
-
-	var uid := key.substr(4)
+## Lifts the guests-only address bans left behind by banning [param uid].
+func lift_guest_bans(uid: String) -> void:
 	for k in _bans.keys():
 		var ban: Dictionary = _bans[k]
 		if str(ban.get("kind", "")) == "guest_ip" and str(ban.get("linked_uid", "")) == uid:

@@ -367,6 +367,21 @@ func _test_ban_source_admission(manager: Object, banned: Variant) -> void:
 	_named(good, "backbone:good", "good")
 	_check("an unpunished account is admitted", server.check_identity_admission(good).ok)
 
+	var xa := _adopt(931, "198.51.100.93:1", "Banned account")
+	_named(xa, "backbone:viasource", "viasource")
+	xa.identity.is_guest = false
+	var xg := _adopt(932, "198.51.100.93:2", "Guest")
+	xg.identity = DotGuestIdentity.new()
+	xg.identity.uid = "guest:zz"
+	xg.identity.is_guest = true
+	_check("guest admitted before a source ban", server.check_identity_admission(xg).ok)
+	var xb: Variant = await manager.call("ban_uid", "backbone:viasource", "cheating", "admin:sarah", 0, 0)
+	_check("a dot_ban_source account ban refuses a guest at its address", not server.bans.check_session(xg).ok)
+	await manager.call("revoke", str((xb as DotResult).value.get("id")), "admin:sarah", "appealed", 0)
+	_check("revoking it lifts the guest address ban", server.bans.check_session(xg).ok)
+	server.release_session(931)
+	server.release_session(932)
+
 	# The whole point of enforce_bans: a ban issued against somebody already connected
 	# has to remove them, or it takes effect only when they choose to leave.
 	var removed := server.enforce_bans()

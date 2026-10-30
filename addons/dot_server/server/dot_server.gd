@@ -317,6 +317,7 @@ func _resolve_moderation() -> void:
 		bans.config = config
 		bans.audit = audit
 		await bans.load_bans()
+	watch_ban_source()
 
 
 func _resolve_game_subsystems() -> void:

@@ -97,6 +97,59 @@ func check_identity_admission(session: DotClientSession) -> DotResult:
 	return DotResult.success(null)
 
 
+## Follows the external ban source's [code]punished[/code] and [code]revoked[/code] signals so its
+## account bans get the same guests-only address ban as [method DotBanManager.ban_session].
+func watch_ban_source() -> void:
+	var bus := DotRegistry.signals()
+	if not bus.service_registered.is_connected(_on_service_registered):
+		bus.service_registered.connect(_on_service_registered)
+	_hook_ban_source(DotRegistry.get_service(BAN_SOURCE))
+
+
+func _on_service_registered(service_name: StringName, instance: Object) -> void:
+	if service_name == BAN_SOURCE:
+		_hook_ban_source(instance)
+
+
+func _hook_ban_source(source: Object) -> void:
+	if source == null or not source.has_signal("punished") or not source.has_signal("revoked"):
+		return
+	if not source.is_connected("punished", _on_source_punished):
+		source.connect("punished", _on_source_punished)
+		source.connect("revoked", _on_source_revoked)
+
+
+func _source_uid(punishment: Object) -> String:
+	if punishment == null or int(punishment.get("kind")) != 0:
+		return ""
+	var subject := str(punishment.get("subject"))
+	if subject.begins_with("ip:"):
+		return ""
+	return subject.trim_prefix("uid:")
+
+
+func _on_source_punished(punishment: Object) -> void:
+	var uid := _source_uid(punishment)
+	if uid == "" or bans == null:
+		return
+	var expires := int(punishment.get("expires_at"))
+	var duration := 0
+	if expires > 0:
+		duration = maxi(1, expires - int(Time.get_unix_time_from_system()))
+	for session in sessions():
+		if session.is_account() and session.uid().trim_prefix("uid:") == uid:
+			await bans.ban_guests_at(
+				session.address, uid, str(punishment.get("reason")), duration,
+				str(punishment.get("issuer")), session.display_name
+			)
+
+
+func _on_source_revoked(punishment: Object, _by: String) -> void:
+	var uid := _source_uid(punishment)
+	if uid != "" and bans != null:
+		await bans.lift_guest_bans(uid)
+
+
 ## An externally registered ban list ([code]dot_ban_source[/code], from dot-moderation), or null.
 ## Checked, not assumed: a registration that cannot answer the method is reported once, loudly,
 ## instead of silently skipped.
