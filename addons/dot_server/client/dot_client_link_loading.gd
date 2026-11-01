@@ -296,6 +296,10 @@ func _send_heartbeat() -> void:
 	if not _connected:
 		return
 	_ping_sent_ms = Time.get_ticks_msec()
+	_ping_sent_usec = Time.get_ticks_usec()
+	var meter := net_meter()
+	if meter != null:
+		meter.request_flush_stamp()
 	send_kind(DotEnvelope.HEARTBEAT, {"t": _ping_sent_ms}, DotEnvelope.Lane.UNRELIABLE)
 
 	if _early_heartbeats > 0:
@@ -311,12 +315,20 @@ func _on_heartbeat_ack(_peer_id: int, payload: Dictionary) -> void:
 	var sent_ms := int(DotEnvelope.number(payload, "t", -1))
 	if sent_ms < 0:
 		return
-	_ping_ms = Time.get_ticks_msec() - sent_ms
+	# Wall clock in microseconds from where the packet left (the transport flush), not the frame that queued it.
+	var meter := net_meter()
+	var now_usec := Time.get_ticks_usec()
+	var rtt := float(Time.get_ticks_msec() - sent_ms)
+	if sent_ms == _ping_sent_ms:
+		var from_usec := _ping_sent_usec
+		if meter != null and meter.flush_usec >= from_usec:
+			from_usec = meter.flush_usec
+		rtt = float(now_usec - from_usec) / 1000.0
+	_ping_ms = roundi(rtt)
 	send_kind(DotEnvelope.PING, {"ms": _ping_ms}, DotEnvelope.Lane.UNRELIABLE)
 
-	var meter := net_meter()
 	if meter != null:
-		meter.note_rtt(float(_ping_ms))
+		meter.note_rtt(rtt)
 		var sv: Variant = payload.get("sv")
 		if sv is Dictionary:
 			meter.note_remote(sv)

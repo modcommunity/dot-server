@@ -194,6 +194,7 @@ var _heartbeat: Timer = null
 ## [member signon_timeout_sec].
 var _signon_watchdog: Timer = null
 var _ping_sent_ms: int = 0
+var _ping_sent_usec: int = 0
 var _ping_ms: int = -1
 var _password: String = ""
 var _connected: bool = false
