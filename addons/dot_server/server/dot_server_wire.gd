@@ -173,6 +173,7 @@ func scoreboard_snapshot(for_session: DotClientSession = null) -> Dictionary:
 			if more is Dictionary:
 				row.merge(more as Dictionary, true)
 		players.append(row)
+	players = _fit_scoreboard(players, for_session)
 
 	var current := games.current() if games != null else null
 	var out := {
@@ -193,6 +194,47 @@ func scoreboard_snapshot(for_session: DotClientSession = null) -> Dictionary:
 			for key in (extra as Dictionary):
 				if not out.has(key):
 					out[key] = (extra as Dictionary)[key]
+	return out
+
+
+## Unreliable ENet fragments anything over the MTU and one lost fragment drops the whole board, so
+## a send stays near 16 KB (about 14 fragments); a bigger board loses its lowest-scored rows.
+const SCOREBOARD_MAX_BYTES := 16384
+
+
+## Trims [param rows] to [constant SCOREBOARD_MAX_BYTES], lowest score first, keeping the
+## recipient's own row.
+func _fit_scoreboard(rows: Array, for_session: DotClientSession) -> Array:
+	var sizes: Array[int] = []
+	var total := 0
+	for row in rows:
+		var n := var_to_bytes(row).size()
+		sizes.append(n)
+		total += n
+	if total <= SCOREBOARD_MAX_BYTES:
+		return rows
+	var own: int = for_session.userid if for_session != null else -1
+	var order: Array = range(rows.size())
+	order.sort_custom(func(a: int, b: int) -> bool:
+		var ao: bool = int(rows[a].get("id", 0)) == own
+		var bo: bool = int(rows[b].get("id", 0)) == own
+		if ao != bo:
+			return ao
+		return int(rows[a].get("score", 0)) > int(rows[b].get("score", 0)))
+	var keep := {}
+	var used := 0
+	for i in order:
+		if used + sizes[i] > SCOREBOARD_MAX_BYTES:
+			continue
+		keep[i] = true
+		used += sizes[i]
+	var out: Array = []
+	for i in rows.size():
+		if keep.has(i):
+			out.append(rows[i])
+	DotLog.debug(CHANNEL, "scoreboard trimmed to its byte budget", {
+		"rows": rows.size(), "sent": out.size(), "bytes": total,
+	})
 	return out
 
 
