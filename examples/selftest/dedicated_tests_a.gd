@@ -478,7 +478,34 @@ func _test_boot_hibernation() -> void:
 	remove_child(second)
 	second.free()
 
-	# Engine.physics_ticks_per_second is process-wide, and the second server set it.
+	# The shipped server.cfg is found (no game cfg/ here) and must not override the game's rate.
+	var third_cfg := DotServerConfig.new()
+	third_cfg.port = 0
+	third_cfg.tickrate = 66
+	third_cfg.query_enabled = false
+	third_cfg.a2s_enabled = false
+	third_cfg.log_file_enabled = false
+	third_cfg.hibernate_when_empty = false
+	third_cfg.startup_config = "server.cfg"
+	third_cfg.autoexec_config = ""
+	third_cfg.admins_path = "user://example/tr_admins.json"
+	third_cfg.bans_path = "user://example/tr_bans.json"
+	third_cfg.audit_log_path = "user://example/tr_audit.jsonl"
+	var third := DotServer.new()
+	third.name = "ShippedCfg"
+	third.config = third_cfg
+	third.config_file = ""
+	third.auto_boot = false
+	add_child(third)
+	var third_boot: DotResult = await third.boot()
+	_check("a server booting with the shipped server.cfg present boots", third_boot.ok)
+	_check("and keeps the game's tickrate of 66 (%d)" % third.config.tickrate,
+		third.config.tickrate == 66 and third.console.get_int("sv_tickrate", 0) == 66)
+	third.shutdown("test over")
+	remove_child(third)
+	third.free()
+
+	# Engine.physics_ticks_per_second is process-wide, and the later servers set it.
 	server._apply_tickrate()
 	_done()
 
