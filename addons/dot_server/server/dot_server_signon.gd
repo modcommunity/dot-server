@@ -372,7 +372,7 @@ func _claim_slot(session: DotClientSession) -> bool:
 	if occupied < config.public_slots():
 		return true
 
-	if occupied < max_players and session.has_permission(DotAdminFlags.RESERVATION):
+	if (max_players <= 0 or occupied < max_players) and session.has_permission(DotAdminFlags.RESERVATION):
 		session.used_reserved_slot = true
 		DotLog.info(
 			CHANNEL, "reserved slot used", {"user": session.label()}

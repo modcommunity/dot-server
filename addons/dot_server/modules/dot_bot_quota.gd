@@ -26,7 +26,7 @@ static func install(module: DotModule, default_quota: int, default_mode: String 
 		DotConVar.FLAG_NOTIFY
 	)
 	if q.quota_cvar != null:
-		q.quota_cvar.with_range(0, 64)
+		q.quota_cvar.with_min(0)
 
 	q.mode_cvar = module.add_cvar(
 		"bot_quota_mode", default_mode if MODE_NAMES.has(default_mode) else "fill",
@@ -63,7 +63,7 @@ func quota() -> int:
 
 
 ## How many bots there should be with [param humans] people playing. [param slots] caps the
-## total; negative means no cap.
+## total; zero or negative means no cap (sv_maxplayers 0 is unlimited).
 func wanted(humans: int, slots: int = -1) -> int:
 	return compute(mode(), quota(), humans, slots, empty_cvar == null or empty_cvar.get_bool())
 
@@ -87,7 +87,7 @@ static func compute(m: Mode, n: int, humans: int, slots: int = -1, keep_when_emp
 		Mode.PER_PLAYER:
 			want = n * humans
 
-	if slots >= 0:
+	if slots > 0:
 		want = mini(want, slots - humans)
 
 	return maxi(want, 0)

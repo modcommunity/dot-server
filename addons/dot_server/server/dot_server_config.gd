@@ -83,7 +83,7 @@ func _validate_ports() -> DotResult:
 			"there is no fixed game port to derive one from"
 		)
 
-	if reserved_slots >= max_players:
+	if max_players > 0 and reserved_slots >= max_players:
 		return DotResult.fail(
 			DotError.CODE_INVALID,
 			"reserved_slots must be fewer than max_players.",
@@ -255,6 +255,8 @@ func effective_query_websocket_port() -> int:
 
 ## Slots available to players without a reservation.
 func public_slots() -> int:
+	if max_players <= 0:
+		return 1 << 30
 	return maxi(0, max_players - reserved_slots)
 
 
@@ -295,7 +297,8 @@ func resolve_transport() -> DotTransport:
 	if transport == null:
 		transport = _build_transport()
 
-	transport.max_clients = max_players
+	# 0 is unlimited, which ENet can only express as its own ceiling.
+	transport.max_clients = max_players if max_players > 0 else DotTransportENet.ENET_MAX_PEERS
 	return transport
 
 

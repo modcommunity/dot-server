@@ -193,9 +193,9 @@ func _register_limit_cvars() -> void:
 	_cv_maxplayers = console.cvar(
 		"sv_maxplayers",
 		str(config.max_players),
-		"Player slots.",
+		"Player slots; 0 is unlimited. Above 4095 is clamped: ENet's peer ids are 12 bits.",
 		DotConVar.FLAG_ARCHIVE
-	).with_range(1, 4096)
+	).with_range(0, 4095)
 
 	# Live, applied at a boundary. Before the listener it applies at once (server.cfg and
 	# `+sv_tickrate` are unchanged); after it the value waits for the game's next boundary,

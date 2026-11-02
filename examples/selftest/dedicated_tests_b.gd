@@ -208,6 +208,12 @@ func _module_load() -> DotResult:
 	_run("bot_quota_mode nonsense")
 	_check("a mode that is not one is refused", q.mode() == DotBotQuota.Mode.FIXED)
 	_run("bot_quota_mode fill")
+	for n in [32, 64, 128, 1000]:
+		_run("bot_quota %d" % n)
+		_check("bot_quota %d is not clamped" % n, q.quota() == n and q.wanted(0) == n)
+		_check("bot_quota %d with 0 slots (unlimited) wants %d" % [n, n - 1], q.wanted(1, 0) == n - 1)
+	_check("a real slot count still caps", DotBotQuota.compute(DotBotQuota.Mode.FILL, 128, 1, 32) == 31)
+	_run("bot_quota 5")
 	_run("bot_quota_empty 0")
 	_check("bot_quota_empty 0 empties an empty server", q.wanted(0) == 0 and q.wanted(1) == 4)
 

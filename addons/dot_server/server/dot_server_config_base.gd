@@ -44,7 +44,8 @@ extends DotConfig
 ## A2S/DQP must be moved ([member a2s_port], [member query_port]) or fail to bind.
 @export var enet_share_udp_port: bool = true
 
-@export_range(1, 4096, 1) var max_players: int = 32
+## 0 is unlimited; ENet caps the real count at 4095 (12-bit peer ids).
+@export_range(0, 4095, 1) var max_players: int = 32
 
 ## Slots kept for players with the [constant DotAdminFlags.RESERVATION] flag.
 ## Counted inside [member max_players]: 32 slots with 2 reserved fill up for the public at 30.

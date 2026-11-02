@@ -15,7 +15,10 @@ func _test_cvar_flags() -> void:
 	# Clamping rather than refusing: an operator typing a huge number should get the
 	# maximum with a note, not an error.
 	_run("sv_maxplayers 99999")
-	_check("out-of-range clamped", console.get_int("sv_maxplayers") == 4096)
+	_check("out-of-range clamped to ENet's 4095 peers", console.get_int("sv_maxplayers") == 4095)
+	_run("sv_maxplayers 0")
+	_check("sv_maxplayers 0 is accepted (unlimited)", console.get_int("sv_maxplayers") == 0)
+	_check("and leaves every slot public", server.config.public_slots() > 100000)
 	_run("sv_maxplayers 16")
 
 	# A protected cvar must never print its value.
