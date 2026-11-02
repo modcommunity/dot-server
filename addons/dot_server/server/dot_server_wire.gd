@@ -76,6 +76,9 @@ func _on_scoreboard_want(peer_id: int, payload: Dictionary) -> void:
 	var session: DotClientSession = _sessions.get(peer_id)
 	if session == null:
 		return
+	# A client that reassembles pages says so; one that does not gets the single trimmed board.
+	if payload.has("paged"):
+		session.scoreboard_paged = DotEnvelope.flag(payload, "paged", false)
 	# `once`: one board now, held state untouched, so a client's periodic block-list roster
 	# request does not close a board the player holds open.
 	if DotEnvelope.flag(payload, "once", false):
@@ -100,9 +103,52 @@ func _send_scoreboard(session: DotClientSession) -> void:
 	# `seq`: unreliable over ENet is unordered, so the client drops a board older than the one it
 	# holds.
 	_scoreboard_seq += 1
+	if session.scoreboard_paged:
+		_send_scoreboard_pages(session)
+		return
 	var snap := scoreboard_snapshot(session)
 	snap["seq"] = _scoreboard_seq
 	var _sent := send_kind(session.peer_id, DotEnvelope.SCOREBOARD, snap, DotEnvelope.Lane.UNRELIABLE)
+
+
+## Wire version of a paged board: `v`, `seq`, `page`, `pages`; page 0 also carries the header keys.
+const SCOREBOARD_WIRE_VERSION := 2
+
+
+## The board as pages that each fit one datagram, so no lost fragment can drop the whole board.
+## Pages are unreliable: the client keeps the last copy of a page that did not arrive.
+func _send_scoreboard_pages(session: DotClientSession) -> void:
+	var pages := scoreboard_pages(session, _scoreboard_seq)
+	for page in pages:
+		var _sent := send_kind(session.peer_id, DotEnvelope.SCOREBOARD, page, DotEnvelope.Lane.UNRELIABLE)
+
+
+## [method scoreboard_snapshot] split into payloads of at most [code]sv_scoreboard_page_bytes[/code]
+## (a single row bigger than that still gets a page of its own).
+func scoreboard_pages(for_session: DotClientSession, seq: int) -> Array[Dictionary]:
+	var budget := maxi(256, console.get_int("sv_scoreboard_page_bytes", SCOREBOARD_PAGE_BYTES))
+	var snap := scoreboard_snapshot(for_session, false)
+	var rows: Array = snap["players"]
+	var head := snap.duplicate()
+	head.erase("players")
+	var room := budget - var_to_bytes(head).size() - 96
+	var chunks: Array = [[]]
+	for row in rows:
+		var n := var_to_bytes(row).size()
+		var cur: Array = chunks[-1]
+		if not cur.is_empty() and room - n < 0:
+			chunks.append([])
+			room = budget - 96
+			cur = chunks[-1]
+		cur.append(row)
+		room -= n
+	var out: Array[Dictionary] = []
+	for i in chunks.size():
+		var page := {"v": SCOREBOARD_WIRE_VERSION, "seq": seq, "page": i, "pages": chunks.size(), "players": chunks[i]}
+		if i == 0:
+			page.merge(head)
+		out.append(page)
+	return out
 
 
 ## Where [method player_key]'s salt is kept. A server's own file: the salt is what stops a
@@ -150,7 +196,7 @@ func _key_salt() -> String:
 ## What a held scoreboard shows: `server`, `you`, `players` (plus [member scoreboard_fields]
 ## columns) and whatever [member scoreboard_extra] returns. Sent unreliable, only to a client
 ## holding its board open; the server has numbers (everyone's ping, join time) a client does not.
-func scoreboard_snapshot(for_session: DotClientSession = null) -> Dictionary:
+func scoreboard_snapshot(for_session: DotClientSession = null, trim: bool = true) -> Dictionary:
 	var players: Array = []
 	var own_index := -1
 	var own_min := {}
@@ -185,7 +231,8 @@ func scoreboard_snapshot(for_session: DotClientSession = null) -> Dictionary:
 			own_index = players.size()
 			own_min = {"id": session.userid, "name": session.display_name, "score": session.score}
 		players.append(row)
-	players = _fit_scoreboard(players, own_index, own_min)
+	if trim:
+		players = _fit_scoreboard(players, own_index, own_min)
 
 	var current := games.current() if games != null else null
 	var out := {
@@ -210,8 +257,11 @@ func scoreboard_snapshot(for_session: DotClientSession = null) -> Dictionary:
 
 
 ## Unreliable ENet fragments anything over the MTU and one lost fragment drops the whole board, so
-## a send stays near 16 KB (about 14 fragments); a bigger board loses its lowest-scored rows.
+## a single-message send stays near [code]sv_scoreboard_max_bytes[/code]; paged clients never hit it.
 const SCOREBOARD_MAX_BYTES := 16384
+
+## Default bytes of one scoreboard page: under the 1392 B datagram, leaving room for the envelope.
+const SCOREBOARD_PAGE_BYTES := 1100
 
 
 ## Trims [param rows] to [constant SCOREBOARD_MAX_BYTES], lowest score first, keeping the
@@ -223,9 +273,10 @@ func _fit_scoreboard(rows: Array, own_index: int, own_min: Dictionary) -> Array:
 		var n := var_to_bytes(row).size()
 		sizes.append(n)
 		total += n
-	if total <= SCOREBOARD_MAX_BYTES:
+	var max_bytes := maxi(1024, console.get_int("sv_scoreboard_max_bytes", SCOREBOARD_MAX_BYTES))
+	if total <= max_bytes:
 		return rows
-	if own_index >= 0 and sizes[own_index] > SCOREBOARD_MAX_BYTES and not own_min.is_empty():
+	if own_index >= 0 and sizes[own_index] > max_bytes and not own_min.is_empty():
 		rows = rows.duplicate()
 		rows[own_index] = own_min
 		sizes[own_index] = var_to_bytes(own_min).size()
@@ -237,7 +288,7 @@ func _fit_scoreboard(rows: Array, own_index: int, own_min: Dictionary) -> Array:
 	var keep := {}
 	var used := 0
 	for i in order:
-		if i != own_index and used + sizes[i] > SCOREBOARD_MAX_BYTES:
+		if i != own_index and used + sizes[i] > max_bytes:
 			continue
 		keep[i] = true
 		used += sizes[i]

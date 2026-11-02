@@ -16,3 +16,4 @@ What each `DotServerApi` level added. The rule for bumping is on `DotAddonApi`; 
 - **13**: the challenge carries ticket_nonce and the server passes it to dot-auth's authenticate (API 8) so a copied connect ticket is refused; DotClientSession.ticket_nonce; sv_single_seat (default 1): an account signing in again replaces its older connection.
 - **14**: DotServerConfig.net_native (cvar net_native): dot-net's native snapshot core, followed by dot-game's wiring. Nothing on the wire.
 - **15**: DotServerConfig.net_native_interest (cvar net_native_interest): the interest phase in the native core too (needs net_native). Nothing on the wire.
+- **16**: paged scoreboard (wire version 2): DotServer scoreboard_pages(), scoreboard_snapshot(session, trim), cvars sv_scoreboard_page_bytes and sv_scoreboard_max_bytes; DotClientSession scoreboard_paged; SCOREBOARD_WANT carries "paged". A client that does not say "paged" still gets the single trimmed board.

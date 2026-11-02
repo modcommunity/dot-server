@@ -79,6 +79,8 @@ var ping_ms: int = -1
 ## Whether this client is holding its scoreboard open, and so is sent the roster. See
 ## [method DotServer.scoreboard_snapshot].
 var wants_scoreboard: bool = false
+## The client reassembles paged boards (wire version 2); see DotServer.scoreboard_pages.
+var scoreboard_paged: bool = false
 
 ## Whether the client said its page went into the background. A hidden tab stops the main
 ## loop, so heartbeats stop on a healthy socket and `sv_timeout` would drop it. Cleared by

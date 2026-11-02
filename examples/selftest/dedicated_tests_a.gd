@@ -646,6 +646,61 @@ func _test_scoreboard_own_row() -> void:
 	_done()
 
 
+func _test_scoreboard_pages() -> void:
+	print("")
+	_section("[scoreboard pages: 128 players, none over the datagram]")
+
+	var made: Array[DotClientSession] = []
+	for i in 128:
+		var s := _adopt(7000 + i, "198.51.100.3:%d" % i, "Pager%d" % i)
+		s.state = DotClientSession.State.SPAWNED
+		s.score = i
+		made.append(s)
+	server.scoreboard_fields = func(s: DotClientSession) -> Dictionary:
+		return {"team": 2, "kills": s.score, "note": "n".repeat(60)}
+	var me: DotClientSession = made[0]
+	var pages := server.scoreboard_pages(me, 5)
+	var worst := 0
+	var rows := 0
+	for p in pages:
+		worst = maxi(worst, var_to_bytes(p).size())
+		rows += (p["players"] as Array).size()
+	_check("128 rows go out as several pages (%d)" % pages.size(), pages.size() > 1)
+	_check("every page fits the 1392 B datagram, envelope included (worst %d)" % worst, worst + 64 <= 1392)
+	_check("no row is lost across the pages (%d)" % rows, rows == 128)
+	_check("pages carry the wire version and count", int(pages[0]["v"]) == 2 and int(pages[-1]["pages"]) == pages.size())
+
+	var link := DotClientLink.new()
+	var got: Array[Dictionary] = []
+	link.scoreboard_received.connect(func(b: Dictionary) -> void: got.append(b))
+	var order: Array = range(pages.size())
+	order.reverse()
+	order.erase(pages.size() - 1)
+	order.append(pages.size() - 1)
+	for i in order:
+		link._on_scoreboard(1, pages[i])
+	_check("the client rebuilds one board from out-of-order pages", got.size() == 1 and (got[0]["players"] as Array).size() == 128)
+	_check("with the header from page 0", got.size() == 1 and got[0].has("server") and int(got[0]["you"]) == me.userid)
+
+	var next := server.scoreboard_pages(me, 6)
+	for i in next.size():
+		if i != 1:
+			link._on_scoreboard(1, next[i])
+	_check("a lost page keeps its previous copy: the board still has all rows",
+		got.size() == 2 and (got[1]["players"] as Array).size() == 128)
+
+	server.console.execute("sv_scoreboard_page_bytes 600")
+	var small := server.scoreboard_pages(me, 7)
+	_check("sv_scoreboard_page_bytes tunes the page size (%d then %d pages)" % [pages.size(), small.size()], small.size() > pages.size())
+	server.console.execute("sv_scoreboard_page_bytes 1100")
+
+	link.free()
+	server.scoreboard_fields = Callable()
+	for s in made:
+		server.release_session(s.peer_id)
+	_done()
+
+
 func _test_targeting() -> void:
 	print("")
 	_section("[targeting a player]")

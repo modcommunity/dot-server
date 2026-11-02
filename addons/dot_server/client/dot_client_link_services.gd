@@ -59,7 +59,7 @@ func want_scoreboard(open: bool) -> bool:
 	_scoreboard_held = open
 	if not _connected:
 		return false
-	return send_kind(DotEnvelope.SCOREBOARD_WANT, {"open": open})
+	return send_kind(DotEnvelope.SCOREBOARD_WANT, {"open": open, "paged": true})
 
 
 ## Asks for ONE board, leaving a held board held; a client's block list (dot-chat's `sm`) uses it to learn who is here.
@@ -67,10 +67,13 @@ func want_scoreboard(open: bool) -> bool:
 func request_scoreboard() -> bool:
 	if not _connected:
 		return false
-	return send_kind(DotEnvelope.SCOREBOARD_WANT, {"open": _scoreboard_held, "once": true})
+	return send_kind(DotEnvelope.SCOREBOARD_WANT, {"open": _scoreboard_held, "once": true, "paged": true})
 
 
 func _on_scoreboard(_peer_id: int, payload: Dictionary) -> void:
+	if payload.has("pages"):
+		_on_scoreboard_page(payload)
+		return
 	# A board older than the one held arrived late (ENet sends unreliable unordered); it
 	# says nothing the newer one did not. One with no `seq` is from a server before it,
 	# and is taken as it always was.
@@ -78,6 +81,48 @@ func _on_scoreboard(_peer_id: int, payload: Dictionary) -> void:
 		return
 	scoreboard = payload
 	scoreboard_received.emit(payload)
+
+
+## Pages are unreliable, so one lost in transit keeps its previous copy; the board is rebuilt when the last page arrives.
+func _on_scoreboard_page(payload: Dictionary) -> void:
+	var page := int(payload.get("page", 0))
+	var pages := int(payload.get("pages", 1))
+	var seq := int(payload.get("seq", 0))
+	if page < 0 or pages < 1 or page >= pages:
+		return
+	var held: Variant = _sb_pages.get(page)
+	if held != null and int((held as Dictionary)["seq"]) >= seq:
+		return
+	_sb_pages[page] = {"seq": seq, "rows": payload.get("players", [])}
+	if page == 0:
+		_sb_head = payload.duplicate()
+		for k in ["players", "page", "pages", "v"]:
+			_sb_head.erase(k)
+	if page != pages - 1 or _sb_head.is_empty():
+		return
+	var rows: Array = []
+	var seen := {}
+	var newest := 0
+	for i in pages:
+		if not _sb_pages.has(i):
+			continue
+		var entry: Dictionary = _sb_pages[i]
+		newest = maxi(newest, int(entry["seq"]))
+		for row in entry["rows"]:
+			var id: Variant = (row as Dictionary).get("peer", null)
+			if id != null:
+				if seen.has(id):
+					continue
+				seen[id] = true
+			rows.append(row)
+	for i in _sb_pages.keys():
+		if int(i) >= pages:
+			_sb_pages.erase(i)
+	var board := _sb_head.duplicate()
+	board["players"] = rows
+	board["seq"] = newest
+	scoreboard = board
+	scoreboard_received.emit(board)
 
 
 ## The server's value of a replicated cvar, or [param fallback] when it has not said one.

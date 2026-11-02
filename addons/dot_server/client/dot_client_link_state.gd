@@ -229,6 +229,8 @@ var scoreboard: Dictionary = {}
 
 ## Whether this client's board is held open, as [method want_scoreboard] last said.
 var _scoreboard_held: bool = false
+var _sb_pages: Dictionary = {}
+var _sb_head: Dictionary = {}
 
 
 ## The client's chat node. It declares no RPCs any more -- chat is two kinds on the

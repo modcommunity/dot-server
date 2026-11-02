@@ -25,12 +25,12 @@ var server: DotServer
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose.
-const SECTIONS := 31
+const SECTIONS := 32
 
 ## Every check this suite runs, including the two at the end that compare the counts. The
 ## section counter cannot see a section that aborted after announcing itself — its remaining
 ## checks simply never run — and a total can. See docs/testing.md.
-const CHECKS := 396
+const CHECKS := 404
 
 var _entered := 0
 var _completed := 0

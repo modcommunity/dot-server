@@ -233,6 +233,17 @@ func _register_limit_cvars() -> void:
 		DotConVar.FLAG_ARCHIVE
 	).with_range(0, 1800)
 
+	console.cvar(
+		"sv_scoreboard_page_bytes", str(SCOREBOARD_PAGE_BYTES),
+		"Bytes of one scoreboard page; keep under the datagram size (1392).",
+		DotConVar.FLAG_ARCHIVE
+	).with_range(256, 60000)
+	console.cvar(
+		"sv_scoreboard_max_bytes", str(SCOREBOARD_MAX_BYTES),
+		"Bytes of the single-message board sent to clients that cannot reassemble pages.",
+		DotConVar.FLAG_ARCHIVE
+	).with_range(1024, 1000000)
+
 
 ## Reads cvars back into the config after server.cfg has run.
 func _apply_cvars_to_config() -> void:

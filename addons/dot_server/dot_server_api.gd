@@ -5,5 +5,5 @@ extends RefCounted
 ## removed or changes meaning, because every pack built before that no longer compiles.
 
 # What each level added: docs/api-levels.md.
-const LEVEL := 15
+const LEVEL := 16
 const OLDEST := 1
