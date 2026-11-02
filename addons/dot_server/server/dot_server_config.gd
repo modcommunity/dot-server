@@ -315,6 +315,7 @@ func _build_transport() -> DotTransport:
 		# The demux costs a relay hop per ENet packet; pay it only when a query
 		# protocol really is on the same UDP port.
 		dual.share_udp_port = enet_share_udp_port and enet_shares_query_port()
+		dual.websocket = configured_websocket()
 		return dual
 
 	if transport_mode != "websocket":
@@ -326,4 +327,14 @@ func _build_transport() -> DotTransport:
 
 	var auto := DotTransportAuto.new()
 	auto.require_web_clients = true
+	auto.websocket = configured_websocket()
 	return auto
+
+
+## A WebSocket transport carrying the [code]ws_*[/code] buffer settings.
+func configured_websocket() -> DotTransportWebSocket:
+	var ws := DotTransportWebSocket.new()
+	ws.inbound_buffer_exp = ws_inbound_buffer_exp
+	ws.outbound_buffer_exp = ws_outbound_buffer_exp
+	ws.max_queued_packets = ws_max_queued_packets
+	return ws

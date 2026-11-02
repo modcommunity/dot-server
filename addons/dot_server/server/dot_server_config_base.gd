@@ -32,6 +32,17 @@ extends DotConfig
 ## on [method effective_enet_port], see [DotTransportDual]; WebSocket only where ENet or UDP is missing), [code]websocket[/code], or [code]enet[/code] (no browsers).
 @export_enum("dual", "websocket", "enet") var transport_mode: String = "dual"
 
+## Per-client WebSocket receive buffer as a power-of-two exponent (17 = 128 KiB). Clients send commands of at most
+## [code]max_client_payload[/code] (4 KiB), so this stays small: it is paid once per connected browser.
+@export_range(10, 24, 1) var ws_inbound_buffer_exp: int = 17
+
+## Per-client WebSocket send buffer as a power-of-two exponent (19 = 512 KiB). Holds one client's whole worst-case snapshot
+## (255 fragments, about 300 KB); a send that does not fit closes that client. Native ENet clients are unaffected.
+@export_range(10, 24, 1) var ws_outbound_buffer_exp: int = 19
+
+## Packets queued per WebSocket client before new ones are dropped.
+@export_range(16, 8192, 1) var ws_max_queued_packets: int = 4096
+
 ## UDP port native clients reach ENet on. 0: the game port's number (TCP and UDP are separate namespaces).
 ## Shared with A2S/DQP through [DotUdpDemux]; see [member enet_share_udp_port].
 @export_range(0, 65535, 1) var enet_port: int = 0

@@ -458,3 +458,58 @@ func _test_rcon_websocket_commands(port: int) -> void:
 
 	_check("no websocket client is left open", server.rcon.client_count() == 0)
 	_done()
+
+
+func _test_web_transport_limits() -> void:
+	print("")
+	_section("[web transport limits]")
+
+	var cfg := DotServerConfig.new()
+	var ws := cfg.configured_websocket()
+	_check("ws_* keys reach the WebSocket transport", ws.inbound_buffer_exp == cfg.ws_inbound_buffer_exp and ws.outbound_buffer_exp == cfg.ws_outbound_buffer_exp and ws.max_queued_packets == cfg.ws_max_queued_packets)
+	cfg.transport_mode = "websocket"
+	var auto := cfg.resolve_transport() as DotTransportAuto
+	_check("the built web-only transport carries them", auto != null and auto.websocket.outbound_buffer_exp == cfg.ws_outbound_buffer_exp)
+
+	# A worst-case board: more rows than the cap, each with a long name.
+	var rows: Array = []
+	for i in server.SCOREBOARD_MAX_ROWS + 100:
+		rows.append({"id": i, "name": "player_%04d_with_a_long_display_name" % i, "score": i, "deaths": i, "ping": 40, "team": i % 4})
+	var board := var_to_bytes(server._fit_scoreboard(rows, -1, {}))
+	_check("a worst-case scoreboard is trimmed to its budget (%d B)" % board.size(), board.size() <= server.SCOREBOARD_MAX_BYTES)
+
+	var port := 47395
+	var srv_peer := ws.create_server(port, "127.0.0.1").value as MultiplayerPeer
+	var ids: Array[int] = []
+	srv_peer.peer_connected.connect(func(id: int) -> void: ids.append(id))
+	var client := DotTransportWebSocket.new().create_client("ws://127.0.0.1:%d" % port).value as MultiplayerPeer
+	var deadline := Time.get_ticks_msec() + 5000
+	while Time.get_ticks_msec() < deadline and (ids.is_empty() or client.get_connection_status() != MultiplayerPeer.CONNECTION_CONNECTED):
+		srv_peer.poll()
+		client.poll()
+		await get_tree().process_frame
+	_check("a browser-style client joins the configured server", ids.size() == 1)
+	if ids.is_empty():
+		_done()
+		return
+
+	srv_peer.set_target_peer(ids[0])
+	srv_peer.transfer_mode = MultiplayerPeer.TRANSFER_MODE_RELIABLE
+	srv_peer.put_packet(board)
+	# 255 fragments of dot-net's 1200-byte MTU: the largest snapshot the wire can name.
+	var frag := PackedByteArray()
+	frag.resize(1200)
+	for i in 255:
+		srv_peer.put_packet(frag)
+	var sizes: Array[int] = []
+	var end := Time.get_ticks_msec() + 3000
+	while Time.get_ticks_msec() < end and sizes.size() < 256:
+		srv_peer.poll()
+		client.poll()
+		while client.get_available_packet_count() > 0:
+			sizes.append(client.get_packet().size())
+		await get_tree().process_frame
+	_check("the board and a max-fragment snapshot arrive intact (%d packets)" % sizes.size(), sizes.size() == 256 and sizes[0] == board.size() and sizes[255] == 1200)
+	srv_peer.close()
+	client.close()
+	_done()

@@ -128,6 +128,7 @@ func _run_selftest() -> void:
 	await _test_rcon_allow_list()
 	await _test_rcon_socket()
 	await _test_rcon_websocket()
+	await _test_web_transport_limits()
 	# Last: a second DotServer replaces the first's registry entries, and every section above
 	# that looks a subsystem up by name would be talking to the wrong server.
 	await _test_boot_hibernation()
