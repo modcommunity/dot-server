@@ -90,19 +90,22 @@ func _on_scoreboard_want(peer_id: int, payload: Dictionary) -> void:
 
 
 func _send_scoreboards() -> void:
+	# One seq per interval, so every viewer's pages come from one cached build.
+	_scoreboard_seq += 1
 	for session in playing_sessions():
 		if session.wants_scoreboard and not session.local:
-			_send_scoreboard(session)
+			_send_scoreboard(session, false)
 
 
 ## Numbers every scoreboard sent, so a client can tell an old one from a new one.
 var _scoreboard_seq: int = 0
 
 
-func _send_scoreboard(session: DotClientSession) -> void:
+func _send_scoreboard(session: DotClientSession, bump: bool = true) -> void:
 	# `seq`: unreliable over ENet is unordered, so the client drops a board older than the one it
 	# holds.
-	_scoreboard_seq += 1
+	if bump:
+		_scoreboard_seq += 1
 	if session.scoreboard_paged:
 		_send_scoreboard_pages(session)
 		return
@@ -124,9 +127,36 @@ func _send_scoreboard_pages(session: DotClientSession) -> void:
 
 
 ## [method scoreboard_snapshot] split into payloads of at most [code]sv_scoreboard_page_bytes[/code]
-## (a single row bigger than that still gets a page of its own).
+## (a single row bigger than that still gets a page of its own). Built once per [param seq] and
+## shared by every viewer; only page 0's `you` differs.
 func scoreboard_pages(for_session: DotClientSession, seq: int) -> Array[Dictionary]:
-	var budget := maxi(256, console.get_int("sv_scoreboard_page_bytes", SCOREBOARD_PAGE_BYTES))
+	var budget := clampi(console.get_int("sv_scoreboard_page_bytes", SCOREBOARD_PAGE_BYTES), 256, SCOREBOARD_PAGE_MAX)
+	var count := playing_sessions().size()
+	if count > SCOREBOARD_MAX_ROWS:
+		return _build_scoreboard_pages(for_session, seq, budget)
+	var key := [seq, budget, count]
+	if _sb_cache_key != key:
+		_sb_cache_key = key
+		_sb_cache = _build_scoreboard_pages(null, seq, budget)
+	var out: Array[Dictionary] = []
+	for page in _sb_cache:
+		out.append(page)
+	if for_session != null and not out.is_empty():
+		var first := out[0].duplicate()
+		first["you"] = for_session.userid
+		out[0] = first
+	return out
+
+
+var _sb_cache_key: Array = []
+var _sb_cache: Array[Dictionary] = []
+## Names this server run, so a client can tell a restarted server's seq 1 from a stale one.
+var _sb_epoch: int = 0
+
+
+func _build_scoreboard_pages(for_session: DotClientSession, seq: int, budget: int) -> Array[Dictionary]:
+	if _sb_epoch == 0:
+		_sb_epoch = maxi(1, randi())
 	var snap := scoreboard_snapshot(for_session, false)
 	var rows: Array = snap["players"]
 	var head := snap.duplicate()
@@ -144,7 +174,7 @@ func scoreboard_pages(for_session: DotClientSession, seq: int) -> Array[Dictiona
 		room -= n
 	var out: Array[Dictionary] = []
 	for i in chunks.size():
-		var page := {"v": SCOREBOARD_WIRE_VERSION, "seq": seq, "page": i, "pages": chunks.size(), "players": chunks[i]}
+		var page := {"v": SCOREBOARD_WIRE_VERSION, "ep": _sb_epoch, "seq": seq, "page": i, "pages": chunks.size(), "players": chunks[i]}
 		if i == 0:
 			page.merge(head)
 		out.append(page)
@@ -262,6 +292,9 @@ const SCOREBOARD_MAX_BYTES := 16384
 
 ## Default bytes of one scoreboard page: under the 1392 B datagram, leaving room for the envelope.
 const SCOREBOARD_PAGE_BYTES := 1100
+
+## Hard ceiling of a page: the 1392 B datagram less the envelope.
+const SCOREBOARD_PAGE_MAX := 1300
 
 
 ## Trims [param rows] to [constant SCOREBOARD_MAX_BYTES], lowest score first, keeping the

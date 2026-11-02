@@ -237,7 +237,7 @@ func _register_limit_cvars() -> void:
 		"sv_scoreboard_page_bytes", str(SCOREBOARD_PAGE_BYTES),
 		"Bytes of one scoreboard page; keep under the datagram size (1392).",
 		DotConVar.FLAG_ARCHIVE
-	).with_range(256, 60000)
+	).with_range(256, SCOREBOARD_PAGE_MAX)
 	console.cvar(
 		"sv_scoreboard_max_bytes", str(SCOREBOARD_MAX_BYTES),
 		"Bytes of the single-message board sent to clients that cannot reassemble pages.",

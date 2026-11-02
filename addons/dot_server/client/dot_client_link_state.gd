@@ -231,6 +231,18 @@ var scoreboard: Dictionary = {}
 var _scoreboard_held: bool = false
 var _sb_pages: Dictionary = {}
 var _sb_head: Dictionary = {}
+var _sb_epoch: int = 0
+
+
+func _reset_scoreboard_state() -> void:
+	_sb_pages.clear()
+	_sb_head.clear()
+	_sb_epoch = 0
+	scoreboard = {}
+
+
+## Seconds a scoreboard page of the previous board may stand in for one that was lost.
+@export_range(0.5, 30.0, 0.5) var scoreboard_page_ttl_sec: float = 3.0
 
 
 ## The client's chat node. It declares no RPCs any more -- chat is two kinds on the

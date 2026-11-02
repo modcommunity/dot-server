@@ -171,6 +171,7 @@ func disconnect_from_server(reason: String = "") -> void:
 
 	_connected = false
 	_heartbeat.stop()
+	_reset_scoreboard_state()
 
 	if _signon_watchdog != null:
 		_signon_watchdog.stop()

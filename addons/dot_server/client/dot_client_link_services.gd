@@ -83,35 +83,60 @@ func _on_scoreboard(_peer_id: int, payload: Dictionary) -> void:
 	scoreboard_received.emit(payload)
 
 
-## Pages are unreliable, so one lost in transit keeps its previous copy; the board is rebuilt when the last page arrives.
+## Pages are unreliable and unordered. The board is rebuilt once every page of the newest seq is here, or when
+## that seq's last page arrives, filling gaps from the previous seq's copy (and marking the board `partial`).
 func _on_scoreboard_page(payload: Dictionary) -> void:
 	var page := int(payload.get("page", 0))
 	var pages := int(payload.get("pages", 1))
 	var seq := int(payload.get("seq", 0))
+	var epoch := int(payload.get("ep", 0))
 	if page < 0 or pages < 1 or page >= pages:
 		return
+	# A new epoch is a restarted server: its seq starts again at 1, so nothing held is comparable.
+	if epoch != _sb_epoch:
+		_reset_scoreboard_state()
+		_sb_epoch = epoch
+	var now := Time.get_ticks_msec()
 	var held: Variant = _sb_pages.get(page)
 	if held != null and int((held as Dictionary)["seq"]) >= seq:
 		return
-	_sb_pages[page] = {"seq": seq, "rows": payload.get("players", [])}
+	_sb_pages[page] = {"seq": seq, "pages": pages, "rows": payload.get("players", []), "t": now}
 	if page == 0:
 		_sb_head = payload.duplicate()
-		for k in ["players", "page", "pages", "v"]:
+		for k in ["players", "page", "pages", "v", "ep"]:
 			_sb_head.erase(k)
-	if page != pages - 1 or _sb_head.is_empty():
+	var newest := 0
+	for i in _sb_pages:
+		newest = maxi(newest, int((_sb_pages[i] as Dictionary)["seq"]))
+	if seq != newest or _sb_head.is_empty():
 		return
+	var ttl_msec := int(scoreboard_page_ttl_sec * 1000.0)
+	var use: Array = []
+	var partial := false
+	var fresh := {}
+	for i in pages:
+		var entry: Variant = _sb_pages.get(i)
+		if entry == null or int((entry as Dictionary)["pages"]) != pages:
+			partial = true
+			continue
+		if int(entry["seq"]) != newest:
+			partial = true
+			if int(entry["seq"]) != newest - 1 or now - int(entry["t"]) > ttl_msec:
+				continue
+		else:
+			for row in entry["rows"]:
+				fresh[(row as Dictionary).get("peer", null)] = true
+		use.append(entry)
+	if partial and page != pages - 1:
+		return
+	# A peer on a newest page wins over the same peer on an older kept page.
 	var rows: Array = []
 	var seen := {}
-	var newest := 0
-	for i in pages:
-		if not _sb_pages.has(i):
-			continue
-		var entry: Dictionary = _sb_pages[i]
-		newest = maxi(newest, int(entry["seq"]))
+	for entry in use:
 		for row in entry["rows"]:
 			var id: Variant = (row as Dictionary).get("peer", null)
 			if id != null:
-				if seen.has(id):
+				if seen.has(id) or (int(entry["seq"]) != newest and fresh.has(id)):
 					continue
 				seen[id] = true
 			rows.append(row)
@@ -121,6 +146,8 @@ func _on_scoreboard_page(payload: Dictionary) -> void:
 	var board := _sb_head.duplicate()
 	board["players"] = rows
 	board["seq"] = newest
+	if partial:
+		board["partial"] = true
 	scoreboard = board
 	scoreboard_received.emit(board)
 

@@ -689,6 +689,57 @@ func _test_scoreboard_pages() -> void:
 	_check("a lost page keeps its previous copy: the board still has all rows",
 		got.size() == 2 and (got[1]["players"] as Array).size() == 128)
 
+	# Rows that differ between seqs, delivered last page first, must never mix.
+	for s in made:
+		s.score = 5000 + s.score
+	var newer := server.scoreboard_pages(me, 8)
+	got.clear()
+	for i in range(newer.size() - 1, -1, -1):
+		link._on_scoreboard(1, newer[i])
+	var last: Dictionary = got[-1] if not got.is_empty() else {}
+	var all_new := not last.is_empty() and (last["players"] as Array).size() == 128
+	for row in (last.get("players", []) as Array):
+		all_new = all_new and int(row["score"]) >= 5000
+	_check("reversed pages of a newer seq end as one board of only that seq", all_new and not last.has("partial"))
+	_check("the early board (last page first) is marked partial", got.size() > 1 and got[0].has("partial"))
+
+	for s in made:
+		s.score -= 5000
+	var newest := server.scoreboard_pages(me, 9)
+	got.clear()
+	for i in range(1, newest.size()):
+		link._on_scoreboard(1, newest[i])
+	var kept_rows := (got[-1]["players"] as Array).size() if not got.is_empty() else -1
+	_check("page 0 lost: the older copy of it fills in, marked partial (%d rows)" % kept_rows,
+		kept_rows == 128 and got[-1].has("partial"))
+	link._sb_pages[0]["t"] = Time.get_ticks_msec() - 60000
+	got.clear()
+	link._on_scoreboard(1, server.scoreboard_pages(me, 10)[-1])
+	var stale_rows := (got[-1]["players"] as Array).size() if not got.is_empty() else -1
+	_check("a kept page older than the ttl is dropped (%d rows)" % stale_rows, stale_rows > 0 and stale_rows < 128)
+
+	var other := made[1]
+	var viewer := server.scoreboard_pages(other, 9)
+	_check("pages are built once per seq and shared; only `you` differs",
+		viewer.size() == newest.size() and int(viewer[0]["you"]) == other.userid and int(newest[0]["you"]) == me.userid
+		and viewer[-1] == newest[-1])
+
+	var old_epoch: int = server._sb_epoch
+	server._sb_epoch = old_epoch + 1
+	got.clear()
+	for p in server._build_scoreboard_pages(null, 1, 1100):
+		link._on_scoreboard(1, p)
+	_check("a seq reset under a new epoch is accepted", not got.is_empty() and int(got[-1]["seq"]) == 1)
+	link._reset_scoreboard_state()
+	_check("disconnect clears the held board and pages", link.scoreboard.is_empty() and link._sb_pages.is_empty())
+	server._sb_epoch = old_epoch
+
+	server.console.execute("sv_scoreboard_page_bytes 60000")
+	var huge_worst := 0
+	for p in server.scoreboard_pages(me, 12):
+		huge_worst = maxi(huge_worst, var_to_bytes(p).size())
+	_check("a page size over the datagram is clamped (worst %d)" % huge_worst, huge_worst + 64 <= 1392)
+
 	server.console.execute("sv_scoreboard_page_bytes 600")
 	var small := server.scoreboard_pages(me, 7)
 	_check("sv_scoreboard_page_bytes tunes the page size (%d then %d pages)" % [pages.size(), small.size()], small.size() > pages.size())
