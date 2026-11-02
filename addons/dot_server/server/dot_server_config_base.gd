@@ -192,8 +192,8 @@ var query_player_detail: String = "full"
 ## Seconds a snapshot is reused before it is rebuilt: a thousand queries in a second cost one walk of the session table.
 @export_range(0.0, 60.0, 0.1) var query_cache_sec: float = 1.0
 
-## Most players listed in one response.
-@export_range(1, 4096, 1) var query_max_players_listed: int = 128
+## Most players listed in one response. A2S counts them in one byte, so 255 is the most it can say.
+@export_range(1, 4096, 1) var query_max_players_listed: int = 255
 
 ## Shared secret for signing query responses. Empty disables signing.
 ## For a listing service that must know this server really said it.

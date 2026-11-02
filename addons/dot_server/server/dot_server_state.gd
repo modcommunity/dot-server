@@ -117,7 +117,7 @@ var stdin_console: DotStdinConsole = null
 var games: DotGameManager = null
 
 ## Most player rows one scoreboard carries. Bounds a payload sent twice a second.
-const SCOREBOARD_MAX_ROWS := 256
+const SCOREBOARD_MAX_ROWS := 1024
 
 ## Seconds between scoreboards sent to a client holding its board open.
 var scoreboard_interval_sec: float = 0.5
