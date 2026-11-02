@@ -598,6 +598,54 @@ func _test_background_grace() -> void:
 	server.release_session(session.peer_id)
 	_done()
 
+func _test_scoreboard_own_row() -> void:
+	print("")
+	_section("[scoreboard keeps the recipient's own row]")
+
+	var made: Array[DotClientSession] = []
+	for i in DotServer.SCOREBOARD_MAX_ROWS + 6:
+		var s := _adopt(5000 + i, "198.51.100.1:%d" % i, "P%d" % i)
+		s.state = DotClientSession.State.SPAWNED
+		made.append(s)
+	var last: DotClientSession = made[-1]
+	var snap: Dictionary = server.scoreboard_snapshot(last)
+	var ids: Array = snap.players.map(func(r: Dictionary) -> int: return int(r.id))
+	_check("past the row cap the board stays within it (the byte budget trims further)", snap.players.size() <= DotServer.SCOREBOARD_MAX_ROWS)
+	_check("the recipient last in session order still has their row", ids.has(last.userid))
+
+	for s in made:
+		server.release_session(s.peer_id)
+	made.clear()
+
+	# scoreboard_fields may overwrite "id"; the own row must still be found by position.
+	for i in 40:
+		var s := _adopt(6000 + i, "198.51.100.2:%d" % i, "Q%d" % i)
+		s.state = DotClientSession.State.SPAWNED
+		s.score = 1000 + i
+		made.append(s)
+	var me: DotClientSession = made[0]
+	me.score = -5
+	server.scoreboard_fields = func(s: DotClientSession) -> Dictionary:
+		return {"id": 0, "pad": "x".repeat(900)}
+	snap = server.scoreboard_snapshot(me)
+	var kept: Array = snap.players.filter(func(r: Dictionary) -> bool: return int(r.get("score", 0)) == -5)
+	_check("a trimmed board drops rows", snap.players.size() < 40)
+	_check("the lowest-scored recipient survives although every id was overwritten", kept.size() == 1)
+
+	# An own row too big for the whole budget is cut to id, name and score, not dropped.
+	server.scoreboard_fields = func(s: DotClientSession) -> Dictionary:
+		return {"blob": "y".repeat(20000)} if s == me else {}
+	snap = server.scoreboard_snapshot(me)
+	kept = snap.players.filter(func(r: Dictionary) -> bool: return int(r.get("score", 0)) == -5)
+	_check("an oversized own row is kept", kept.size() == 1)
+	_check("and cut to its minimal fields", kept.size() == 1 and not kept[0].has("blob") and kept[0].name == me.display_name)
+
+	server.scoreboard_fields = Callable()
+	for s in made:
+		server.release_session(s.peer_id)
+	_done()
+
+
 func _test_targeting() -> void:
 	print("")
 	_section("[targeting a player]")

@@ -115,6 +115,7 @@ func _run_selftest() -> void:
 	_test_hibernation()
 	_test_game_ids()
 	_test_targeting()
+	_test_scoreboard_own_row()
 	await _test_ban_source()
 	_test_events()
 	_test_chat_state()

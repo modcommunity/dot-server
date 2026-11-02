@@ -152,9 +152,17 @@ func _key_salt() -> String:
 ## holding its board open; the server has numbers (everyone's ping, join time) a client does not.
 func scoreboard_snapshot(for_session: DotClientSession = null) -> Dictionary:
 	var players: Array = []
+	var own_index := -1
+	var own_min := {}
+	# Past the cap the recipient still gets their own row: cap-1 others, then them.
+	var skip_others := playing_sessions().size() > SCOREBOARD_MAX_ROWS
+	var others_left := SCOREBOARD_MAX_ROWS - 1
 	for session in playing_sessions():
-		if players.size() >= SCOREBOARD_MAX_ROWS:
-			break
+		var is_own: bool = for_session != null and session == for_session
+		if skip_others and not is_own:
+			if others_left <= 0:
+				continue
+			others_left -= 1
 		var row := {
 			"id": session.userid,
 			"name": session.display_name,
@@ -172,8 +180,12 @@ func scoreboard_snapshot(for_session: DotClientSession = null) -> Dictionary:
 			var more: Variant = scoreboard_fields.call(session)
 			if more is Dictionary:
 				row.merge(more as Dictionary, true)
+		if is_own:
+			# Tracked by position, since scoreboard_fields may overwrite "id".
+			own_index = players.size()
+			own_min = {"id": session.userid, "name": session.display_name, "score": session.score}
 		players.append(row)
-	players = _fit_scoreboard(players, for_session)
+	players = _fit_scoreboard(players, own_index, own_min)
 
 	var current := games.current() if games != null else null
 	var out := {
@@ -203,8 +215,8 @@ const SCOREBOARD_MAX_BYTES := 16384
 
 
 ## Trims [param rows] to [constant SCOREBOARD_MAX_BYTES], lowest score first, keeping the
-## recipient's own row.
-func _fit_scoreboard(rows: Array, for_session: DotClientSession) -> Array:
+## recipient's own row at [param own_index] (cut to [param own_min] if it alone is too big).
+func _fit_scoreboard(rows: Array, own_index: int, own_min: Dictionary) -> Array:
 	var sizes: Array[int] = []
 	var total := 0
 	for row in rows:
@@ -213,18 +225,19 @@ func _fit_scoreboard(rows: Array, for_session: DotClientSession) -> Array:
 		total += n
 	if total <= SCOREBOARD_MAX_BYTES:
 		return rows
-	var own: int = for_session.userid if for_session != null else -1
+	if own_index >= 0 and sizes[own_index] > SCOREBOARD_MAX_BYTES and not own_min.is_empty():
+		rows = rows.duplicate()
+		rows[own_index] = own_min
+		sizes[own_index] = var_to_bytes(own_min).size()
 	var order: Array = range(rows.size())
 	order.sort_custom(func(a: int, b: int) -> bool:
-		var ao: bool = int(rows[a].get("id", 0)) == own
-		var bo: bool = int(rows[b].get("id", 0)) == own
-		if ao != bo:
-			return ao
+		if (a == own_index) != (b == own_index):
+			return a == own_index
 		return int(rows[a].get("score", 0)) > int(rows[b].get("score", 0)))
 	var keep := {}
 	var used := 0
 	for i in order:
-		if used + sizes[i] > SCOREBOARD_MAX_BYTES:
+		if i != own_index and used + sizes[i] > SCOREBOARD_MAX_BYTES:
 			continue
 		keep[i] = true
 		used += sizes[i]
@@ -234,6 +247,7 @@ func _fit_scoreboard(rows: Array, for_session: DotClientSession) -> Array:
 			out.append(rows[i])
 	DotLog.debug(CHANNEL, "scoreboard trimmed to its byte budget", {
 		"rows": rows.size(), "sent": out.size(), "bytes": total,
+		"own_kept": own_index >= 0 and keep.has(own_index),
 	})
 	return out
 
