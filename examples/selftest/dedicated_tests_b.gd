@@ -1,4 +1,4 @@
-extends "res://examples/selftest/dedicated_tests_a.gd"
+extends "res://examples/selftest/dedicated_tests_a2.gd"
 
 ## dedicated_server selftest sections, part b.
 
