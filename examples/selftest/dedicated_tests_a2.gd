@@ -21,7 +21,7 @@ func _test_scoreboard_own_row() -> void:
 		server.release_session(s.peer_id)
 	made.clear()
 
-	# scoreboard_fields may overwrite "id"; the own row must still be found by position.
+	# scoreboard_fields may overwrite "id"; the own row must still be matched by position.
 	for i in 40:
 		var s := _adopt(6000 + i, "198.51.100.2:%d" % i, "Q%d" % i)
 		s.state = DotClientSession.State.SPAWNED
