@@ -90,7 +90,7 @@ Neither is imported; dot-server works without both.
 godot --headless --path . res://examples/dedicated_server.tscn
 ```
 
-302 checks covering console parsing, every cvar flag, permission and immunity enforcement, config execution, the command buffer, ban durations and expiry, event cancellation, module load/unload (and an uncompilable module refused as a result rather than a crash), the guest path used when dot-auth is absent, the per-address connection limit, every way of naming a player, a HUD notice sanitised by the same rules as chat (and as dot-chat's filter), and a real dot-moderation ban list refusing a connection through the registry seam. The query protocols have their own suite in dot-server-query. Add `-- --serve` to run it as an actual server instead.
+The `dedicated_server` suite covers console parsing, every cvar flag, permission and immunity enforcement, config execution, the command buffer, ban durations and expiry, event cancellation, module load/unload (and an uncompilable module refused as a result rather than a crash), the guest path used when dot-auth is absent, the per-address connection limit, every way of naming a player, a HUD notice sanitised by the same rules as chat (and as dot-chat's filter), and a real dot-moderation ban list refusing a connection through the registry seam. The query protocols have their own suite in dot-server-query. Add `-- --serve` to run it as an actual server instead.
 
 ## Licence
 
