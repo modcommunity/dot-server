@@ -49,7 +49,7 @@ Read the family [CLAUDE.md](../../CLAUDE.md) first; this file is only what is sp
 
 ## Running and testing
 
-The family's two steps ([game-dev/CLAUDE.md](../../CLAUDE.md#validating-anything)), then `dedicated_server.tscn`, `signon_revision.tscn`, `content_switch.tscn` and `mixed_transports.tscn`. `dedicated_server.tscn -- --serve` runs a real server. **A change here is not done until dot-server-deploy's `*_client` suites and the games' net suites agree.** [testing](docs/testing.md)
+The family's two steps ([family CLAUDE.md](../../CLAUDE.md#validating-anything)), then `dedicated_server.tscn`, `signon_revision.tscn`, `content_switch.tscn` and `mixed_transports.tscn`. `dedicated_server.tscn -- --serve` runs a real server. **A change here is not done until dot-server-deploy's `*_client` suites and the games' net suites agree.** [testing](docs/testing.md)
 
 ## API level
 
