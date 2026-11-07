@@ -219,6 +219,14 @@ func _register_limit_cvars() -> void:
 				tickrate_pending.emit(rate)
 	)
 
+	# Off by default. See DotTickTiers for the grammar; the slot count picks the rate at start,
+	# the players present pick it at each game change.
+	console.cvar(
+		"sv_tickrate_tiers", "",
+		"Tick rate by player count, e.g. players<=32:66,<=64:33,else:22. Empty is off; overrides sv_tickrate.",
+		DotConVar.FLAG_ARCHIVE
+	)
+
 	_cv_timeout = console.cvar(
 		"sv_timeout",
 		str(config.client_timeout_sec),
@@ -251,6 +259,12 @@ func _apply_cvars_to_config() -> void:
 	config.password = _cv_password.get_string()
 	config.max_players = _cv_maxplayers.get_int()
 	config.tickrate = _cv_tickrate.get_int()
+	var tiers := DotTickTiers.parse(console.get_string("sv_tickrate_tiers", ""))
+	if tiers.error != "":
+		DotLog.warn(CHANNEL, "sv_tickrate_tiers ignored", {"why": tiers.error})
+	elif not tiers.is_off() and config.max_players > 0:
+		config.tickrate = tiers.rate_for(config.max_players, config.tickrate)
+		DotLog.info(CHANNEL, "tick rate from sv_tickrate_tiers", {"slots": config.max_players, "tickrate": config.tickrate})
 	config.client_timeout_sec = _cv_timeout.get_float()
 	config.background_grace_max_sec = _cv_background_grace.get_float()
 	config.reserved_slots = console.get_int("sv_reserved_slots", config.reserved_slots)
