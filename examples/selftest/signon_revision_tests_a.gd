@@ -2,6 +2,8 @@ extends "res://examples/selftest/signon_revision_base.gd"
 
 ## signon_revision selftest sections, part a.
 
+const Credentials := preload("res://addons/dot_server/client/dot_client_credentials.gd")
+
 ## Every `@rpc` on [DotServer] has a counterpart on [DotClientLink], and likewise for chat: Godot
 ## compares the name sets and refuses the pair when they differ. The suite asserts the sets, not
 ## the count, so a rename fails as loudly as an addition.
@@ -524,6 +526,49 @@ func _test_introspect_refuses_a_server_not_ours() -> void:
 	DotRegistry.unregister_instance(&"dot_auth_server", server_auth)
 	DotRegistry.unregister_instance(&"dot_auth_client", client_auth)
 	_drop_link(link)
+	_done()
+
+## [b]dot-auth's bind_join_address flag.[/b] Off (the default) the join token is asked for
+## by audience alone, exactly as before; on, by the host and port the client DIALLED.
+## Armed by passing the announced hostname, or the flag ignored: the bound check fails.
+func _test_join_token_address_binding() -> void:
+	_section("a join token is bound to the dialled address only when the flag is on")
+
+	var parsed := Credentials.dialled_host_port("127.0.0.1:7000")
+	_check(parsed == {"host": "127.0.0.1", "port": 7000}, "host:port parses", str(parsed))
+	parsed = Credentials.dialled_host_port("wss://play.example.net/x")
+	_check(parsed == {"host": "play.example.net", "port": 443}, "wss:// defaults to 443", str(parsed))
+	parsed = Credentials.dialled_host_port("ws://h.example:6005/")
+	_check(parsed == {"host": "h.example", "port": 6005}, "ws:// with a port", str(parsed))
+	parsed = Credentials.dialled_host_port("[::1]:6005")
+	_check(parsed == {"host": "::1", "port": 6005}, "bracketed IPv6", str(parsed))
+	_check(Credentials.dialled_host_port("justahost").is_empty(), "a bare host has no port to bind")
+	_check(Credentials.dialled_host_port("h:99999").is_empty(), "an out-of-range port is refused")
+
+	for bind in [false, true]:
+		var seen: Array[Dictionary] = []
+		var server_auth := StandIns._AuthStandIn.new()
+		server_auth.on_authenticate = func(credential: Dictionary) -> void:
+			seen.append(credential.duplicate())
+		var client_auth := StandIns._TokenStandIn.new()
+		client_auth.config.bind_join_address = bind
+		DotRegistry.register(&"dot_auth_server", server_auth)
+		DotRegistry.register(&"dot_auth_client", client_auth)
+
+		var link := _new_link("Binder", func(l: DotClientLink) -> void:
+			l.transport_preference = "ws")
+		await _join(link)
+		await _until(func() -> bool: return not seen.is_empty(), 5.0)
+
+		var want := "127.0.0.1:%d" % PORT if bind else ":0"
+		_check(client_auth.minted_at == [want],
+			"flag %s: minted for %s" % [bind, want], str(client_auth.minted_at))
+		_check(seen.size() == 1 and str(seen[0].get("access_token", "")) == StandIns._TokenStandIn.JOIN,
+			"flag %s: the server still got the join token" % bind, str(seen))
+
+		DotRegistry.unregister_instance(&"dot_auth_server", server_auth)
+		DotRegistry.unregister_instance(&"dot_auth_client", client_auth)
+		_drop_link(link)
 	_done()
 
 ## A ticket server: the client must ask for its ticket by the address it dialled,

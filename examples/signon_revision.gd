@@ -33,6 +33,8 @@ func _run() -> void:
 		await _test_a_ticket_is_asked_for_by_the_dialled_address()
 		await _test_an_account_holds_one_seat()
 		await Profile.new(self).run()
+		# Last: its failed sign-ins count against the per-address attempt limit the seat test needs.
+		await _test_join_token_address_binding()
 
 	_teardown()
 

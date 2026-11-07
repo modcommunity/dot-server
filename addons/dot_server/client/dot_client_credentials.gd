@@ -82,7 +82,19 @@ func _attach_introspect(payload: Dictionary, auth: Object) -> bool:
 	if audience != "" and auth.has_method("is_first_party") \
 			and bool(auth.call("is_first_party", audience)) \
 			and auth.has_method("request_join_token"):
-		var minted: Variant = await auth.call("request_join_token", audience)
+		var minted: Variant
+		if _binds_join_address(auth):
+			# The address bound is the one DIALLED, never one the server announced.
+			var target := dialled_host_port(link._last_address)
+			if target.is_empty():
+				_refuse_introspect(
+					"Could not tell which server address to sign in to.",
+					"join token bound to an address, but %s has no host:port" % link._last_address
+				)
+				return false
+			minted = await auth.call("request_join_token", audience, target["host"], target["port"])
+		else:
+			minted = await auth.call("request_join_token", audience)
 		if minted is DotResult and (minted as DotResult).ok:
 			payload["access_token"] = str((minted as DotResult).value)
 			return true
@@ -104,6 +116,48 @@ func _attach_introspect(payload: Dictionary, auth: Object) -> bool:
 		)
 	)
 	return false
+
+
+## True when dot-auth is set to bind join tokens to the dialled address
+## (DotAuthConfig.bind_join_address, default off) and its request_join_token takes one.
+func _binds_join_address(auth: Object) -> bool:
+	if auth.get_method_argument_count("request_join_token") < 3:
+		return false
+	var config: Variant = auth.get("config")
+	return config != null and config.get("bind_join_address") == true
+
+
+## {host, port} of what was dialled: "host:port", "[v6]:port", or ws(s)://host[:port][/path].
+## Empty when there is no host or no usable port.
+static func dialled_host_port(address: String) -> Dictionary:
+	var rest := address.strip_edges()
+	var default_port := 0
+	var scheme := rest.find("://")
+	if scheme >= 0:
+		var name := rest.substr(0, scheme).to_lower()
+		default_port = 443 if name == "wss" or name == "https" else 80
+		rest = rest.substr(scheme + 3)
+	var slash := rest.find("/")
+	if slash >= 0:
+		rest = rest.substr(0, slash)
+	var host := rest
+	var port := default_port
+	if rest.begins_with("["):
+		var close := rest.find("]")
+		if close < 0:
+			return {}
+		host = rest.substr(1, close - 1)
+		var tail := rest.substr(close + 1)
+		if tail.begins_with(":"):
+			port = tail.substr(1).to_int() if tail.substr(1).is_valid_int() else 0
+	elif rest.count(":") == 1:
+		var at := rest.find(":")
+		host = rest.substr(0, at)
+		var number := rest.substr(at + 1)
+		port = number.to_int() if number.is_valid_int() else 0
+	if host == "" or port <= 0 or port > 65535:
+		return {}
+	return {"host": host, "port": port}
 
 
 func _refuse_introspect(message: String, detail: String) -> void:
