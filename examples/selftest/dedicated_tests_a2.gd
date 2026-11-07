@@ -94,11 +94,36 @@ func _test_scoreboard_pages() -> void:
 		got.size() == 2 and (got[1]["players"] as Array).size() == 128)
 
 	_scoreboard_pages_reorder(me, made, link, pages, got)
+	_scoreboard_pages_budget(me, made)
 	link.free()
 	server.scoreboard_fields = Callable()
 	for s in made:
 		server.release_session(s.peer_id)
 	_done()
+
+
+func _scoreboard_pages_budget(me: DotClientSession, made: Array[DotClientSession]) -> void:
+	# Long names, fat rows and a fat header: every page, serialized, stays inside the datagram budget.
+	for s in made:
+		s.display_name = "LongName%d_" % s.userid + "x".repeat(40)
+	server.scoreboard_extra = func() -> Dictionary: return {"notice": "h".repeat(900)}
+	var worst := 0
+	var rows := 0
+	var pages := server.scoreboard_pages(me, 20)
+	for p in pages:
+		worst = maxi(worst, var_to_bytes(p).size())
+		rows += (p["players"] as Array).size()
+	_check("long names and a 900 B header: no serialized page over the MTU budget (worst %d)" % worst, worst + 64 <= 1392)
+	_check("no row is lost across them (%d)" % rows, rows == 128)
+	var link := DotClientLink.new()
+	var got: Array[Dictionary] = []
+	link.scoreboard_received.connect(func(b: Dictionary) -> void: got.append(b))
+	for i in pages.size():
+		link._on_scoreboard(1, pages[i])
+	link.free()
+	_check("the client still rebuilds the full board from them",
+		not got.is_empty() and (got[-1]["players"] as Array).size() == 128 and got[-1].has("notice"))
+	server.scoreboard_extra = Callable()
 
 
 func _scoreboard_pages_reorder(me: DotClientSession, made: Array[DotClientSession], link: DotClientLink, pages: Array, got: Array[Dictionary]) -> void:

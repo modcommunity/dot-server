@@ -161,14 +161,18 @@ func _build_scoreboard_pages(for_session: DotClientSession, seq: int, budget: in
 	var rows: Array = snap["players"]
 	var head := snap.duplicate()
 	head.erase("players")
-	var room := budget - var_to_bytes(head).size() - 96
+	# Budget the SERIALIZED page: skeleton (keys, ints, and page 0's header) plus its rows. Page 0
+	# may hold no rows when the header alone fills it; the client takes the header from page 0 either way.
+	var skeleton := {"v": SCOREBOARD_WIRE_VERSION, "ep": _sb_epoch, "seq": seq, "page": 9999, "pages": 9999, "players": []}
+	var rest := budget - var_to_bytes(skeleton).size()
+	var room := rest - var_to_bytes(head).size()
 	var chunks: Array = [[]]
 	for row in rows:
 		var n := var_to_bytes(row).size()
 		var cur: Array = chunks[-1]
-		if not cur.is_empty() and room - n < 0:
+		if room - n < 0 and (not cur.is_empty() or chunks.size() == 1):
 			chunks.append([])
-			room = budget - 96
+			room = rest
 			cur = chunks[-1]
 		cur.append(row)
 		room -= n
