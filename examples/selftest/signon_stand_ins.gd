@@ -60,6 +60,9 @@ class _TokenStandIn extends RefCounted:
 	const SECRET := "bearer-secret-for-the-test"
 	const JOIN := "tmc_jt_join-token-for-the-test"
 	var minted_for: Array[String] = []
+	var minted_at: Array[String] = []
+	## Stands for DotAuthConfig: bind_join_address.
+	var config := _BindConfig.new()
 
 	func valid_access_token() -> DotResult:
 		return DotResult.success(SECRET)
@@ -67,6 +70,11 @@ class _TokenStandIn extends RefCounted:
 	func is_first_party(audience: String) -> bool:
 		return audience == _AuthStandIn.AUDIENCE
 
-	func request_join_token(audience: String) -> DotResult:
+	func request_join_token(audience: String, host: String = "", port: int = 0) -> DotResult:
 		minted_for.append(audience)
+		minted_at.append("%s:%d" % [host, port])
 		return DotResult.success(JOIN)
+
+
+class _BindConfig extends RefCounted:
+	var bind_join_address := false

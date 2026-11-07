@@ -9,7 +9,7 @@ const PORT := 27717
 ## How many checks a clean run makes. A section that aborts part-way stops adding checks,
 ## and the section counter cannot see that when the abort comes after the section
 ## announced itself — so the total is asserted too.
-const CHECKS := 149
+const CHECKS := 159
 
 
 var _link: DotClientLink = null
