@@ -74,6 +74,7 @@ func pending_tickrate() -> int:
 ## Called at a boundary the GAME chooses (its map change), because changing the step under a
 ## moving player splits a run across two rates; a game change applies it regardless.
 func apply_pending_tickrate() -> bool:
+	_pend_tier_rate()
 	if _pending_tickrate < 0:
 		return false
 	var rate := _pending_tickrate
@@ -85,6 +86,23 @@ func apply_pending_tickrate() -> bool:
 	DotLog.info(CHANNEL, "tickrate changed", {"tickrate": rate})
 	tickrate_changed.emit(rate)
 	return true
+
+
+## With [code]sv_tickrate_tiers[/code] set, queues the rate its table gives for the players present
+## (the slot count when nobody is). Does nothing when the table is empty or does not parse.
+func _pend_tier_rate() -> void:
+	if console == null:
+		return
+	var tiers := DotTickTiers.parse(console.get_string("sv_tickrate_tiers", ""))
+	if tiers.is_off():
+		return
+	var players := player_count()
+	if players <= 0:
+		players = config.max_players
+	if players <= 0:
+		return
+	var rate := tiers.rate_for(players, config.tickrate)
+	_pending_tickrate = rate if rate != config.tickrate else -1
 
 
 func _apply_tickrate() -> void:
