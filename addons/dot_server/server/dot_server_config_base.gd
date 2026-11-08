@@ -106,9 +106,11 @@ extends DotConfig
 ## Nothing is threaded until its own switch below is on.
 @export_range(-1, 64) var worker_threads: int = -1
 
-## Build each player's snapshot on the workers (cvar [code]sv_threads_net[/code]). Off by default.
+## Build each player's snapshot on the workers (cvar [code]sv_threads_net[/code]). On by default: dot-net's snapshot_bench
+## (native core, 213 NPCs) measured byte-identical payloads and a build 2 to 4 times cheaper at 64 and 100 players.
+## Nothing runs on workers where [method DotParallel.available] is false (the web) or [member worker_threads] is 0.
 ## The game's wiring copies [method net_snapshot_workers] into [code]DotNetConfig.snapshot_workers[/code]; dot-net does not depend on this addon.
-@export var threads_net: bool = false
+@export var threads_net: bool = true
 
 ## Run NPC decisions and path searches on the workers (cvar [code]sv_threads_npc[/code], live), for brains that
 ## say they can. Off by default; read through [method npc_workers].
