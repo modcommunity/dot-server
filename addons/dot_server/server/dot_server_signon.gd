@@ -3,6 +3,11 @@ extends "res://addons/dot_server/server/dot_server_admission.gd"
 
 ## Handshake, PROFILE stage, authentication and content sync of [DotServer].
 
+## A client that has not answered its challenge is asked again this often, this many times.
+const CHALLENGE_RETRY_SEC := 3.0
+const CHALLENGE_RETRIES := 3
+
+
 func _handshake_challenge(session: DotClientSession) -> Dictionary:
 	var challenge := _handshake_fields(session)
 
@@ -72,6 +77,16 @@ func _auth_join_audience() -> String:
 	return str(auth.call("join_audience"))
 
 
+## Asks a client that has not answered its challenge again (same nonce), up to [constant CHALLENGE_RETRIES]
+## times, [constant CHALLENGE_RETRY_SEC] apart. The client answers a repeat exactly as the first.
+func _resend_challenge(session: DotClientSession) -> void:
+	session.challenges_sent += 1
+	DotLog.info(CHANNEL, "challenge repeated: no credentials yet", {
+		"userid": session.userid, "attempt": session.challenges_sent,
+	})
+	send_kind(session.peer_id, DotEnvelope.CHALLENGE, _handshake_challenge(session))
+
+
 ## A client's answer to the challenge. The one unauthenticated entry point, so everything it
 ## touches is bounded: fields are validated, the password compare is constant-time, and a failure
 ## closes the connection.
@@ -82,6 +97,12 @@ func _on_credentials(peer_id: int, payload: Dictionary) -> void:
 		return
 
 	session.touch()
+
+	if session.credentials_seen:
+		# A re-challenge crossed the first answer; the first is already being handled.
+		return
+	if session.state == DotClientSession.State.AUTHENTICATING:
+		session.credentials_seen = true
 
 	if session.state != DotClientSession.State.AUTHENTICATING:
 		DotLog.warn(

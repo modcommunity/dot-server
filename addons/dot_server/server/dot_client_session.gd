@@ -64,6 +64,12 @@ var immunity: int = 0
 ## wants to know who somebody IS (a "vip" group), and a role is a group name, not flags.
 var groups: PackedStringArray = PackedStringArray()
 
+## Whether the client's credentials have arrived, and how many challenges it was sent. A busy server
+## can lose the first answer (100-client load: 2 to 12 of 100 never reached the handler), so the sweep
+## asks again for a client still silent; see [method DotServer._resend_challenge].
+var credentials_seen: bool = false
+var challenges_sent: int = 1
+
 ## Unix seconds when the transport connected.
 var connected_at: int = 0
 
