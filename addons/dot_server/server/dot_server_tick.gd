@@ -43,6 +43,13 @@ func _sweep_timeouts() -> void:
 		match session.state:
 			DotClientSession.State.CONNECTING, DotClientSession.State.AUTHENTICATING:
 				limit = config.auth_timeout_sec
+				if (
+					session.state == DotClientSession.State.AUTHENTICATING
+					and not session.credentials_seen
+					and session.challenges_sent <= CHALLENGE_RETRIES
+					and session.time_in_state() >= CHALLENGE_RETRY_SEC * session.challenges_sent
+				):
+					_resend_challenge(session)
 			DotClientSession.State.PROFILE:
 				limit = config.profile_timeout_sec
 			DotClientSession.State.DOWNLOADING:
