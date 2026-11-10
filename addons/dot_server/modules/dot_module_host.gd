@@ -51,7 +51,7 @@ func _exit_tree() -> void:
 
 
 
-## Loads every [code].gd[/code] in the search directories.
+## Loads every module script in the search directories (in an export, their remapped compiled forms).
 func load_all() -> int:
 	var loaded_count := 0
 
@@ -59,11 +59,14 @@ func load_all() -> int:
 		if not DirAccess.dir_exists_absolute(dir):
 			continue
 
+		var seen := {}
 		for rel in DotPaths.list_files_recursive(dir):
-			if not rel.ends_with(".gd"):
+			var script_rel := module_script_of(rel)
+			if script_rel == "" or seen.has(script_rel):
 				continue
+			seen[script_rel] = true
 
-			var res: DotResult = await load_module(dir.path_join(rel))
+			var res: DotResult = await load_module(dir.path_join(script_rel))
 			if res.ok:
 				loaded_count += 1
 
@@ -73,9 +76,24 @@ func load_all() -> int:
 	return loaded_count
 
 
+## The [code].gd[/code] path a listed file stands for, or "" when it is not a script.
+## An export lists [code]x.gd.remap[/code] and [code]x.gdc[/code] where the source had [code]x.gd[/code].
+static func module_script_of(file: String) -> String:
+	if file.ends_with(".gd.remap"):
+		return file.trim_suffix(".remap")
+	if file.ends_with(".gdc"):
+		return file.trim_suffix(".gdc") + ".gd"
+	return file if file.ends_with(".gd") else ""
+
+
+## True when [param path] can be loaded as a script: a source file, or in an export its remapped compiled form.
+static func module_script_exists(path: String) -> bool:
+	return FileAccess.file_exists(path) or ResourceLoader.exists(path)
+
+
 ## Loads the script at [param path] and makes the [DotModule] it declares.
 func _instantiate_module(path: String) -> DotResult:
-	if not FileAccess.file_exists(path):
+	if not module_script_exists(path):
 		return DotResult.fail(
 			DotError.CODE_IO, "Module script not found.", path
 		)

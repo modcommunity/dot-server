@@ -288,6 +288,8 @@ func _on_spawn(_e: DotEvent) -> void:
 		not (await server.modules.load_module("user://example/bad_module.gd")).ok
 	)
 
+	await _test_module_export_layout()
+
 	# A module that does not compile must come back as a failed result, not abort the coroutine.
 	# The script is put in the resource cache uncompiled: parsing from disk prints a SCRIPT ERROR,
 	# which dot-ci fails a suite for. The `can_instantiate()` guard stays armed.
@@ -306,6 +308,41 @@ func _on_spawn(_e: DotEvent) -> void:
 		unlinked is DotResult and not (unlinked as DotResult).ok
 	)
 	_done()
+
+# An export ships x.gd as x.gd.remap (plus x.gdc), so the .gd path is not a file but still loads.
+func _test_module_export_layout() -> void:
+	var dir := "user://example/modules_export"
+	DotPaths.write_text(
+		"user://example/remap_target/remapped.gd",
+		"extends DotModule\nfunc _module_name() -> String: return \"remapped\"\n"
+	)
+	DotPaths.write_text(
+		dir + "/remapped.gd.remap",
+		"[remap]\n\npath=\"user://example/remap_target/remapped.gd\"\n"
+	)
+	DotPaths.write_text(dir + "/remapped.gdc", "")
+	var path := dir + "/remapped.gd"
+	_check("export layout: no .gd file on disk", not FileAccess.file_exists(path))
+	_check("export layout: script found", DotModuleHost.module_script_exists(path))
+	_check(
+		"export layout: listed names map to the .gd path",
+		DotModuleHost.module_script_of("a/x.gd.remap") == "a/x.gd"
+		and DotModuleHost.module_script_of("x.gdc") == "x.gd"
+		and DotModuleHost.module_script_of("x.gd") == "x.gd"
+		and DotModuleHost.module_script_of("x.gd.uid") == ""
+	)
+
+	var loaded: DotResult = await server.modules.load_module(path)
+	_check("export layout: module loads by its .gd path", loaded.ok)
+	server.modules.unload_module("remapped")
+
+	var saved_dirs := server.modules.search_dirs
+	server.modules.search_dirs = PackedStringArray([dir])
+	var count: int = await server.modules.load_all()
+	server.modules.search_dirs = saved_dirs
+	_check("export layout: load_all loads it once", count == 1 and server.modules.get_module("remapped") != null)
+	server.modules.unload_module("remapped")
+
 
 func _test_audit() -> void:
 	print("")
