@@ -43,6 +43,9 @@ func _acquire_content(descriptor: DotGameDescriptor) -> DotResult:
 	var groups := PackedStringArray()
 	for group in descriptor.content_groups:
 		groups.append(String(group))
+	# The server loads whichever map the rotation picks, so it fetches every group (dot-cloud API 22's
+	# "*"); a client fetches its map's group on demand. An older dot-cloud reads "*" as a name matching nothing.
+	groups.append("*")
 
 	# `ensure` is told the id and version too, so it refuses a manifest that does not answer to
 	# them (a mirror serving one game's pack under another's name); `acquire` mounts anything.
@@ -387,6 +390,7 @@ func _unload_current() -> void:
 	# next one loads, because the next game's module is what sets it again and it does
 	# so from `game_loaded`, after this.
 	_current_map = ""
+	_current_map_groups = PackedStringArray()
 
 	# Release the old content's cache references so dot-cloud may evict it. The
 	# pack's file table stays mounted — the engine offers no way to remove it — but

@@ -65,6 +65,7 @@ var _game_root: Node = null
 var _sync_deadline: int = 0
 var _rotation_index: int = 0
 var _current_map: String = ""
+var _current_map_groups := PackedStringArray()
 
 ## How long a game's retired nodes outlive it: requests a client sent before LOAD_GAME reached
 ## it arrive within a round trip, and this is many of them. See [method _free_game_children].
@@ -189,11 +190,15 @@ func current_map() -> String:
 
 ## Called by the running game whenever its map changes. "" clears it.
 ##
-## Drops the query cache too (duck-typed, the query source is dot-server-query's).
-func set_current_map(map_id: String) -> void:
-	if map_id == _current_map:
+## [param groups] (API 19) are the map's dot-cloud download groups, sent to a client joining from now on
+## beside the game's own (see [method current_content_groups]). Drops the query cache too (duck-typed).
+func set_current_map(map_id: String, groups: PackedStringArray = PackedStringArray()) -> void:
+	if map_id == _current_map and groups == _current_map_groups:
 		return
 
+	_current_map_groups = groups
+	if map_id == _current_map:
+		return
 	_current_map = map_id
 	DotLog.debug(CHANNEL, "map reported", {"map": map_id, "game": current_content_id()})
 
@@ -222,9 +227,15 @@ func current_needs_content() -> bool:
 	return _current != null and _current.needs_delivered_content()
 
 
-## The optional content groups the running game asks clients to fetch.
+## The optional content groups the running game asks clients to fetch: the game's own, then the current map's.
 func current_content_groups() -> Array:
-	return Array(_current.content_groups) if _current != null else []
+	if _current == null:
+		return []
+	var out := Array(_current.content_groups)
+	for g in _current_map_groups:
+		if not out.has(g):
+			out.append(g)
+	return out
 
 
 ## The packs the running game needs beside its own, as `<id>@<version>` keys.

@@ -35,7 +35,7 @@ const CONTENT_BASE := "https://content.invalid/content"
 ## Every check this suite runs, including the one that compares against it. The section
 ## counter cannot see a section that aborted after announcing itself — its remaining checks
 ## simply never run — and a total can. See docs/testing.md.
-const CHECKS := 71
+const CHECKS := 73
 
 ## The name a game's RPC node is given on both ends, for the retirement checks.
 const GAME_NODE := &"GameLink"

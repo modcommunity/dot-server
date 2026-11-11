@@ -237,6 +237,12 @@ func _test_delivered_client_mounted() -> void:
 			and not DirAccess.dir_exists_absolute("res://dot_cloud/test/map_a/1.0.0"),
 		"and offers the map without mounting it (%s)" % [_server.games.current_maps()]
 	)
+	# A per-map download group (API 19): a client joining now is sent it beside the game's own groups.
+	_server.games.set_current_map("arena_a", PackedStringArray(["map-arena_a"]))
+	_check(
+		_server.games.current_content_groups().has("map-arena_a") and _server.games.current_map() == "arena_a",
+		"a reported map's groups go to a joining client (%s)" % [_server.games.current_content_groups()]
+	)
 	# One subscription, not one per change: a fresh lambda is a fresh [Callable], so an `is_connected`
 	# guard never matched and every game change added a subscriber (ten identical progress RPCs per
 	# tick after ten changes, with no error). Counted, because the symptom is invisible until measured.
@@ -271,6 +277,10 @@ func _test_switch_back() -> void:
 
 	var told := await _until(_told_lobby_again)
 	_check(told, "and was told (%s)" % [_games_seen])
+	_check(
+		not _server.games.current_content_groups().has("map-arena_a"),
+		"the last game's map groups went with it (%s)" % [_server.games.current_content_groups()]
+	)
 
 	# The last game's RPC node must not keep the name the next game needs, or the same game loaded
 	# twice gets a link renamed `@Node@<n>` and RPCs name a path the other end lacks. Retired nodes are
