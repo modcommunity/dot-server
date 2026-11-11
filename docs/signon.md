@@ -70,7 +70,7 @@ The envelope was the last coordinated protocol break: a client exported before i
 
 ## A reason reaches the client whoever sends it
 
-`_close_peer` flushes and closes `CLOSE_GRACE_SEC` (0.25 s) later. Deferring the close by one call delivered a reason sent from inside an RPC handler and lost one sent from anywhere else (a module's kick, a game's netcode refusing a client), because the client read the data and the close in one poll and a closing connection drops what it has not handed up. The session is gone by then, so nothing the peer sends meanwhile is handled. `kick` takes the `DotError` it is for, so a client dropped for a mismatch reads `CODE_VERSION` rather than a moderator's kick.
+`_close_peer` flushes and closes `CLOSE_GRACE_SEC` (0.25 s) later. Deferring the close by one call delivered a reason sent from inside an RPC handler and lost one sent from anywhere else (a module's kick, a game's netcode refusing a client), because the client read the data and the close in one poll and a closing connection drops what it has not handed up. The session is gone by then, so nothing the peer sends meanwhile is handled. `DotClientLink` emits `disconnected` once per connection: the server's reason, and the transport's generic "Connection to the server was lost." only when no reason came first (a shell used to keep the first by hand). `kick` takes the `DotError` it is for, so a client dropped for a mismatch reads `CODE_VERSION` rather than a moderator's kick.
 
 ## The challenge says which addons the server runs
 

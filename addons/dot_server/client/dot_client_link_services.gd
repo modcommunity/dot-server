@@ -236,4 +236,5 @@ func _on_disconnect_notice(_peer_id: int, payload: Dictionary) -> void:
 	DotLog.info(CHANNEL, "disconnected by server", {"reason": reason, "code": code})
 	last_error = DotError.make(code, reason, DotEnvelope.text(payload, "detail"))
 	_set_phase(Phase.FAILED, reason)
+	_reason_reported = true
 	disconnected.emit(reason)

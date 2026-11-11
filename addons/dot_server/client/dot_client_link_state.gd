@@ -165,6 +165,9 @@ var content_extra: PackedStringArray = PackedStringArray()
 
 var last_error: DotError = null
 
+## True once [signal disconnected] has been emitted for the current connection, so the transport's later close does not emit a second, generic reason over the first.
+var _reason_reported: bool = false
+
 ## The last [DotNotice] the server sent, for [method describe] and for a HUD built after
 ## it arrived. Null until one has.
 var last_notice: DotNotice = null

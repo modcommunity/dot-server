@@ -621,13 +621,20 @@ func _test_an_account_holds_one_seat() -> void:
 
 	var first := _new_link("TwinA", func(l: DotClientLink) -> void: l.transport_preference = "ws")
 	var lost := [""]
-	first.disconnected.connect(func(reason: String) -> void: lost[0] = reason)
+	var heard: Array[String] = []
+	first.disconnected.connect(func(reason: String) -> void:
+		heard.append(reason)
+		lost[0] = reason)
 	_check(await _join(first) == "", "the account joins")
 	var second := _new_link("TwinB", func(l: DotClientLink) -> void: l.transport_preference = "ws")
 	_check(await _join(second) == "", "and joins again from another connection")
 	await _until(func() -> bool: return lost[0] != "", 3.0)
 	_check(same.call() == 1, "leaving one seat (%d)" % same.call())
 	_check(lost[0] != "", "and the older connection was told why", lost[0])
+	# The socket closes behind the notice; the transport's generic "lost" must not follow it.
+	await _settle(1.0)
+	_check(heard.size() == 1 and not heard[0].begins_with("Connection to the server was lost"),
+		"and only that reason is reported, not the transport's generic one after it", str(heard))
 
 	_server.console.set_cvar("sv_single_seat", "0")
 	var third := _new_link("TwinC", func(l: DotClientLink) -> void: l.transport_preference = "ws")

@@ -12,6 +12,7 @@ func connect_to_server(address: String, password: String = "") -> DotResult:
 
 	_password = password
 	_last_address = address
+	_reason_reported = false
 	_set_phase(Phase.CONNECTING, "Connecting…")
 
 	if transport != null:
@@ -184,6 +185,7 @@ func disconnect_from_server(reason: String = "") -> void:
 		_set_phase(Phase.IDLE, "")
 
 	if reason != "":
+		_reason_reported = true
 		disconnected.emit(reason)
 
 
@@ -244,4 +246,8 @@ func _on_server_disconnected() -> void:
 	DotLog.info(CHANNEL, "server closed the connection")
 	# No reason, so it does not emit; this function owns the reason it reports.
 	disconnect_from_server()
-	disconnected.emit("Connection to the server was lost.")
+	# The server's own notice ("banned", "wrong build") arrives before the socket closes behind it; the generic
+	# sentence would replace the reason a player should read, so it is only the answer when nothing else was said.
+	if not _reason_reported:
+		_reason_reported = true
+		disconnected.emit("Connection to the server was lost.")
