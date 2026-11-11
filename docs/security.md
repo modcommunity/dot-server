@@ -8,7 +8,7 @@
 - **Immunity is separate from flags**: "may kick" and "may be kicked" are different questions. Equal immunity cannot act on equal, because two equal admins kicking each other has no correct resolution.
 - **Sources merge**: a player in a file entry and a site group gets the union of flags and the higher immunity. `DotAdminManager.add_source` validates the duck-typed contract at registration, so a mistyped source is a startup error.
 - **A malformed `admins.json` or `bans.json` is loud and keeps the previous state.** Silently meaning "no admins" turns a typo into an unmoderated server.
-- **A session keeps its group names** (`DotClientSession.groups`, from the file and any source returning `groups`). A flag says what somebody may do; a game also wants to know who somebody is (game-playground's per-role spawn limits read it).
+- **A session keeps its group names** (`DotClientSession.groups`, from the file and any source returning `groups`). A flag says what somebody may do; a game also wants to know who somebody is (game-playlot's per-role spawn limits read it).
 - **`admin_add` resolves a group first and falls back to flags**, and refuses a single token matching neither, listing the known groups. It once passed every word as a flag, so `admin_add <uid> moderator` created an admin holding a flag that grants nothing, and `admin` (both a flag and a group in the template) meant something else entirely.
 
 ## Permissions for somebody who is not connected
