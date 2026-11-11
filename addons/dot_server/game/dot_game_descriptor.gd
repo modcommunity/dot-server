@@ -70,7 +70,8 @@ extends Resource
 
 @export_group("Metadata")
 
-## Free-form data for game code and server listings.
+## Free-form data for game code and server listings. `former_ids` (a list) are ids the game had
+## before a rename; the game manager's find_game still answers to them.
 @export var metadata: Dictionary = {}
 
 

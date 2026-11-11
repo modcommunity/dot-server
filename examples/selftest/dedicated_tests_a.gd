@@ -387,6 +387,12 @@ func _test_game_ids() -> void:
 		manager.add_game(d.call("arena")).ok)
 	_check("and once it exists the bare name means the built-in",
 		manager.find_game("arena") != null and manager.find_game("arena").game_id == "arena")
+	var renamed: DotGameDescriptor = d.call("gamemann/game-newname")
+	renamed.metadata["former_ids"] = ["gamemann/game-oldname", "oldname"]
+	manager.add_game(renamed)
+	_check("a renamed game answers to its former ids, whole or by name half",
+		manager.find_game("oldname") == renamed and manager.find_game("game-oldname") == renamed
+		and manager.find_game("gamemann/game-oldname") == renamed and manager.find_game("game-newname") == renamed)
 	manager.free()
 	_done()
 
